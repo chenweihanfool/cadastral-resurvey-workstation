@@ -128,6 +128,26 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const dl = Core.datasetFromLines({ pts: P, lin: L });
   assert.equal(dl.edges.size, 2, '缺點與退化線略過'); assert.equal(dl.parcels.length, 0); assert.ok(dl.arcs.has('2|4|3') && dl.edges.get('2-3').arcPart);
 }
+// ── 鄰段接合：重合／重疊／脫開、以鄰段為準吸附 ──
+{
+  const Y = 2700000, X = 200000, ds = (pts, rings) => Core.datasetFromD({ pts: Core.parseDbf(makeDbf(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x)))), bnd: Core.parseDbf(makeDbf(F_D13, rings)) });
+  const nb = ds([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0]], [ring(1, 1, 0, [1, 2, 3, 4])]);                      // 鄰段：x 0~10
+  const main = ds([[11, 0, 10.4], [12, 0, 20], [13, 10, 20], [14, 9.5, 9.7]], [ring(2, 1, 0, [11, 12, 13, 14])]);        // 主區：11 脫開 0.4、14 重疊 0.3（在鄰段宗地內）
+  const rep = Core.seamAnalyze(main, [{ name: 'NB', ds: nb }], {}), r = Object.fromEntries(rep.neighbors[0].points.map(p => [p.id, p]));
+  assert.equal(rep.totals.checked, 2, '離鄰段段界超過搜尋距離的點不檢查'); assert.equal(r[11].status, 'gap'); near(r[11].gap_m, 0.4, 1e-9); assert.equal(r[14].status, 'overlap'); near(r[14].gap_m, -0.3, 1e-9);
+  assert.equal(Core.seamAnalyze(main, [{ name: 'NB', ds: nb }], { tol: 0.5 }).totals.coincide, 2, '容差放寬則視為重合');
+  const j = Core.seamJoin(main, [{ name: 'NB', ds: nb }], {});
+  assert.equal(j.moves.length, 2); assert.equal(j.after.totals.coincide, 2); assert.equal(j.after.totals.gap + j.after.totals.overlap, 0);
+  near(main.points.get(11).x, X + 10, 1e-9); near(main.points.get(14).x, X + 10, 1e-9); near(main.points.get(14).y, Y + 10, 1e-9);
+  assert.equal(Core.seamJoin(main, [{ name: 'NB', ds: nb, authoritative: false }], {}).moves.length, 0, '非「以鄰段為準」不吸附');
+  assert.ok(Core.seamReportText(j.after).includes('重合 2') && Core.seamReportCsv(j.after).split('\n').length >= 3);
+  // 吸附上限以外：只報告、不移動
+  const far = ds([[11, 0, 11.5], [12, 0, 20], [13, 10, 20], [14, 10, 11.5]], [ring(2, 1, 0, [11, 12, 13, 14])]), jf = Core.seamJoin(far, [{ name: 'NB', ds: nb }], { snap: 1 });
+  assert.equal(jf.moves.length, 0); assert.equal(jf.unresolved.length, 2); assert.equal(jf.after.totals.gap, 2);
+  // 多點搶同一鄰段點：只有最近的一點過去，另一點留待人工
+  const two = ds([[11, 0, 10.2], [15, 0.1, 10.5], [12, 0, 20], [13, 10, 20], [14, 10, 10.2]], [ring(2, 1, 0, [11, 15, 12, 13, 14])]), jt = Core.seamJoin(two, [{ name: 'NB', ds: nb }], {});
+  assert.ok(jt.unresolved.some(u => u.reason === 'conflict') && jt.moves.some(m => m.id === 11 && m.type === 'vertex'));
+}
 // ── TWD97 ↔ 經緯度 ──
 {
   const o = Core.latLonToTm2(0, 121); near(o.x, 250000, 1e-6); near(o.y, 0, 1e-6);

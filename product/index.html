@@ -91,6 +91,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <button class="btn" id="btnImp">匯入現況點</button>
   <input type="file" id="fileIn" multiple hidden>
   <input type="file" id="dirIn" webkitdirectory hidden>
+  <input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden>
   <span class="sep"></span>
   <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button></div>
   <div class="seg" id="filters" title="可複選：決定能選取哪些要素 (1/2/3)">
@@ -137,6 +138,15 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="ctlInfo" class="small muted"></div>
       <div class="row small" style="margin-top:6px"><button class="btn" id="btnCtlFit">縮放</button><button class="btn" id="btnCtlClear">清除</button>
         <span class="muted">匯入：開啟檔案／拖入 CTL、CT2、CEN、L02 或含 D20 的資料夾</span></div></section>
+    <section><h2>鄰段接合</h2>
+      <div class="row small"><button class="btn" id="btnNbAdd">加入鄰段</button><button class="btn" id="btnNbDir">加入鄰段資料夾</button><button class="btn" id="btnNbFit">縮放全部</button></div>
+      <div id="nbList" class="small" style="margin:6px 0"></div>
+      <div class="row small"><span class="muted">重合容差</span><input type="number" id="seamTol" value="0.01" step="0.005" min="0" style="width:62px"><span class="muted">搜尋</span><input type="number" id="seamSearch" value="3" step="0.5" min="0" style="width:52px"><span class="muted">吸附</span><input type="number" id="seamSnap" value="1" step="0.1" min="0" style="width:52px"><span class="muted">m</span></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" id="btnSeamChk">檢查接合</button><button class="btn" id="btnSeamJoin" title="把脫開／重疊的主區段界點吸附到鄰段界址點（可復原）">自動接合</button><button class="btn" id="btnSeamCsv">報告 CSV</button><button class="btn" id="btnSeamJson">報告 JSON</button></div>
+      <div class="row small" style="margin-top:6px"><label class="chk"><input type="checkbox" id="chkSeam" checked>圖上標記</label><label class="chk"><input type="checkbox" id="seamShowOk">列出重合點</label></div>
+      <div id="seamSum" class="small muted" style="margin:6px 0"></div>
+      <div id="seamWrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>鄰段</th><th>點號</th><th>狀態</th><th>偏差 m</th></tr></thead><tbody id="seamTbl"></tbody></table></div>
+      <div class="small muted" style="margin-top:4px">偏差：脫開為＋、重疊為−。以鄰段為準：主區點吸附到鄰段界址點。</div></section>
     <section><h2>現況點與參考線</h2>
       <div class="row small"><button class="btn" id="btnImp2">匯入現況點</button><button class="btn" id="btnSvFit">縮放至現況點</button><button class="btn" id="btnSvClear">清除</button></div>
       <div id="svInfo" class="small muted" style="margin:6px 0"></div>
@@ -157,6 +167,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 </div>
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
 <p><b>載入</b>：把案件資料夾拖進視窗，或按「開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
+<p><b>鄰段接合</b>：先開主要測區，再按「加入鄰段」（或「加入鄰段資料夾」，可選含多個案件資料夾的上層資料夾；也可 Shift＋拖入）。每個鄰段以不同顏色顯示。「檢查接合」逐點檢查主區段界點與鄰段段界：<b>重合</b>（落在鄰段界址點／界線上）、<b>重疊</b>（跑進鄰段宗地內）、<b>脫開</b>（離鄰段段界有縫）。鄰段已重測時勾選「以鄰段為準」，按「自動接合」把主區點吸附到鄰段界址點（可復原）；報告可輸出 CSV／JSON。AI 可用 <code>CadastralAPI.joinSeam()</code>。</p>
 <p><b>選取</b>：上方「點／線／面」可複選，決定點擊與框選能選到什麼。<kbd>Shift</kbd> 點擊加選／取消；在空白處拖曳框選。</p>
 <p><b>移動</b>：拖曳已選取的要素，或用方向鍵微調、或輸入 ΔN/ΔE。共用的界址點會讓相鄰地號一起變動，面積即時更新。選「線」會移動線的兩端點，選「面」會移動整宗地所有界址點。</p>
 <p><b>底圖與列印</b>：工具列「底圖」可選 OpenStreetMap、國土測繪中心電子地圖或正射影像（需連網；只適用 TWD97，TWD67 會偏移約 800 m；澎湖金門馬祖請改選 119°E）。「列印」(<kbd>Ctrl+P</kbd>) 可選 A4/A3、橫直式、指定比例尺（200～5000）與範圍，附標題欄、圖例、比例尺條與指北；列印時選「另存為 PDF」即可輸出 PDF。</p>
@@ -707,6 +718,153 @@ const Core = (() => {
     return { lat: lat / D2R, lon: lon / D2R };
   }
 
+  // ── 鄰段接合 ─────────────────────────────────────────────────────────────
+  // 主要測區（main）與已載入的鄰段（nb）：以主區「段界點」（外圍邊上的點）逐點檢查與鄰段段界的關係。
+  //   重合 coincide：落在鄰段界址點上（kind=vertex），或在鄰段界線上但鄰段無此點（kind=line）
+  //   重疊 overlap ：點在鄰段宗地內，且離鄰段界線超過容差（gap_m 為負）
+  //   脫開 gap     ：點在鄰段宗地外，離鄰段界線超過容差（gap_m 為正）
+  // 已重測的鄰段以鄰段為準：seamJoin 把脫開／重疊的主區點吸附到鄰段界址點（或界線上的垂足）。
+  const SEAM_DEFAULT = { tol: 0.01, search: 3, snap: 1 };   // 重合容差、搜尋距離、吸附上限（公尺）
+  const SEAM_LABEL = { coincide: '重合', overlap: '重疊', gap: '脫開' };
+
+  // 段界邊：只屬於一個宗地、且該宗地不是地中地內圈的邊；圓弧段界以弧取樣成折線
+  function boundarySegments(ds) {
+    const keys = new Set(), edges = [];
+    for (const e of ds.edges.values()) {
+      if (e.parcels.length !== 1) continue;
+      const p = ds.parcels[e.parcels[0]]; if (p.containers && p.containers.length) continue;
+      keys.add(e.key); edges.push(e);
+    }
+    const key = (u, v) => (u < v ? u + '-' + v : v + '-' + u), skip = new Set(), segs = [], vids = new Set();
+    for (const ar of ds.arcs ? ds.arcs.values() : []) {
+      const k1 = key(ar.a, ar.b), k2 = key(ar.b, ar.c); if (!keys.has(k1) || !keys.has(k2)) continue;
+      skip.add(k1); skip.add(k2);
+      const pl = arcPolyline(ds.points.get(ar.a), ds.points.get(ar.b), ds.points.get(ar.c), 16);
+      for (let i = 1; i < pl.length; i++) segs.push({ ax: pl[i - 1].x, ay: pl[i - 1].y, bx: pl[i].x, by: pl[i].y });
+      vids.add(ar.a); vids.add(ar.b); vids.add(ar.c);
+    }
+    for (const e of edges) {
+      if (skip.has(e.key)) continue;
+      const a = ds.points.get(e.a), b = ds.points.get(e.b); segs.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y }); vids.add(e.a); vids.add(e.b);
+    }
+    return { segs, vids };
+  }
+  // 線段格網索引：nearest(x,y,r) 回傳 r 內最近線段 {dist, fx, fy}（垂足），沒有則 null
+  function segIndex(segs, cell) {
+    const grid = new Map(), cc = v => Math.floor(v / cell);
+    segs.forEach((s, n) => {
+      for (let i = cc(Math.min(s.ax, s.bx)); i <= cc(Math.max(s.ax, s.bx)); i++) for (let j = cc(Math.min(s.ay, s.by)); j <= cc(Math.max(s.ay, s.by)); j++) {
+        const k = i + ',' + j; let l = grid.get(k); if (!l) grid.set(k, l = []); l.push(n);
+      }
+    });
+    return {
+      nearest(x, y, r) {
+        let best = null; const seen = new Set();
+        for (let i = cc(x - r); i <= cc(x + r); i++) for (let j = cc(y - r); j <= cc(y + r); j++) for (const n of grid.get(i + ',' + j) || []) {
+          if (seen.has(n)) continue; seen.add(n);
+          const s = segs[n], dx = s.bx - s.ax, dy = s.by - s.ay, l2 = dx * dx + dy * dy;
+          const t = l2 ? Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / l2)) : 0, fx = s.ax + t * dx, fy = s.ay + t * dy, d = Math.hypot(x - fx, y - fy);
+          if (d <= r && (!best || d < best.dist)) best = { dist: d, fx, fy };
+        }
+        return best;
+      },
+    };
+  }
+  const nearestVertex = (list, x, y) => { let best = null, bd = Infinity; for (const v of list) { const d = Math.hypot(v.x - x, v.y - y); if (d < bd) { bd = d; best = v; } } return { v: best, d: bd }; };
+
+  // 逐點檢查主區段界點對一個鄰段的關係。回傳 { points:[…主區點…], neighbor_points:[…鄰段點無對應…], summary }
+  function seamCheck(main, nb, opt = {}) {
+    const { tol, search } = { ...SEAM_DEFAULT, ...opt };
+    const mb = boundarySegments(main), nbb = boundarySegments(nb), cell = Math.max(search, 1);
+    const nbIdx = segIndex(nbb.segs, cell), mIdx = segIndex(mb.segs, cell);
+    const nbV = [...nbb.vids].map(id => nb.points.get(id)).filter(Boolean), mV = [...mb.vids].map(id => main.points.get(id)).filter(Boolean);
+    const boxes = nb.parcels.map(p => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const id of p.ids) { const q = nb.points.get(id); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } return { x0, y0, x1, y1 }; });
+    const inNb = (x, y) => nb.parcels.some((p, i) => { const b = boxes[i]; return x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1 && pointInRing(p.ids, nb.points, y, x); });
+    const points = [];
+    for (const P of mV) {
+      const sg = nbIdx.nearest(P.x, P.y, search); if (!sg) continue;      // 離鄰段段界太遠：不是接縫上的點
+      const { v, d: dv } = nearestVertex(nbV, P.x, P.y);
+      const row = { id: P.id, y: P.y, x: P.x, dist: sg.dist, vertex: v ? v.id : null, vertex_dist: dv, foot: { y: sg.fy, x: sg.fx } };
+      if (dv <= tol) { row.status = 'coincide'; row.kind = 'vertex'; row.gap_m = dv; }
+      else if (sg.dist <= tol) { row.status = 'coincide'; row.kind = 'line'; row.gap_m = sg.dist; }
+      else if (inNb(P.x, P.y)) { row.status = 'overlap'; row.gap_m = -sg.dist; }
+      else { row.status = 'gap'; row.gap_m = sg.dist; }
+      points.push(row);
+    }
+    const neighbor_points = [];
+    for (const V of nbV) {
+      if (nearestVertex(mV, V.x, V.y).d <= tol) continue;
+      const sg = mIdx.nearest(V.x, V.y, search); if (!sg) continue;
+      neighbor_points.push({ id: V.id, y: V.y, x: V.x, dist: sg.dist, status: sg.dist <= tol ? 'missing_in_main' : 'unmatched' });
+    }
+    const cnt = s => points.filter(r => r.status === s).length;
+    return { points, neighbor_points, summary: {
+      checked: points.length, coincide: cnt('coincide'), coincide_vertex: points.filter(r => r.kind === 'vertex').length, coincide_line: points.filter(r => r.kind === 'line').length,
+      overlap: cnt('overlap'), gap: cnt('gap'), max_overlap_m: Math.max(0, ...points.filter(r => r.status === 'overlap').map(r => -r.gap_m)), max_gap_m: Math.max(0, ...points.filter(r => r.status === 'gap').map(r => r.gap_m)),
+      neighbor_missing_in_main: neighbor_points.filter(r => r.status === 'missing_in_main').length, neighbor_unmatched: neighbor_points.filter(r => r.status === 'unmatched').length } };
+  }
+  // 依檢查結果規劃吸附：脫開／重疊的點 → 吸附上限內最近的鄰段界址點，否則鄰段界線上的垂足。多點搶同一鄰段點時只讓最近的一點過去（避免宗地塌縮）
+  function seamPlan(check, opt = {}) {
+    const { snap } = { ...SEAM_DEFAULT, ...opt }, moves = [], unresolved = [], claim = new Map();
+    for (const r of check.points) {
+      if (r.status === 'coincide') continue;
+      if (r.vertex_dist <= snap) {
+        const c = claim.get(r.vertex);
+        if (!c || r.vertex_dist < c.r.vertex_dist) { if (c) unresolved.push({ id: c.r.id, reason: 'conflict', status: c.r.status, gap_m: c.r.gap_m, vertex: r.vertex }); claim.set(r.vertex, { r }); }
+        else unresolved.push({ id: r.id, reason: 'conflict', status: r.status, gap_m: r.gap_m, vertex: r.vertex });
+      } else if (r.dist <= snap) moves.push({ id: r.id, type: 'line', to: r.foot, from: { y: r.y, x: r.x }, dist: r.dist, status: r.status });
+      else unresolved.push({ id: r.id, reason: 'beyond_snap', status: r.status, gap_m: r.gap_m });
+    }
+    return { moves, unresolved, claim };
+  }
+  // 完整分析：對每個鄰段檢查；回傳可序列化報告
+  function seamAnalyze(main, neighbors, opt = {}) {
+    const params = { ...SEAM_DEFAULT, ...opt };
+    const list = neighbors.map(n => ({ name: n.name, authoritative: n.authoritative !== false, ...seamCheck(main, n.ds, params) }));
+    const sum = k => list.reduce((s, n) => s + n.summary[k], 0);
+    return { generated: new Date().toISOString(), main: main.name, params, neighbors: list,
+      totals: { checked: sum('checked'), coincide: sum('coincide'), overlap: sum('overlap'), gap: sum('gap'), neighbor_missing_in_main: sum('neighbor_missing_in_main') } };
+  }
+  // 自動接合：逐一對「以鄰段為準」的鄰段吸附，回傳 { before, after, moves, unresolved }；點位已就地修改（呼叫端負責復原快照）
+  function seamJoin(main, neighbors, opt = {}) {
+    const params = { ...SEAM_DEFAULT, ...opt }, before = seamAnalyze(main, neighbors, params), moves = [], unresolved = [];
+    for (const n of neighbors) {
+      if (n.authoritative === false) continue;
+      const chk = seamCheck(main, n.ds, params), plan = seamPlan(chk, params), entries = [];
+      for (const [vid, c] of plan.claim) {
+        const v = n.ds.points.get(vid), p = main.points.get(c.r.id);
+        moves.push({ id: p.id, neighbor: n.name, type: 'vertex', neighbor_point: vid, from: { y: p.y, x: p.x }, to: { y: v.y, x: v.x }, dist: c.r.vertex_dist, status: c.r.status }); entries.push([p.id, v.y, v.x]);
+      }
+      for (const m of plan.moves) { moves.push({ ...m, neighbor: n.name }); entries.push([m.id, m.to.y, m.to.x]); }
+      for (const u of plan.unresolved) unresolved.push({ ...u, neighbor: n.name });
+      setPoints(main, entries);
+    }
+    return { before, after: seamAnalyze(main, neighbors, params), moves, unresolved };
+  }
+  const f3 = v => (v == null ? '' : Number(v).toFixed(3));
+  function seamReportText(rep) {
+    const L = [`鄰段接合報告　主要測區：${rep.main}　容差 ${rep.params.tol} m／搜尋 ${rep.params.search} m／吸附 ${rep.params.snap} m`, `合計：檢查 ${rep.totals.checked} 點；重合 ${rep.totals.coincide}、重疊 ${rep.totals.overlap}、脫開 ${rep.totals.gap}；鄰段點在主區界線上但主區無對應點 ${rep.totals.neighbor_missing_in_main}`];
+    for (const n of rep.neighbors) {
+      const s = n.summary;
+      L.push('', `■ 鄰段 ${n.name}${n.authoritative ? '（以鄰段為準）' : '（僅比對）'}：檢查 ${s.checked} 點；重合 ${s.coincide}（點上 ${s.coincide_vertex}／線上 ${s.coincide_line}）、重疊 ${s.overlap}（最大 ${f3(s.max_overlap_m)} m）、脫開 ${s.gap}（最大 ${f3(s.max_gap_m)} m）；鄰段缺點 ${s.neighbor_missing_in_main}、無對應 ${s.neighbor_unmatched}`);
+      for (const r of n.points.filter(r => r.status !== 'coincide')) L.push(`  點 ${r.id}　${SEAM_LABEL[r.status]} ${f3(Math.abs(r.gap_m))} m　最近鄰段點 ${r.vertex}（${f3(r.vertex_dist)} m）`);
+    }
+    if (rep.join) {
+      const ids = new Set(rep.join.moves.map(m => m.id));
+      L.push('', `■ 自動接合：移動 ${ids.size} 點（吸附到鄰段界址點 ${rep.join.moves.filter(m => m.type === 'vertex').length}、鄰段界線垂足 ${rep.join.moves.filter(m => m.type === 'line').length}）；接合前 重疊 ${rep.join.before.overlap}／脫開 ${rep.join.before.gap}；未處理 ${rep.join.unresolved.length}`);
+      for (const u of rep.join.unresolved) L.push(`  點 ${u.id}　未處理（${u.reason === 'conflict' ? '多點對應同一鄰段點' : '超出吸附上限'}）`);
+    }
+    return L.join('\n');
+  }
+  function seamReportCsv(rep) {
+    const rows = [['鄰段', '類別', '點號', '狀態', '種類', '偏差m(脫開+/重疊-)', '縱坐標y', '橫坐標x', '最近鄰段點', '距鄰段點m']];
+    for (const n of rep.neighbors) {
+      for (const r of n.points) rows.push([n.name, '主區點', r.id, SEAM_LABEL[r.status], r.kind === 'vertex' ? '鄰段點上' : r.kind === 'line' ? '鄰段線上' : '', f3(r.gap_m), r.y.toFixed(3), r.x.toFixed(3), r.vertex, f3(r.vertex_dist)]);
+      for (const r of n.neighbor_points) rows.push([n.name, '鄰段點', r.id, r.status === 'missing_in_main' ? '主區缺點' : '無對應', '', f3(r.dist), r.y.toFixed(3), r.x.toFixed(3), '', '']);
+    }
+    return rows.map(r => r.join(',')).join('\n');
+  }
+
   // ── 輸出 ────────────────────────────────────────────────────────────────
   // 回傳新的 D14 位元組：只改動 REF=0 且被移動的點的 COT_Y/COT_X。
   function exportD14(pts, ds) {
@@ -736,7 +894,7 @@ const Core = (() => {
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
-    newSurvey, addSurveyPoints, addLine, lineStats };
+    newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
 
@@ -746,6 +904,17 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.5.0', date: '2026-10-18', type: 'minor',
+    title: '新增鄰段接合：同時載入多個相鄰地段、不同顏色區分，逐點檢查段界重合／重疊／脫開並以鄰段為準自動接合',
+    changes: [
+      '「加入鄰段」／「加入鄰段資料夾」：主要測區之外，可再載入任意個相鄰地段（D14+D13，建議加 D11／D12；或 COA+BNP），選含多個案件資料夾的上層資料夾可一次全開；每個鄰段以不同顏色顯示（半透明底色＋界線＋地號＋段名），可個別顯示／隱藏／縮放／移除；也可 Shift＋拖入',
+      '檢查接合：逐點檢查主區段界點（外圍邊上的點）與鄰段段界——重合（落在鄰段界址點上，或在鄰段界線上但鄰段無此點）、重疊（跑進鄰段宗地內）、脫開（離鄰段段界有縫），列出偏差公尺數；另列「鄰段界址點在主區界線上卻無對應點」；圖上以綠／紅／橘圈標示並連到吸附目標，點表格列可跳到該點',
+      '自動接合（以鄰段為準）：已重測的鄰段勾選「以鄰段為準」，脫開／重疊的主區點吸附到吸附上限內最近的鄰段界址點，否則吸附到鄰段界線垂足；多點搶同一鄰段點時只讓最近者過去，其餘留待人工；整批可一次復原；重合容差、搜尋距離、吸附上限可調（預設 0.01／3／1 m）',
+      '接合報告：可輸出 CSV（Excel 可直接開）或 JSON，也併入「輸出 JSON」工作階段；圓弧段界以弧取樣比對',
+      'AI／MCP 介面：CadastralAPI 新增 listNeighbors／addNeighbor／removeNeighbor／setNeighbor／checkSeam／joinSeam／getSeamReport；joinSeam 一次完成檢查→接合→複檢並回傳接合前後報告；WebSocket 橋接支援非同步方法',
+    ],
+  },
   {
     version: 'v0.4.1', date: '2026-10-18', type: 'patch',
     title: '修正讀取含舊圖數化（D2C／D2B／D2D）的案件時舊圖線段亂掉',
@@ -825,6 +994,7 @@ const REPO = 'chenweihanfool/cadastral-resurvey-workstation';
 
 const S = {
   ds: null, ref: null, dbf: { pts: null }, names: {},
+  nb: [], seam: null, seamStale: false,      // 鄰段 [{name,ds,color,visible,authoritative,seg}]；接合檢查報告
   survey: Core.newSurvey(),                // 現況點與手動參考線
   controls: new Map(),                     // 已知點庫：控制點(CTL/D20)、補點(CT2)…  name → {name,y,x,src}
   view: { cx: 0, cy: 0, s: 1 },           // cx=東, cy=北, s=像素/公尺
@@ -906,7 +1076,7 @@ function boxSelect(x0, y0, x1, y1, add) {
 
 // ── 編輯（含復原）：undo 項目為 {before,after}（點位）或 {undoFn,redoFn}（其他）────
 const snapshot = ids => [...ids].map(id => { const p = S.ds.points.get(id); return [id, p.y, p.x]; });
-function pushUndo(e) { S.undo.push(e); if (S.undo.length > 500) S.undo.shift(); S.redo.length = 0; refresh(); }
+function pushUndo(e) { S.seamStale = true; S.undo.push(e); if (S.undo.length > 500) S.undo.shift(); S.redo.length = 0; refresh(); }
 function commit(before, after, label) {
   if (before.every((b, i) => b[1] === after[i][1] && b[2] === after[i][2])) return;
   pushUndo({ before, after, label });
@@ -927,8 +1097,8 @@ function rotateSelection(deg) {
   return transformSelection({ angle: deg * Math.PI / 180, pivot: pivotOf(ids) }, '旋轉');
 }
 function applyEntries(entries) { if (!S.ds) return; Core.setPoints(S.ds, entries); }
-function undo() { const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); refresh(); }
-function redo() { const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); refresh(); }
+function undo() { S.seamStale = true; const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); refresh(); }
+function redo() { S.seamStale = true; const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); refresh(); }
 function resetAll() { if (!S.ds) return; Core.resetAll(S.ds); S.undo.length = 0; S.redo.length = 0; refresh(); }
 
 // ── 現況點與參考線 ─────────────────────────────────────────────────────────
@@ -1120,6 +1290,7 @@ function render() {
     for (const e of S.ref.edges.values()) { if (e.arcPart) continue; const a = S.ref.points.get(e.a), b = S.ref.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
     ctx.stroke(); ctx.setLineDash([]); strokeArcs(S.ref, cRef, 1, [5, 4]);
   }
+  for (const n of S.nb) if (n.visible) drawNeighbor(n);
   if (ds) {
     // 已變動宗地底色
     ctx.fillStyle = cChg;
@@ -1147,6 +1318,7 @@ function render() {
     }
     const eff = selCount() ? effectiveIds() : [];
     ctx.fillStyle = cSel; for (const id of eff) { const p = ds.points.get(id); if (!p) continue; ctx.fillRect(toSx(p.x) - 4, toSy(p.y) - 4, 8, 8); }
+    if (S.seam && $('chkSeam').checked && !S.printing) drawSeam();
     if (S.hover && S.hover.t === 'pt') { const p = ds.points.get(S.hover.k); ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.strokeRect(toSx(p.x) - 6, toSy(p.y) - 6, 12, 12); }
     // 標註
     if ($('chkLabel').checked) {
@@ -1258,8 +1430,8 @@ function panel() {
   $('btnReset').disabled = !ds || !Core.movedPoints(ds).length;
   $('btnExpD14').disabled = !ds || !S.dbf.pts || !Core.movedPoints(ds).length;
   $('btnExpJson').disabled = !ds && !S.survey.points.size;
-  $('drop').style.display = (ds || S.survey.points.size) ? 'none' : 'flex';
-  lineList();
+  $('drop').style.display = (ds || S.survey.points.size || S.nb.length) ? 'none' : 'flex';
+  lineList(); nbPanel();
   const srcs = [...new Set([...S.controls.values()].map(p => p.src))];
   $('ctlInfo').textContent = S.controls.size ? `已知點 ${S.controls.size} 個（${srcs.join('、')}）` : '尚未匯入控制點 — 匯入 MAC 前需先匯入 CTL／CT2（或載入含 D20 的案件）';
   $('btnCtlClear').disabled = !S.controls.size;
@@ -1310,6 +1482,7 @@ function fit(box) {
   let b = box;
   if (!b) {
     b = S.ds ? Core.bounds(S.ds) : null;
+    for (const n of S.nb) { const q = Core.bounds(n.ds); b = b ? { x0: Math.min(b.x0, q.x0), x1: Math.max(b.x1, q.x1), y0: Math.min(b.y0, q.y0), y1: Math.max(b.y1, q.y1) } : q; }
     if (S.survey.points.size) { const s = surveyBounds(); b = b ? { x0: Math.min(b.x0, s.x0), x1: Math.max(b.x1, s.x1), y0: Math.min(b.y0, s.y0), y1: Math.max(b.y1, s.y1) } : s; }
   }
   if (!b || !isFinite(b.x0)) return;
@@ -1502,7 +1675,7 @@ async function loadFiles(files) {
     if (ctlMsg) return true;
     msg('缺少必要檔案：需要 D14+D13，或 COA+BNP，或 D2C+D2B；控制點用 CTL/CT2/D20；現況點請用「匯入現況點」'); return false;
   }
-  S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
+  S.seam = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
   fit(); refresh();
   msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
   return true;
@@ -1514,13 +1687,135 @@ addEventListener('dragover', e => e.preventDefault());
 addEventListener('drop', async e => {
   e.preventDefault(); const files = [];
   const walk = async en => {
-    if (en.isFile) files.push(await new Promise(r => en.file(r)));
+    if (en.isFile) { const f = await new Promise(r => en.file(r)); f._path = en.fullPath.replace(/^\//, ''); files.push(f); }
     else if (en.isDirectory) { const rd = en.createReader(); let all = []; for (;;) { const b = await new Promise(r => rd.readEntries(r)); if (!b.length) break; all = all.concat(b); } for (const c of all) await walk(c); }
   };
   const items = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
   if (items.length) for (const en of items) await walk(en); else files.push(...e.dataTransfer.files);
-  loadFiles(files);
+  e.shiftKey ? loadNeighbors(files) : loadFiles(files);
 });
+
+// ── 鄰段：同時載入相鄰地段、以不同顏色區分，並檢查／接合段界 ───────────────────
+const NB_COLORS = ['#e8590c', '#1c7ed6', '#9c36b5', '#2f9e44', '#c2255c', '#b08900', '#0c8599', '#6741d9'];
+const SEAM_COLOR = { coincide: '#1a7f37', overlap: '#d1242f', gap: '#f08c00', missing_in_main: '#9c36b5', unmatched: '#9c36b5' };
+const SEAM_TEXT = { coincide: '重合', overlap: '重疊', gap: '脫開', missing_in_main: '主區缺點', unmatched: '無對應' };
+const nbDirOf = f => { const p = f.webkitRelativePath || f._path || ''; return p.slice(0, p.lastIndexOf('/') + 1); };
+const nbArgs = () => S.nb.map(n => ({ name: n.name, ds: n.ds, authoritative: n.authoritative }));
+const seamOpts = (o = {}) => { const v = (id, k) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x >= 0 ? x : Core.SEAM_DEFAULT[k]; };
+  return { tol: o.tol ?? v('seamTol', 'tol'), search: o.search ?? v('seamSearch', 'search'), snap: o.snap ?? v('seamSnap', 'snap') }; };
+// 以「同資料夾＋同主檔名」分組，一次可加入多個地段（例如選取含多個案件資料夾的上層資料夾）
+async function loadNeighbors(files) {
+  const groups = new Map();
+  for (const f of files) {
+    const m = /^(.*)\.([^.]+)$/.exec(f.name); if (!m) continue; const x = m[2].toLowerCase(); if (!/^(d11|d12|d13|d14|coa|bnp|par)$/.test(x)) continue;
+    const key = nbDirOf(f) + m[1].toLowerCase(); let g = groups.get(key); if (!g) groups.set(key, g = { name: m[1], f: {} });
+    if (!g.f[x]) g.f[x] = f;
+  }
+  const added = [], skipped = [];
+  for (const g of groups.values()) {
+    const mainName = (S.names.d14 || S.names.coa || '').toLowerCase(), own = (g.f.d14 || g.f.coa || {}).name;
+    if (own && own.toLowerCase() === mainName) { skipped.push(g.name + '（與主要測區相同）'); continue; }
+    let ds = null;
+    try {
+      if (g.f.d14 && g.f.d13) ds = Core.datasetFromD({ pts: Core.parseDbf(await readBuf(g.f.d14)), bnd: Core.parseDbf(await readBuf(g.f.d13)), par: g.f.d11 ? Core.parseDbf(await readBuf(g.f.d11)) : null, d12: g.f.d12 ? Core.parseDbf(await readBuf(g.f.d12)) : null, name: g.name, source: 'D14/D13 鄰段' });
+      else if (g.f.coa && g.f.bnp) ds = Core.datasetFromKC({ coa: await readText(g.f.coa), bnp: await readText(g.f.bnp), par: g.f.par ? await readText(g.f.par) : null, name: g.name });
+    } catch (e) { skipped.push(g.name + '（' + e.message + '）'); continue; }
+    if (!ds || !ds.parcels.length) { skipped.push(g.name + '（缺 D14+D13 或 COA+BNP，或沒有宗地）'); continue; }
+    const old = S.nb.findIndex(n => n.name.toLowerCase() === g.name.toLowerCase());
+    const n = { name: g.name, ds, color: old >= 0 ? S.nb[old].color : NB_COLORS[S.nb.length % NB_COLORS.length], visible: true, authoritative: true, seg: Core.boundarySegments(ds) };
+    if (old >= 0) S.nb[old] = n; else S.nb.push(n);
+    added.push(g.name);
+  }
+  S.seam = null;
+  if (added.length) { fit(); }
+  refresh();
+  const r = { added, skipped };
+  msg(added.length ? `已加入鄰段：${added.join('、')}` + (skipped.length ? `；略過 ${skipped.join('、')}` : '') : '沒有可加入的鄰段' + (skipped.length ? `：${skipped.join('、')}` : '（需要 D14+D13 或 COA+BNP）'));
+  return r;
+}
+function drawNeighbor(n) {
+  const d = n.ds, c = n.color, sc = S.view.s;
+  ctx.fillStyle = c + '22'; ctx.beginPath();
+  for (const p of d.parcels) p.ids.forEach((id, i) => { const q = d.points.get(id); i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)); }), ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = c; ctx.lineWidth = 1.2; ctx.beginPath();
+  for (const e of d.edges.values()) { if (e.arcPart) continue; const a = d.points.get(e.a), b = d.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
+  ctx.stroke(); strokeArcs(d, c, 1.2);
+  if (sc > 3) { ctx.fillStyle = c; const r = sc > 8 ? 2.5 : 1.8; for (const id of n.seg.vids) { const p = d.points.get(id); ctx.fillRect(toSx(p.x) - r, toSy(p.y) - r, r * 2, r * 2); } }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (sc > 1.2) { ctx.font = `${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.fillStyle = c; for (const p of d.parcels) { const q = Core.centroidOf(d.points, p.ids), sx = toSx(q.x), sy = toSy(q.y); if (sx > 0 && sy > 0 && sx < W && sy < H) ctx.fillText(p.label, sx, sy); } }
+  const b = Core.bounds(d); ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = c; ctx.fillText(n.name, toSx((b.x0 + b.x1) / 2), toSy((b.y0 + b.y1) / 2));
+}
+function drawSeam() {
+  const ds = S.ds; if (!ds || !S.seam) return;
+  for (const nr of S.seam.neighbors) {
+    const nb = S.nb.find(n => n.name === nr.name);
+    for (const r of nr.points) {
+      const p = ds.points.get(r.id); if (!p) continue; const sx = toSx(p.x), sy = toSy(p.y); if (sx < -10 || sy < -10 || sx > W + 10 || sy > H + 10) continue;
+      ctx.strokeStyle = ctx.fillStyle = SEAM_COLOR[r.status];
+      if (r.status === 'coincide') { if (S.view.s > 2) { ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 7); ctx.lineWidth = 1.5; ctx.stroke(); } continue; }
+      const tgt = nb && r.vertex_dist <= S.seam.params.snap ? nb.ds.points.get(r.vertex) : r.foot;
+      if (tgt) { ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(toSx(tgt.x), toSy(tgt.y)); ctx.stroke(); }
+      ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 7); ctx.stroke();
+    }
+    for (const r of nr.neighbor_points) if (r.status === 'missing_in_main') { ctx.strokeStyle = SEAM_COLOR.missing_in_main; ctx.lineWidth = 2; ctx.strokeRect(toSx(r.x) - 6, toSy(r.y) - 6, 12, 12); }
+  }
+}
+function runSeam(o = {}) {
+  if (!S.ds) throw new Error('請先載入主要測區'); if (!S.nb.length) throw new Error('請先加入鄰段');
+  S.seam = Core.seamAnalyze(S.ds, nbArgs(), seamOpts(o)); S.seamStale = false; refresh(); return S.seam;
+}
+function joinSeam(o = {}) {
+  if (!S.ds) throw new Error('請先載入主要測區'); if (!S.nb.length) throw new Error('請先加入鄰段');
+  const j = Core.seamJoin(S.ds, nbArgs(), seamOpts(o)), first = new Map();
+  for (const m of j.moves) if (!first.has(m.id)) first.set(m.id, m.from);
+  const before = [...first].map(([id, f]) => [id, f.y, f.x]), after = [...first.keys()].map(id => { const p = S.ds.points.get(id); return [id, p.y, p.x]; });
+  commit(before, after, '鄰段接合');
+  S.seam = { ...j.after, join: { before: j.before.totals, moves: j.moves, unresolved: j.unresolved } }; S.seamStale = false; refresh();
+  msg(`鄰段接合：移動 ${first.size} 點；仍有 ${j.after.totals.overlap + j.after.totals.gap} 點重疊／脫開（未處理 ${j.unresolved.length}）`);
+  return { before: j.before.totals, after: j.after.totals, moves: j.moves, unresolved: j.unresolved, report: S.seam };
+}
+function nbPanel() {
+  const sgn = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(3);
+  $('nbList').innerHTML = S.nb.length ? S.nb.map((n, i) => `<div class="row" style="margin:3px 0"><span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${n.color}"></span><b>${esc(n.name)}</b>` +
+    `<span class="muted">${n.ds.parcels.length} 宗／${n.ds.points.size} 點</span><label class="chk"><input type="checkbox" data-nb="${i}" data-k="visible"${n.visible ? ' checked' : ''}>顯示</label>` +
+    `<label class="chk" title="已重測的鄰段：段界以鄰段為準，主要測區的段界點會被吸附過去"><input type="checkbox" data-nb="${i}" data-k="authoritative"${n.authoritative ? ' checked' : ''}>以鄰段為準</label>` +
+    `<button class="btn nbfit" data-nb="${i}">縮放</button><button class="btn nbdel" data-nb="${i}">✕</button></div>`).join('') : '<span class="muted">尚未加入鄰段 — 先開主要測區，再「加入鄰段」（可一次選含多個案件資料夾的上層資料夾）</span>';
+  $('btnSeamChk').disabled = $('btnSeamJoin').disabled = !S.ds || !S.nb.length; $('btnNbFit').disabled = !S.nb.length;
+  const s = S.seam; $('btnSeamCsv').disabled = $('btnSeamJson').disabled = !s;
+  if (!s) { $('seamSum').textContent = S.ds && S.nb.length ? '按「檢查接合」逐點檢查主區段界點與鄰段段界是否重合、重疊或脫開' : ''; $('seamTbl').innerHTML = ''; return; }
+  const t = s.totals;
+  $('seamSum').innerHTML = `檢查 ${t.checked} 點：<span style="color:${SEAM_COLOR.coincide}">重合 ${t.coincide}</span>／<span style="color:${SEAM_COLOR.overlap}">重疊 ${t.overlap}</span>／<span style="color:${SEAM_COLOR.gap}">脫開 ${t.gap}</span>；鄰段點主區缺 ${t.neighbor_missing_in_main}` +
+    (S.seamStale ? ' <b class="neg">（點位已變動，請重新檢查）</b>' : '') + (s.join ? `<br>上次接合：移動 ${new Set(s.join.moves.map(m => m.id)).size} 點，未處理 ${s.join.unresolved.length}` : '');
+  const showOk = $('seamShowOk').checked, rows = [];
+  for (const n of s.neighbors) {
+    for (const r of n.points) if (showOk || r.status !== 'coincide') rows.push({ n: n.name, t: 'p', id: r.id, st: r.status, v: r.gap_m, y: r.y, x: r.x, k: r.kind });
+    for (const r of n.neighbor_points) if (r.status === 'missing_in_main') rows.push({ n: n.name, t: 'n', id: r.id, st: r.status, v: r.dist, y: r.y, x: r.x });
+  }
+  rows.sort((a, b) => (a.st === 'coincide') - (b.st === 'coincide') || Math.abs(b.v) - Math.abs(a.v));
+  $('seamTbl').innerHTML = rows.slice(0, 300).map(r => `<tr data-y="${r.y}" data-x="${r.x}" data-id="${esc(r.id)}" data-t="${r.t}" style="cursor:pointer"><td>${esc(r.n)}</td><td>${r.t === 'n' ? '鄰段 ' : ''}${esc(r.id)}</td>` +
+    `<td style="color:${SEAM_COLOR[r.st]}">${SEAM_TEXT[r.st]}${r.k === 'line' ? '(線上)' : ''}</td><td>${r.st === 'coincide' ? '—' : sgn(r.v)}</td></tr>`).join('') + (rows.length > 300 ? `<tr><td colspan="4" class="muted">只列前 300 筆，共 ${rows.length} 筆（完整內容請輸出報告）</td></tr>` : '');
+}
+$('btnNbAdd').onclick = () => $('nbIn').click(); $('btnNbDir').onclick = () => $('nbDir').click();
+$('nbIn').onchange = e => { loadNeighbors([...e.target.files]); e.target.value = ''; }; $('nbDir').onchange = e => { loadNeighbors([...e.target.files]); e.target.value = ''; };
+$('btnNbFit').onclick = () => fit();
+$('nbList').addEventListener('change', e => { const i = e.target.dataset.nb; if (i == null) return; S.nb[i][e.target.dataset.k] = e.target.checked; if (e.target.dataset.k === 'authoritative') S.seamStale = !!S.seam; refresh(); });
+$('nbList').addEventListener('click', e => {
+  const i = e.target.dataset.nb; if (i == null || e.target.tagName !== 'BUTTON') return;
+  if (e.target.classList.contains('nbfit')) { const b = Core.bounds(S.nb[i].ds); fit({ x0: b.x0 - 5, x1: b.x1 + 5, y0: b.y0 - 5, y1: b.y1 + 5 }); }
+  else { S.nb.splice(i, 1); S.seam = null; refresh(); }
+});
+$('btnSeamChk').onclick = () => { try { const r = runSeam(); msg(`鄰段檢查：重合 ${r.totals.coincide}、重疊 ${r.totals.overlap}、脫開 ${r.totals.gap}`); } catch (e) { msg(e.message); } };
+$('btnSeamJoin').onclick = () => { try { joinSeam(); } catch (e) { msg(e.message); } };
+$('seamShowOk').onchange = refresh; $('chkSeam').onchange = draw;
+$('seamTbl').addEventListener('click', e => {
+  const tr = e.target.closest('tr'); if (!tr || !tr.dataset.id) return; const y = +tr.dataset.y, x = +tr.dataset.x;
+  if (tr.dataset.t === 'p') { clearSel(); S.sel.pt.add(Number.isNaN(+tr.dataset.id) ? tr.dataset.id : +tr.dataset.id); }
+  fit({ x0: x - 8, x1: x + 8, y0: y - 8, y1: y + 8 }); refresh();
+});
+const seamName = ext => `${(S.ds && S.ds.name || 'main').replace(/\.\w+$/, '')}-seam-report.${ext}`;
+$('btnSeamCsv').onclick = () => download(seamName('csv'), '﻿' + Core.seamReportCsv(S.seam), 'text/csv;charset=utf-8');
+$('btnSeamJson').onclick = () => download(seamName('json'), JSON.stringify(S.seam, null, 2), 'application/json');
 
 // ── 現況點匯入對話框 ───────────────────────────────────────────────────────
 function impOpts() {
@@ -1786,15 +2081,25 @@ const api = {
   addLine: ({ points, closed = false, name } = {}) => { const l = addLine(points, { closed, name }); refresh(); return l && { id: l.id, name: l.name, points: l.points, closed: l.closed, ...Core.lineStats(S.survey, l) }; },
   listLines: () => S.survey.lines.map(l => ({ id: l.id, name: l.name, points: l.points, closed: l.closed, ...Core.lineStats(S.survey, l) })),
   deleteLine: ({ id }) => deleteLine(id),
+  // ── 鄰段接合（MCP）：listNeighbors → addNeighbor → joinSeam（自動接合並回傳報告）／checkSeam（只檢查）→ getSeamReport ──
+  listNeighbors: () => S.nb.map(n => ({ name: n.name, source: n.ds.source, parcels: n.ds.parcels.length, points: n.ds.points.size, boundary_points: n.seg.vids.size, visible: n.visible, authoritative: n.authoritative, color: n.color })),
+  // files: [{name:'KC1120.D14', base64:'…'} | {name:'KC1120.BNP', text:'…'}]，需 D14+D13（建議 D11、D12）或 COA+BNP
+  addNeighbor: ({ files = [] } = {}) => loadNeighbors(files.map(f => new File([f.base64 ? Uint8Array.from(atob(f.base64), c => c.charCodeAt(0)) : new TextEncoder().encode(f.text || '')], f.name))),
+  removeNeighbor: ({ name }) => { const i = S.nb.findIndex(n => n.name.toLowerCase() === String(name).toLowerCase()); if (i < 0) throw new Error('找不到鄰段 ' + name); S.nb.splice(i, 1); S.seam = null; refresh(); return api.listNeighbors(); },
+  setNeighbor: ({ name, visible, authoritative }) => { const n = S.nb.find(n => n.name.toLowerCase() === String(name).toLowerCase()); if (!n) throw new Error('找不到鄰段 ' + name); if (visible != null) n.visible = !!visible; if (authoritative != null) n.authoritative = !!authoritative; refresh(); return api.listNeighbors(); },
+  // 參數：tol 重合容差、search 搜尋距離、snap 吸附上限（公尺）；省略用畫面上的設定
+  checkSeam: o => runSeam(o || {}),
+  joinSeam: o => joinSeam(o || {}),
+  getSeamReport: ({ format = 'json' } = {}) => { if (!S.seam) throw new Error('尚未檢查接合'); return format === 'text' ? Core.seamReportText(S.seam) : format === 'csv' ? Core.seamReportCsv(S.seam) : S.seam; },
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
-  exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })) }, S.survey),
+  exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
 };
 window.CadastralAPI = api;
 const bridge = new URLSearchParams(location.search).get('bridge');
 if (bridge) {   // 例：?bridge=ws://127.0.0.1:8765 ；收 {id,method,params}，回 {id,result|error}
   const ws = new WebSocket(bridge);
   ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; }
-    try { ws.send(JSON.stringify({ id: m.id, result: api[m.method](m.params) })); } catch (err) { ws.send(JSON.stringify({ id: m.id, error: String(err) })); } };
+    Promise.resolve().then(() => api[m.method](m.params)).then(result => ws.send(JSON.stringify({ id: m.id, result })), err => ws.send(JSON.stringify({ id: m.id, error: String(err) }))); };
   ws.onopen = () => msg('AI 橋接已連線');
 }
 resize(); panel();

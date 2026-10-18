@@ -9,6 +9,7 @@ const REPO = 'chenweihanfool/cadastral-resurvey-workstation';
 
 const S = {
   ds: null, ref: null, dbf: { pts: null }, names: {},
+  nb: [], seam: null, seamStale: false,      // 鄰段 [{name,ds,color,visible,authoritative,seg}]；接合檢查報告
   survey: Core.newSurvey(),                // 現況點與手動參考線
   controls: new Map(),                     // 已知點庫：控制點(CTL/D20)、補點(CT2)…  name → {name,y,x,src}
   view: { cx: 0, cy: 0, s: 1 },           // cx=東, cy=北, s=像素/公尺
@@ -90,7 +91,7 @@ function boxSelect(x0, y0, x1, y1, add) {
 
 // ── 編輯（含復原）：undo 項目為 {before,after}（點位）或 {undoFn,redoFn}（其他）────
 const snapshot = ids => [...ids].map(id => { const p = S.ds.points.get(id); return [id, p.y, p.x]; });
-function pushUndo(e) { S.undo.push(e); if (S.undo.length > 500) S.undo.shift(); S.redo.length = 0; refresh(); }
+function pushUndo(e) { S.seamStale = true; S.undo.push(e); if (S.undo.length > 500) S.undo.shift(); S.redo.length = 0; refresh(); }
 function commit(before, after, label) {
   if (before.every((b, i) => b[1] === after[i][1] && b[2] === after[i][2])) return;
   pushUndo({ before, after, label });
@@ -111,8 +112,8 @@ function rotateSelection(deg) {
   return transformSelection({ angle: deg * Math.PI / 180, pivot: pivotOf(ids) }, '旋轉');
 }
 function applyEntries(entries) { if (!S.ds) return; Core.setPoints(S.ds, entries); }
-function undo() { const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); refresh(); }
-function redo() { const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); refresh(); }
+function undo() { S.seamStale = true; const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); refresh(); }
+function redo() { S.seamStale = true; const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); refresh(); }
 function resetAll() { if (!S.ds) return; Core.resetAll(S.ds); S.undo.length = 0; S.redo.length = 0; refresh(); }
 
 // ── 現況點與參考線 ─────────────────────────────────────────────────────────
@@ -304,6 +305,7 @@ function render() {
     for (const e of S.ref.edges.values()) { if (e.arcPart) continue; const a = S.ref.points.get(e.a), b = S.ref.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
     ctx.stroke(); ctx.setLineDash([]); strokeArcs(S.ref, cRef, 1, [5, 4]);
   }
+  for (const n of S.nb) if (n.visible) drawNeighbor(n);
   if (ds) {
     // 已變動宗地底色
     ctx.fillStyle = cChg;
@@ -331,6 +333,7 @@ function render() {
     }
     const eff = selCount() ? effectiveIds() : [];
     ctx.fillStyle = cSel; for (const id of eff) { const p = ds.points.get(id); if (!p) continue; ctx.fillRect(toSx(p.x) - 4, toSy(p.y) - 4, 8, 8); }
+    if (S.seam && $('chkSeam').checked && !S.printing) drawSeam();
     if (S.hover && S.hover.t === 'pt') { const p = ds.points.get(S.hover.k); ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.strokeRect(toSx(p.x) - 6, toSy(p.y) - 6, 12, 12); }
     // 標註
     if ($('chkLabel').checked) {
@@ -442,8 +445,8 @@ function panel() {
   $('btnReset').disabled = !ds || !Core.movedPoints(ds).length;
   $('btnExpD14').disabled = !ds || !S.dbf.pts || !Core.movedPoints(ds).length;
   $('btnExpJson').disabled = !ds && !S.survey.points.size;
-  $('drop').style.display = (ds || S.survey.points.size) ? 'none' : 'flex';
-  lineList();
+  $('drop').style.display = (ds || S.survey.points.size || S.nb.length) ? 'none' : 'flex';
+  lineList(); nbPanel();
   const srcs = [...new Set([...S.controls.values()].map(p => p.src))];
   $('ctlInfo').textContent = S.controls.size ? `已知點 ${S.controls.size} 個（${srcs.join('、')}）` : '尚未匯入控制點 — 匯入 MAC 前需先匯入 CTL／CT2（或載入含 D20 的案件）';
   $('btnCtlClear').disabled = !S.controls.size;
@@ -494,6 +497,7 @@ function fit(box) {
   let b = box;
   if (!b) {
     b = S.ds ? Core.bounds(S.ds) : null;
+    for (const n of S.nb) { const q = Core.bounds(n.ds); b = b ? { x0: Math.min(b.x0, q.x0), x1: Math.max(b.x1, q.x1), y0: Math.min(b.y0, q.y0), y1: Math.max(b.y1, q.y1) } : q; }
     if (S.survey.points.size) { const s = surveyBounds(); b = b ? { x0: Math.min(b.x0, s.x0), x1: Math.max(b.x1, s.x1), y0: Math.min(b.y0, s.y0), y1: Math.max(b.y1, s.y1) } : s; }
   }
   if (!b || !isFinite(b.x0)) return;
@@ -686,7 +690,7 @@ async function loadFiles(files) {
     if (ctlMsg) return true;
     msg('缺少必要檔案：需要 D14+D13，或 COA+BNP，或 D2C+D2B；控制點用 CTL/CT2/D20；現況點請用「匯入現況點」'); return false;
   }
-  S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
+  S.seam = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
   fit(); refresh();
   msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
   return true;
@@ -698,13 +702,135 @@ addEventListener('dragover', e => e.preventDefault());
 addEventListener('drop', async e => {
   e.preventDefault(); const files = [];
   const walk = async en => {
-    if (en.isFile) files.push(await new Promise(r => en.file(r)));
+    if (en.isFile) { const f = await new Promise(r => en.file(r)); f._path = en.fullPath.replace(/^\//, ''); files.push(f); }
     else if (en.isDirectory) { const rd = en.createReader(); let all = []; for (;;) { const b = await new Promise(r => rd.readEntries(r)); if (!b.length) break; all = all.concat(b); } for (const c of all) await walk(c); }
   };
   const items = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
   if (items.length) for (const en of items) await walk(en); else files.push(...e.dataTransfer.files);
-  loadFiles(files);
+  e.shiftKey ? loadNeighbors(files) : loadFiles(files);
 });
+
+// ── 鄰段：同時載入相鄰地段、以不同顏色區分，並檢查／接合段界 ───────────────────
+const NB_COLORS = ['#e8590c', '#1c7ed6', '#9c36b5', '#2f9e44', '#c2255c', '#b08900', '#0c8599', '#6741d9'];
+const SEAM_COLOR = { coincide: '#1a7f37', overlap: '#d1242f', gap: '#f08c00', missing_in_main: '#9c36b5', unmatched: '#9c36b5' };
+const SEAM_TEXT = { coincide: '重合', overlap: '重疊', gap: '脫開', missing_in_main: '主區缺點', unmatched: '無對應' };
+const nbDirOf = f => { const p = f.webkitRelativePath || f._path || ''; return p.slice(0, p.lastIndexOf('/') + 1); };
+const nbArgs = () => S.nb.map(n => ({ name: n.name, ds: n.ds, authoritative: n.authoritative }));
+const seamOpts = (o = {}) => { const v = (id, k) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x >= 0 ? x : Core.SEAM_DEFAULT[k]; };
+  return { tol: o.tol ?? v('seamTol', 'tol'), search: o.search ?? v('seamSearch', 'search'), snap: o.snap ?? v('seamSnap', 'snap') }; };
+// 以「同資料夾＋同主檔名」分組，一次可加入多個地段（例如選取含多個案件資料夾的上層資料夾）
+async function loadNeighbors(files) {
+  const groups = new Map();
+  for (const f of files) {
+    const m = /^(.*)\.([^.]+)$/.exec(f.name); if (!m) continue; const x = m[2].toLowerCase(); if (!/^(d11|d12|d13|d14|coa|bnp|par)$/.test(x)) continue;
+    const key = nbDirOf(f) + m[1].toLowerCase(); let g = groups.get(key); if (!g) groups.set(key, g = { name: m[1], f: {} });
+    if (!g.f[x]) g.f[x] = f;
+  }
+  const added = [], skipped = [];
+  for (const g of groups.values()) {
+    const mainName = (S.names.d14 || S.names.coa || '').toLowerCase(), own = (g.f.d14 || g.f.coa || {}).name;
+    if (own && own.toLowerCase() === mainName) { skipped.push(g.name + '（與主要測區相同）'); continue; }
+    let ds = null;
+    try {
+      if (g.f.d14 && g.f.d13) ds = Core.datasetFromD({ pts: Core.parseDbf(await readBuf(g.f.d14)), bnd: Core.parseDbf(await readBuf(g.f.d13)), par: g.f.d11 ? Core.parseDbf(await readBuf(g.f.d11)) : null, d12: g.f.d12 ? Core.parseDbf(await readBuf(g.f.d12)) : null, name: g.name, source: 'D14/D13 鄰段' });
+      else if (g.f.coa && g.f.bnp) ds = Core.datasetFromKC({ coa: await readText(g.f.coa), bnp: await readText(g.f.bnp), par: g.f.par ? await readText(g.f.par) : null, name: g.name });
+    } catch (e) { skipped.push(g.name + '（' + e.message + '）'); continue; }
+    if (!ds || !ds.parcels.length) { skipped.push(g.name + '（缺 D14+D13 或 COA+BNP，或沒有宗地）'); continue; }
+    const old = S.nb.findIndex(n => n.name.toLowerCase() === g.name.toLowerCase());
+    const n = { name: g.name, ds, color: old >= 0 ? S.nb[old].color : NB_COLORS[S.nb.length % NB_COLORS.length], visible: true, authoritative: true, seg: Core.boundarySegments(ds) };
+    if (old >= 0) S.nb[old] = n; else S.nb.push(n);
+    added.push(g.name);
+  }
+  S.seam = null;
+  if (added.length) { fit(); }
+  refresh();
+  const r = { added, skipped };
+  msg(added.length ? `已加入鄰段：${added.join('、')}` + (skipped.length ? `；略過 ${skipped.join('、')}` : '') : '沒有可加入的鄰段' + (skipped.length ? `：${skipped.join('、')}` : '（需要 D14+D13 或 COA+BNP）'));
+  return r;
+}
+function drawNeighbor(n) {
+  const d = n.ds, c = n.color, sc = S.view.s;
+  ctx.fillStyle = c + '22'; ctx.beginPath();
+  for (const p of d.parcels) p.ids.forEach((id, i) => { const q = d.points.get(id); i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)); }), ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = c; ctx.lineWidth = 1.2; ctx.beginPath();
+  for (const e of d.edges.values()) { if (e.arcPart) continue; const a = d.points.get(e.a), b = d.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
+  ctx.stroke(); strokeArcs(d, c, 1.2);
+  if (sc > 3) { ctx.fillStyle = c; const r = sc > 8 ? 2.5 : 1.8; for (const id of n.seg.vids) { const p = d.points.get(id); ctx.fillRect(toSx(p.x) - r, toSy(p.y) - r, r * 2, r * 2); } }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (sc > 1.2) { ctx.font = `${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.fillStyle = c; for (const p of d.parcels) { const q = Core.centroidOf(d.points, p.ids), sx = toSx(q.x), sy = toSy(q.y); if (sx > 0 && sy > 0 && sx < W && sy < H) ctx.fillText(p.label, sx, sy); } }
+  const b = Core.bounds(d); ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = c; ctx.fillText(n.name, toSx((b.x0 + b.x1) / 2), toSy((b.y0 + b.y1) / 2));
+}
+function drawSeam() {
+  const ds = S.ds; if (!ds || !S.seam) return;
+  for (const nr of S.seam.neighbors) {
+    const nb = S.nb.find(n => n.name === nr.name);
+    for (const r of nr.points) {
+      const p = ds.points.get(r.id); if (!p) continue; const sx = toSx(p.x), sy = toSy(p.y); if (sx < -10 || sy < -10 || sx > W + 10 || sy > H + 10) continue;
+      ctx.strokeStyle = ctx.fillStyle = SEAM_COLOR[r.status];
+      if (r.status === 'coincide') { if (S.view.s > 2) { ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 7); ctx.lineWidth = 1.5; ctx.stroke(); } continue; }
+      const tgt = nb && r.vertex_dist <= S.seam.params.snap ? nb.ds.points.get(r.vertex) : r.foot;
+      if (tgt) { ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(toSx(tgt.x), toSy(tgt.y)); ctx.stroke(); }
+      ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 7); ctx.stroke();
+    }
+    for (const r of nr.neighbor_points) if (r.status === 'missing_in_main') { ctx.strokeStyle = SEAM_COLOR.missing_in_main; ctx.lineWidth = 2; ctx.strokeRect(toSx(r.x) - 6, toSy(r.y) - 6, 12, 12); }
+  }
+}
+function runSeam(o = {}) {
+  if (!S.ds) throw new Error('請先載入主要測區'); if (!S.nb.length) throw new Error('請先加入鄰段');
+  S.seam = Core.seamAnalyze(S.ds, nbArgs(), seamOpts(o)); S.seamStale = false; refresh(); return S.seam;
+}
+function joinSeam(o = {}) {
+  if (!S.ds) throw new Error('請先載入主要測區'); if (!S.nb.length) throw new Error('請先加入鄰段');
+  const j = Core.seamJoin(S.ds, nbArgs(), seamOpts(o)), first = new Map();
+  for (const m of j.moves) if (!first.has(m.id)) first.set(m.id, m.from);
+  const before = [...first].map(([id, f]) => [id, f.y, f.x]), after = [...first.keys()].map(id => { const p = S.ds.points.get(id); return [id, p.y, p.x]; });
+  commit(before, after, '鄰段接合');
+  S.seam = { ...j.after, join: { before: j.before.totals, moves: j.moves, unresolved: j.unresolved } }; S.seamStale = false; refresh();
+  msg(`鄰段接合：移動 ${first.size} 點；仍有 ${j.after.totals.overlap + j.after.totals.gap} 點重疊／脫開（未處理 ${j.unresolved.length}）`);
+  return { before: j.before.totals, after: j.after.totals, moves: j.moves, unresolved: j.unresolved, report: S.seam };
+}
+function nbPanel() {
+  const sgn = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(3);
+  $('nbList').innerHTML = S.nb.length ? S.nb.map((n, i) => `<div class="row" style="margin:3px 0"><span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${n.color}"></span><b>${esc(n.name)}</b>` +
+    `<span class="muted">${n.ds.parcels.length} 宗／${n.ds.points.size} 點</span><label class="chk"><input type="checkbox" data-nb="${i}" data-k="visible"${n.visible ? ' checked' : ''}>顯示</label>` +
+    `<label class="chk" title="已重測的鄰段：段界以鄰段為準，主要測區的段界點會被吸附過去"><input type="checkbox" data-nb="${i}" data-k="authoritative"${n.authoritative ? ' checked' : ''}>以鄰段為準</label>` +
+    `<button class="btn nbfit" data-nb="${i}">縮放</button><button class="btn nbdel" data-nb="${i}">✕</button></div>`).join('') : '<span class="muted">尚未加入鄰段 — 先開主要測區，再「加入鄰段」（可一次選含多個案件資料夾的上層資料夾）</span>';
+  $('btnSeamChk').disabled = $('btnSeamJoin').disabled = !S.ds || !S.nb.length; $('btnNbFit').disabled = !S.nb.length;
+  const s = S.seam; $('btnSeamCsv').disabled = $('btnSeamJson').disabled = !s;
+  if (!s) { $('seamSum').textContent = S.ds && S.nb.length ? '按「檢查接合」逐點檢查主區段界點與鄰段段界是否重合、重疊或脫開' : ''; $('seamTbl').innerHTML = ''; return; }
+  const t = s.totals;
+  $('seamSum').innerHTML = `檢查 ${t.checked} 點：<span style="color:${SEAM_COLOR.coincide}">重合 ${t.coincide}</span>／<span style="color:${SEAM_COLOR.overlap}">重疊 ${t.overlap}</span>／<span style="color:${SEAM_COLOR.gap}">脫開 ${t.gap}</span>；鄰段點主區缺 ${t.neighbor_missing_in_main}` +
+    (S.seamStale ? ' <b class="neg">（點位已變動，請重新檢查）</b>' : '') + (s.join ? `<br>上次接合：移動 ${new Set(s.join.moves.map(m => m.id)).size} 點，未處理 ${s.join.unresolved.length}` : '');
+  const showOk = $('seamShowOk').checked, rows = [];
+  for (const n of s.neighbors) {
+    for (const r of n.points) if (showOk || r.status !== 'coincide') rows.push({ n: n.name, t: 'p', id: r.id, st: r.status, v: r.gap_m, y: r.y, x: r.x, k: r.kind });
+    for (const r of n.neighbor_points) if (r.status === 'missing_in_main') rows.push({ n: n.name, t: 'n', id: r.id, st: r.status, v: r.dist, y: r.y, x: r.x });
+  }
+  rows.sort((a, b) => (a.st === 'coincide') - (b.st === 'coincide') || Math.abs(b.v) - Math.abs(a.v));
+  $('seamTbl').innerHTML = rows.slice(0, 300).map(r => `<tr data-y="${r.y}" data-x="${r.x}" data-id="${esc(r.id)}" data-t="${r.t}" style="cursor:pointer"><td>${esc(r.n)}</td><td>${r.t === 'n' ? '鄰段 ' : ''}${esc(r.id)}</td>` +
+    `<td style="color:${SEAM_COLOR[r.st]}">${SEAM_TEXT[r.st]}${r.k === 'line' ? '(線上)' : ''}</td><td>${r.st === 'coincide' ? '—' : sgn(r.v)}</td></tr>`).join('') + (rows.length > 300 ? `<tr><td colspan="4" class="muted">只列前 300 筆，共 ${rows.length} 筆（完整內容請輸出報告）</td></tr>` : '');
+}
+$('btnNbAdd').onclick = () => $('nbIn').click(); $('btnNbDir').onclick = () => $('nbDir').click();
+$('nbIn').onchange = e => { loadNeighbors([...e.target.files]); e.target.value = ''; }; $('nbDir').onchange = e => { loadNeighbors([...e.target.files]); e.target.value = ''; };
+$('btnNbFit').onclick = () => fit();
+$('nbList').addEventListener('change', e => { const i = e.target.dataset.nb; if (i == null) return; S.nb[i][e.target.dataset.k] = e.target.checked; if (e.target.dataset.k === 'authoritative') S.seamStale = !!S.seam; refresh(); });
+$('nbList').addEventListener('click', e => {
+  const i = e.target.dataset.nb; if (i == null || e.target.tagName !== 'BUTTON') return;
+  if (e.target.classList.contains('nbfit')) { const b = Core.bounds(S.nb[i].ds); fit({ x0: b.x0 - 5, x1: b.x1 + 5, y0: b.y0 - 5, y1: b.y1 + 5 }); }
+  else { S.nb.splice(i, 1); S.seam = null; refresh(); }
+});
+$('btnSeamChk').onclick = () => { try { const r = runSeam(); msg(`鄰段檢查：重合 ${r.totals.coincide}、重疊 ${r.totals.overlap}、脫開 ${r.totals.gap}`); } catch (e) { msg(e.message); } };
+$('btnSeamJoin').onclick = () => { try { joinSeam(); } catch (e) { msg(e.message); } };
+$('seamShowOk').onchange = refresh; $('chkSeam').onchange = draw;
+$('seamTbl').addEventListener('click', e => {
+  const tr = e.target.closest('tr'); if (!tr || !tr.dataset.id) return; const y = +tr.dataset.y, x = +tr.dataset.x;
+  if (tr.dataset.t === 'p') { clearSel(); S.sel.pt.add(Number.isNaN(+tr.dataset.id) ? tr.dataset.id : +tr.dataset.id); }
+  fit({ x0: x - 8, x1: x + 8, y0: y - 8, y1: y + 8 }); refresh();
+});
+const seamName = ext => `${(S.ds && S.ds.name || 'main').replace(/\.\w+$/, '')}-seam-report.${ext}`;
+$('btnSeamCsv').onclick = () => download(seamName('csv'), '﻿' + Core.seamReportCsv(S.seam), 'text/csv;charset=utf-8');
+$('btnSeamJson').onclick = () => download(seamName('json'), JSON.stringify(S.seam, null, 2), 'application/json');
 
 // ── 現況點匯入對話框 ───────────────────────────────────────────────────────
 function impOpts() {
@@ -970,15 +1096,25 @@ const api = {
   addLine: ({ points, closed = false, name } = {}) => { const l = addLine(points, { closed, name }); refresh(); return l && { id: l.id, name: l.name, points: l.points, closed: l.closed, ...Core.lineStats(S.survey, l) }; },
   listLines: () => S.survey.lines.map(l => ({ id: l.id, name: l.name, points: l.points, closed: l.closed, ...Core.lineStats(S.survey, l) })),
   deleteLine: ({ id }) => deleteLine(id),
+  // ── 鄰段接合（MCP）：listNeighbors → addNeighbor → joinSeam（自動接合並回傳報告）／checkSeam（只檢查）→ getSeamReport ──
+  listNeighbors: () => S.nb.map(n => ({ name: n.name, source: n.ds.source, parcels: n.ds.parcels.length, points: n.ds.points.size, boundary_points: n.seg.vids.size, visible: n.visible, authoritative: n.authoritative, color: n.color })),
+  // files: [{name:'KC1120.D14', base64:'…'} | {name:'KC1120.BNP', text:'…'}]，需 D14+D13（建議 D11、D12）或 COA+BNP
+  addNeighbor: ({ files = [] } = {}) => loadNeighbors(files.map(f => new File([f.base64 ? Uint8Array.from(atob(f.base64), c => c.charCodeAt(0)) : new TextEncoder().encode(f.text || '')], f.name))),
+  removeNeighbor: ({ name }) => { const i = S.nb.findIndex(n => n.name.toLowerCase() === String(name).toLowerCase()); if (i < 0) throw new Error('找不到鄰段 ' + name); S.nb.splice(i, 1); S.seam = null; refresh(); return api.listNeighbors(); },
+  setNeighbor: ({ name, visible, authoritative }) => { const n = S.nb.find(n => n.name.toLowerCase() === String(name).toLowerCase()); if (!n) throw new Error('找不到鄰段 ' + name); if (visible != null) n.visible = !!visible; if (authoritative != null) n.authoritative = !!authoritative; refresh(); return api.listNeighbors(); },
+  // 參數：tol 重合容差、search 搜尋距離、snap 吸附上限（公尺）；省略用畫面上的設定
+  checkSeam: o => runSeam(o || {}),
+  joinSeam: o => joinSeam(o || {}),
+  getSeamReport: ({ format = 'json' } = {}) => { if (!S.seam) throw new Error('尚未檢查接合'); return format === 'text' ? Core.seamReportText(S.seam) : format === 'csv' ? Core.seamReportCsv(S.seam) : S.seam; },
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
-  exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })) }, S.survey),
+  exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
 };
 window.CadastralAPI = api;
 const bridge = new URLSearchParams(location.search).get('bridge');
 if (bridge) {   // 例：?bridge=ws://127.0.0.1:8765 ；收 {id,method,params}，回 {id,result|error}
   const ws = new WebSocket(bridge);
   ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; }
-    try { ws.send(JSON.stringify({ id: m.id, result: api[m.method](m.params) })); } catch (err) { ws.send(JSON.stringify({ id: m.id, error: String(err) })); } };
+    Promise.resolve().then(() => api[m.method](m.params)).then(result => ws.send(JSON.stringify({ id: m.id, result })), err => ws.send(JSON.stringify({ id: m.id, error: String(err) }))); };
   ws.onopen = () => msg('AI 橋接已連線');
 }
 resize(); panel();
