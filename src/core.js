@@ -1,0 +1,499 @@
+/* core.js — 地籍圖資料核心：讀寫 NECEXE 的 DBF(D檔) 與 KC 文字檔(COA/BNP/PAR)、幾何、面積。
+ * 純函式、不碰 DOM，瀏覽器與 Node 共用。座標慣例：y = 縱坐標(北, TWD97 ~2.7e6)、x = 橫坐標(東)。
+ * 資料模型與驗證依據見 NECEXE_findings.md。 */
+const Core = (() => {
+  'use strict';
+  const CHG = 1e-6;   // 面積變動判定門檻（m²），低於此視為未變動
+
+  const dec = (u8, label = 'big5') => new TextDecoder(label).decode(u8);
+
+  // ── DBF 讀取 ─────────────────────────────────────────────────────────────
+  function parseDbf(buf) {
+    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const n = dv.getUint32(4, true), hl = dv.getUint16(8, true), rl = dv.getUint16(10, true);
+    const fields = [];
+    let off = 1;
+    for (let o = 32; u8[o] !== 0x0d && o < hl; o += 32) {
+      const name = dec(u8.subarray(o, o + 11)).split('\0')[0];
+      const f = { name, type: String.fromCharCode(u8[o + 11]), len: u8[o + 16], dec: u8[o + 17], off };
+      off += f.len; fields.push(f);
+    }
+    const rows = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const base = hl + i * rl, row = { _deleted: u8[base] === 0x2a };
+      for (const f of fields) {
+        const s = dec(u8.subarray(base + f.off, base + f.off + f.len)).trim();
+        if (f.type === 'N' || f.type === 'F') { const v = s === '' ? NaN : Number(s); row[f.name] = Number.isNaN(v) ? null : v; }
+        else if (f.type === 'L') row[f.name] = /^[TtYy]$/.test(s);
+        else row[f.name] = s;
+      }
+      rows[i] = row;
+    }
+    return { fields, rows, hl, rl, n, u8 };
+  }
+
+  // 就地修改數值欄位（右靠齊、補空白），回傳新的 Uint8Array；不改動其他位元組。
+  function patchDbfNumber(u8, dbf, rowIndex, fieldName, value) {
+    const f = dbf.fields.find(x => x.name === fieldName);
+    if (!f) throw new Error('無此欄位 ' + fieldName);
+    const s = value.toFixed(f.dec);
+    if (s.length > f.len) throw new Error(`${fieldName} 值 ${s} 超出欄寬 ${f.len}`);
+    const base = dbf.hl + rowIndex * dbf.rl + f.off;
+    const padded = s.padStart(f.len, ' ');
+    for (let i = 0; i < f.len; i++) u8[base + i] = padded.charCodeAt(i);
+  }
+
+  // ── 資料集 ───────────────────────────────────────────────────────────────
+  // dataset = { name, source, points: Map(id→{id,y,x,y0,x0}), parcels: [{idx,key,label,oldLabel,ids,areaRef,areaOrig}],
+  //             edges: Map("a-b"→{a,b,parcels:[idx]}), pointParcels: Map(id→[idx]) }
+  function newDataset(name, source) {
+    return { name, source, points: new Map(), parcels: [], edges: new Map(), pointParcels: new Map(), meta: {} };
+  }
+
+  function finalize(ds) {
+    ds.edges = new Map(); ds.pointParcels = new Map();
+    ds.parcels.forEach((p, idx) => {
+      p.idx = idx;
+      const ids = p.ids, n = ids.length;
+      for (let i = 0; i < n; i++) {
+        const a = ids[i], b = ids[(i + 1) % n];
+        if (a === b) continue;
+        const k = a < b ? a + '-' + b : b + '-' + a;
+        let e = ds.edges.get(k);
+        if (!e) ds.edges.set(k, e = { key: k, a: Math.min(a, b), b: Math.max(a, b), parcels: [] });
+        if (!e.parcels.includes(idx)) e.parcels.push(idx);
+        let pp = ds.pointParcels.get(a); if (!pp) ds.pointParcels.set(a, pp = []);
+        if (!pp.includes(idx)) pp.push(idx);
+      }
+    });
+    // 地中地：外圈地號面積 = 外圈 − 內圈（holeKeys 為內圈地號鍵）
+    const byKey = new Map(ds.parcels.map(p => [p.key, p]));
+    for (const p of ds.parcels) {
+      p.holes = []; p.containers = p.containers || [];
+    }
+    for (const p of ds.parcels) for (const hk of p.holeKeys || []) {
+      const h = byKey.get(hk); if (h && h !== p) { p.holes.push(h.idx); h.containers.push(p.idx); }
+    }
+    for (const p of ds.parcels) { p.areaOrig = parcelArea(ds, p); p.area = p.areaOrig; }
+    // 圓弧：mid[i] 為弧中點，前後頂點為弧端；弦邊標記 arcPart，繪圖時改畫弧
+    ds.arcs = new Map();
+    for (const p of ds.parcels) if (p.mid) {
+      const n = p.ids.length;
+      p.mid.forEach((m, i) => {
+        if (!m) return; const a = p.ids[(i - 1 + n) % n], b = p.ids[i], c = p.ids[(i + 1) % n];
+        ds.arcs.set(a + '|' + b + '|' + c, { a, b, c });
+        for (const [u, v] of [[a, b], [b, c]]) { const e = ds.edges.get(u < v ? u + '-' + v : v + '-' + u); if (e) e.arcPart = true; }
+      });
+    }
+    return ds;
+  }
+
+  // 從 D 檔建立：D14(點) + D13(界址串)，可選 D11(屬性)。pts/bnd/par 為 parseDbf 結果。
+  function datasetFromD({ pts, bnd, par, d12, name = 'D', source = 'D檔' }) {
+    const ds = newDataset(name, source);
+    pts.rows.forEach((r, i) => {
+      if (r._deleted || r.COT_REF !== 0 || r.COT_NUMBER == null || !r.COT_Y || !r.COT_X) return;   // 排除 (0,0) 空白佔位點
+      ds.points.set(r.COT_NUMBER, { id: r.COT_NUMBER, y: r.COT_Y, x: r.COT_X, y0: r.COT_Y, x0: r.COT_X, row: i });
+    });
+    const attr = new Map();
+    if (par) for (const r of par.rows) if (!r._deleted) attr.set(`${r.SECTION_O}|${r.PAR_O_M}|${r.PAR_O_C}`, r);
+    const groups = new Map();
+    for (const r of bnd.rows) {
+      if (r._deleted) continue;
+      const k = `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}`;
+      let g = groups.get(k); if (!g) groups.set(k, g = { sec: r.O_SECTION, m: r.O_PARCEL, c: r.O_PARCEL_E, ids: [], mid: [], arcs: false });
+      for (let i = 1; i <= 8; i++) {
+        const id = r['COORD_' + i];
+        if (id) { g.ids.push(id); g.mid.push(!!r['MIDARC_' + i]); if (r['MIDARC_' + i]) g.arcs = true; }
+      }
+    }
+    const holeMap = new Map();   // 外圈鍵 → [內圈鍵]
+    if (d12) for (const r of d12.rows) {
+      if (r._deleted) continue;
+      const ok = `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}`, ik = `${r.I_SECTION}|${r.I_PARCEL}|${r.I_PARCEL_E}`;
+      let l = holeMap.get(ok); if (!l) holeMap.set(ok, l = []); l.push(ik);
+    }
+    for (const [k, g] of groups) {
+      if (g.ids.length < 3 || g.ids.some(id => !ds.points.has(id))) continue;
+      const a = attr.get(k);
+      const fmt = (m, c) => (c ? `${m}-${c}` : `${m}`);
+      ds.parcels.push({
+        key: k, section: g.sec, label: a ? fmt(a.PAR_N_M, a.PAR_N_C) : fmt(g.m, g.c), oldLabel: fmt(g.m, g.c),
+        ids: g.ids, mid: g.mid, hasArc: g.arcs, holeKeys: holeMap.get(k),
+        areaRef: a ? Math.round(a.AREA_NEW * 1e10) / 1e6 : null,      // AREA_NEW 公頃 → m²
+        areaReg: a ? Math.round(a.AREA_OLD * 1e10) / 1e6 : null,      // AREA_OLD 登記面積 m²
+      });
+    }
+    return finalize(ds);
+  }
+
+  // ── KC 文字檔 (COA/BNP/PAR) ──────────────────────────────────────────────
+  const lines = t => (t.includes('\r\n') ? t.split('\r\n') : t.split(/\n/)).filter((l, i, a) => !(i === a.length - 1 && l === ''));
+
+  function parseCoa(text) {
+    const pts = new Map(), L = lines(text);
+    for (let i = 1; i < L.length; i++) {
+      const l = L[i]; if (l.length < 37) continue;
+      const id = parseInt(l.slice(0, 5), 10); if (Number.isNaN(id)) continue;
+      const y = parseFloat(l.slice(6, 22)), x = parseFloat(l.slice(22, 37));
+      if (Number.isNaN(y) || Number.isNaN(x)) continue;
+      pts.set(id, { id, y, x, y0: y, x0: x });
+    }
+    return pts;
+  }
+  function parseBnp(text) {
+    const parcels = new Map(), L = lines(text);
+    for (let i = 1; i < L.length; i++) {
+      const l = L[i]; if (l.length < 15 || !l.trim()) continue;
+      const sec = parseInt(l.slice(0, 4), 10), sub = parseInt(l.slice(4, 8), 10), seq = parseInt(l.slice(8, 11), 10);
+      if ([sec, sub, seq].some(Number.isNaN)) continue;
+      const ids = [], rest = l.slice(15);
+      for (let j = 0; j < rest.length; j += 6) {
+        const m = /^\s*(\d+)/.exec(rest.slice(j, j + 6)); if (m) ids.push(parseInt(m[1], 10));
+      }
+      const k = sec + '|' + sub; let g = parcels.get(k); if (!g) parcels.set(k, g = { sec, sub, parts: new Map() });
+      g.parts.set(seq, ids);
+    }
+    return parcels;
+  }
+  function parsePar(text) {
+    const recs = new Map(), L = lines(text);
+    for (let i = 1; i < L.length; i++) {
+      const l = L[i]; if (l.length < 40) continue;
+      const sec = parseInt(l.slice(0, 4), 10), sub = parseInt(l.slice(4, 8), 10);
+      const reg = parseFloat(l.slice(12, 22)), calc = parseFloat(l.slice(30, 40));
+      if ([sec, sub, reg, calc].some(Number.isNaN)) continue;
+      recs.set(sec + '|' + sub, { reg, calc });
+    }
+    return recs;
+  }
+  function datasetFromKC({ coa, bnp, par, name = 'KC', source = 'COA/BNP/PAR' }) {
+    const ds = newDataset(name, source);
+    ds.points = parseCoa(coa);
+    const bn = parseBnp(bnp), pr = par ? parsePar(par) : new Map();
+    for (const [k, g] of bn) {
+      const ids = []; for (const s of [...g.parts.keys()].sort((a, b) => a - b)) ids.push(...g.parts.get(s));
+      if (ids.length < 3 || ids.some(id => !ds.points.has(id))) continue;
+      const r = pr.get(k);
+      ds.parcels.push({ key: k, section: g.sec, label: String(g.sub), oldLabel: String(g.sub), ids,
+        areaRef: r ? r.calc : null, areaReg: r ? r.reg : null });
+    }
+    return finalize(ds);
+  }
+
+  // ── 幾何 ────────────────────────────────────────────────────────────────
+  // 有號面積（逆時針為正）。相對第一個頂點計算：座標 ~1e6 量級時，避免大數相減造成浮點誤差
+  function signedArea(ids, points) {
+    let s = 0; const n = ids.length, o = points.get(ids[0]);
+    for (let i = 0; i < n; i++) {
+      const p = points.get(ids[i]), q = points.get(ids[(i + 1) % n]);
+      s += (p.x - o.x) * (q.y - o.y) - (q.x - o.x) * (p.y - o.y);
+    }
+    return s / 2;
+  }
+  const ringArea = (ids, points) => Math.abs(signedArea(ids, points));
+  // mid[i]=true 表示頂點 i 是一段圓弧的中點（前後頂點為弧的兩端）；面積 = 折線多邊形 ± (弓形 − 三角形)
+  function ringAreaArc(ids, mid, points) {
+    let a = ringArea(ids, points); if (!mid || !mid.some(Boolean)) return a;
+    const n = ids.length, ccw = signedArea(ids, points) >= 0;
+    for (let i = 0; i < n; i++) {
+      if (!mid[i]) continue;
+      const A = points.get(ids[(i - 1 + n) % n]), B = points.get(ids[i]), C = points.get(ids[(i + 1) % n]);
+      const ab = Math.hypot(B.x - A.x, B.y - A.y), bc = Math.hypot(C.x - B.x, C.y - B.y), ca = Math.hypot(A.x - C.x, A.y - C.y);
+      const cr = (C.x - A.x) * (B.y - A.y) - (C.y - A.y) * (B.x - A.x), T = Math.abs(cr) / 2;
+      if (T < 1e-9) continue;
+      const R = (ab * bc * ca) / (4 * T), beta = Math.acos(Math.max(-1, Math.min(1, (ab * ab + bc * bc - ca * ca) / (2 * ab * bc))));
+      const theta = 2 * Math.PI - 2 * beta, seg = (R * R / 2) * (theta - Math.sin(theta));
+      const inward = ccw ? cr > 0 : cr < 0;
+      a += inward ? -(seg - T) : (seg - T);
+    }
+    return a;
+  }
+  // 過 A、B、C 三點的圓弧（A→B→C），取樣成折線供繪圖
+  function arcPolyline(A, B, C, n = 24) {
+    const bx = B.x - A.x, by = B.y - A.y, cx = C.x - A.x, cy = C.y - A.y, d = 2 * (bx * cy - by * cx);
+    if (Math.abs(d) < 1e-12) return [A, B, C];
+    const b2 = bx * bx + by * by, c2 = cx * cx + cy * cy, ux = (cy * b2 - by * c2) / d, uy = (bx * c2 - cx * b2) / d;
+    const R = Math.hypot(ux, uy), a0 = Math.atan2(-uy, -ux), norm = a => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    const sB = norm(Math.atan2(by - uy, bx - ux) - a0), sC = norm(Math.atan2(cy - uy, cx - ux) - a0), sweep = sB < sC ? sC : sC - 2 * Math.PI;
+    const out = []; for (let i = 0; i <= n; i++) { const a = a0 + sweep * i / n; out.push({ x: A.x + ux + R * Math.cos(a), y: A.y + uy + R * Math.sin(a) }); }
+    return out;
+  }
+  function parcelArea(ds, p) {
+    let a = ringAreaArc(p.ids, p.mid, ds.points);
+    for (const hi of p.holes || []) { const h = ds.parcels[hi]; a -= ringAreaArc(h.ids, h.mid, ds.points); }
+    return a;
+  }
+  function pointInRing(ids, points, y, x) {
+    let inside = false; const n = ids.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const p = points.get(ids[i]), q = points.get(ids[j]);
+      if ((p.y > y) !== (q.y > y) && x < ((q.x - p.x) * (y - p.y)) / (q.y - p.y) + p.x) inside = !inside;
+    }
+    return inside;
+  }
+  function distToSeg(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+  function bounds(ds) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const id of ds.pointParcels.keys()) { const p = ds.points.get(id); if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x; if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y; }
+    return { x0, y0, x1, y1 };
+  }
+
+  // ── 編輯：移動點集合（共點自動連動鄰地）；回傳受影響宗地索引 ───────────────
+  function movePoints(ds, ids, dy, dx) {
+    const affected = new Set();
+    for (const id of ids) {
+      const p = ds.points.get(id); if (!p) continue;
+      p.y += dy; p.x += dx;
+      for (const pi of ds.pointParcels.get(id) || []) affected.add(pi);
+    }
+    return recalc(ds, affected);
+  }
+  // 重算受影響宗地面積；內圈（地中地）受影響時，外圈一併重算
+  function recalc(ds, affected) {
+    for (const pi of [...affected]) for (const c of ds.parcels[pi].containers || []) affected.add(c);
+    for (const pi of affected) { const pc = ds.parcels[pi]; pc.area = parcelArea(ds, pc); }
+    return affected;
+  }
+  // 批次設定位置 entries=[[id,y,x],...]；每個受影響宗地只重算一次面積
+  function setPoints(ds, entries) {
+    const affected = new Set();
+    for (const [id, y, x] of entries) {
+      const p = ds.points.get(id); if (!p) continue;
+      p.y = y; p.x = x;
+      for (const pi of ds.pointParcels.get(id) || []) affected.add(pi);
+    }
+    return recalc(ds, affected);
+  }
+  function setPoint(ds, id, y, x) { const p = ds.points.get(id); return movePoints(ds, [id], y - p.y, x - p.x); }
+  function resetAll(ds) {
+    for (const p of ds.points.values()) { p.y = p.y0; p.x = p.x0; }
+    for (const pc of ds.parcels) pc.area = pc.areaOrig;
+  }
+  const isMoved = p => Math.abs(p.y - p.y0) > 1e-6 || Math.abs(p.x - p.x0) > 1e-6;   // 容差 1e-6 m，忽略來回旋轉的浮點殘差
+  function movedPoints(ds) { return [...ds.points.values()].filter(isMoved); }
+
+  // ── 變換（平移＋旋轉）─────────────────────────────────────────────────────
+  // T = { dy, dx, angle (弧度，逆時針為正，北向上俯視), pivot: {y, x} }：先繞 pivot 旋轉，再平移 (dy,dx)
+  function xform(p, T) {
+    const pv = T.pivot || { y: 0, x: 0 }, c = Math.cos(T.angle || 0), s = Math.sin(T.angle || 0), rx = p.x - pv.x, ry = p.y - pv.y;
+    return { y: pv.y + s * rx + c * ry + (T.dy || 0), x: pv.x + c * rx - s * ry + (T.dx || 0) };
+  }
+  function transformPoints(ds, ids, T) {
+    const entries = [];
+    for (const id of ids) { const p = ds.points.get(id); if (!p) continue; const q = xform(p, T); entries.push([id, q.y, q.x]); }
+    return setPoints(ds, entries);
+  }
+  function centroidOf(points, ids) {
+    let y = 0, x = 0, n = 0;
+    for (const id of ids) { const p = points.get(id); if (p) { y += p.y; x += p.x; n++; } }
+    return n ? { y: y / n, x: x / n } : { y: 0, x: 0 };
+  }
+  // 兩點對位：把來源 a→A、b→B。回傳 T（旋轉+平移，不縮放）與 scale（|AB|/|ab|，供檢查品質）
+  function twoPointFit(a, b, A, B) {
+    const ang = Math.atan2(B.y - A.y, B.x - A.x) - Math.atan2(b.y - a.y, b.x - a.x);
+    const la = Math.hypot(b.x - a.x, b.y - a.y), lA = Math.hypot(B.x - A.x, B.y - A.y);
+    return { T: { pivot: { y: a.y, x: a.x }, angle: ang, dy: A.y - a.y, dx: A.x - a.x }, scale: la ? lA / la : NaN, angle: ang, residual_b: null };
+  }
+
+  // ── 角度與座標文字解析 ───────────────────────────────────────────────────
+  // fmt: 'auto'（含 - ° ' " 視為度分秒，否則十進位度）| 'dms' | 'ddmmss'（ddd.mmss，測量常用）| 'deg' | 'gon'
+  function parseAngle(str, fmt = 'auto') {
+    let s = String(str).trim(); if (!s) return NaN;
+    let sign = 1; if (s[0] === '-' && /^-\s*\d/.test(s) && !/[°'"′″]|\d-\d/.test(s)) { sign = -1; s = s.slice(1); }
+    if (fmt === 'gon') return sign * Number(s) * 0.9;
+    const dmsLike = /[°'"′″]|\d-\d/.test(s) || fmt === 'dms';
+    if (dmsLike) {
+      const t = s.split(/[-°'"′″\s]+/).filter(Boolean).map(Number); if (t.some(Number.isNaN)) return NaN;
+      return sign * ((t[0] || 0) + (t[1] || 0) / 60 + (t[2] || 0) / 3600);
+    }
+    if (fmt === 'ddmmss') {
+      const m = /^(\d+)(?:\.(\d*))?$/.exec(s); if (!m) return NaN;
+      const frac = (m[2] || '').padEnd(4, '0'), mm = Number(frac.slice(0, 2)), ss = Number(frac.slice(2, 4) + (frac.length > 4 ? '.' + frac.slice(4) : ''));
+      return sign * (Number(m[1]) + mm / 60 + ss / 3600);
+    }
+    const v = Number(s); return Number.isNaN(v) ? NaN : sign * v;
+  }
+  const num = t => (t !== '' && t != null && /^[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?$/.test(t) ? Number(t) : NaN);
+  const splitTok = l => l.trim().split(/[\s,;\t]+/).filter(t => t !== '');
+
+  // 現況點座標檔：「點號,N,E[,H,代碼…]」或「N,E」；CSV/TXT/空白/Tab 分隔皆可。
+  // order: 'auto'（較大者視為縱坐標N，台灣 TM 坐標 N~2.7e6 > E~2e5）| 'NE' | 'EN'
+  function parsePoints(text, { order = 'auto' } = {}) {
+    const points = [], skipped = []; let auto = 0, usedOrder = order;
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim() || /^\s*(#|\/\/|;)/.test(line)) return;
+      const t = splitTok(line); let name, a, b, rest;
+      if (t.length >= 3 && !Number.isNaN(num(t[1])) && !Number.isNaN(num(t[2]))) { name = t[0]; a = num(t[1]); b = num(t[2]); rest = t.slice(3); }
+      else if (t.length >= 2 && !Number.isNaN(num(t[0])) && !Number.isNaN(num(t[1]))) { name = String(++auto); a = num(t[0]); b = num(t[1]); rest = t.slice(2); }
+      else { if (points.length || i > 0) skipped.push({ line: i + 1, text: line.slice(0, 60) }); return; }   // 標題列或無法解析
+      let o = order; if (o === 'auto') o = Math.abs(a) >= Math.abs(b) ? 'NE' : 'EN'; usedOrder = o;
+      const y = o === 'NE' ? a : b, x = o === 'NE' ? b : a;
+      const pt = { name, y, x }; const h = num(rest[0]); if (!Number.isNaN(h)) { pt.h = h; rest = rest.slice(1); } if (rest.length) pt.code = rest.join(' ');
+      points.push(pt);
+    });
+    return { points, skipped, order: usedOrder };
+  }
+  // 測站觀測：每行「點號 水平角 [天頂距] 距離」。水平角自後視方向起順時針量。
+  function parseObservations(text, { angleFmt = 'auto' } = {}) {
+    const obs = [], skipped = [];
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim()) return; const t = splitTok(line);
+      if (t.length < 3) { skipped.push({ line: i + 1, text: line.slice(0, 60) }); return; }
+      const h = parseAngle(t[1], angleFmt), dist = num(t.length > 3 ? t[3] : t[2]);
+      const z = t.length > 3 ? parseAngle(t[2], angleFmt) : null;
+      if (Number.isNaN(h) || Number.isNaN(dist) || (z != null && Number.isNaN(z))) { skipped.push({ line: i + 1, text: line.slice(0, 60) }); return; }
+      obs.push({ name: t[0], h, z, dist, note: t.slice(t.length > 3 ? 4 : 3).join(' ') });
+    });
+    return { obs, skipped };
+  }
+  // 極座標化算：station{y,x}、backAz（後視方位角，度）、obs[]、slope=true 表示距離為斜距（需天頂距）
+  function polarReduce({ station, backAz, obs, slope = true }) {
+    return obs.map(o => {
+      const hz = o.z != null && slope ? o.dist * Math.sin(o.z * Math.PI / 180) : o.dist;
+      const az = (((backAz + o.h) % 360) + 360) % 360 * Math.PI / 180;
+      return { name: o.name, y: station.y + hz * Math.cos(az), x: station.x + hz * Math.sin(az), note: o.note || undefined };
+    });
+  }
+  const azimuth = (a, b) => ((Math.atan2(b.x - a.x, b.y - a.y) * 180 / Math.PI) + 360) % 360;   // 由 a 看 b，自北順時針
+
+  // ── 控制點檔：CTL（控制點）、CT2（補點）、CEN、L02 ─────────────────────────
+  // 首行為案號；其後每行「點名 縱坐標Y 橫坐標X」。NECEXE 輸出用定寬格式，Y 與 X 可能緊貼無空白，故以小數三位切分。
+  function parseCtl(text) {
+    const points = [], skipped = []; let code = '';
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim()) return;
+      let t = splitTok(line);
+      if (t.length === 2 && /^-?\d+\.\d{3}-?\d+\.\d{3}$/.test(t[1])) { const m = /^(-?\d+\.\d{3})(-?\d+\.\d{3})$/.exec(t[1]); t = [t[0], m[1], m[2]]; }
+      const nums = []; for (let k = t.length - 1; k >= 1 && nums.length < 2; k--) { if (/^-?\d+\.\d+$/.test(t[k])) nums.unshift(Number(t[k])); else break; }
+      if (nums.length === 2) { points.push({ name: t[0], y: nums[0], x: nums[1] }); return; }
+      if (i === 0 && t.length === 1) { code = t[0]; return; }
+      skipped.push({ line: i + 1, text: line.slice(0, 60) });
+    });
+    return { code, points, skipped };
+  }
+
+  // ── MAC 手簿檔（測站 角度 距離）──────────────────────────────────────────
+  // 格式：首行 "LS ()" 為標頭；其後每段以「測站 後視」兩欄開頭，接著每行「點號 水平角(ddd.mmss) 距離」。
+  // 水平角自後視方向起順時針量；後視點本身角度為 0.0000（其距離作為檢核）。距離視為平距（檔內無天頂距）。
+  function parseMac(text, { angleFmt = 'ddmmss' } = {}) {
+    const blocks = [], skipped = []; let cur = null;
+    text.split(/\r?\n/).forEach((line, i) => {
+      const t = splitTok(line); if (!t.length) return;
+      if (i === 0 && /^LS\b/i.test(t[0])) return;
+      if (t.length === 2 && Number.isNaN(num(t[1]))) { cur = { station: t[0], back: t[1], obs: [], line: i + 1 }; blocks.push(cur); return; }
+      if (t.length >= 3 && cur) {
+        const h = parseAngle(t[1], angleFmt), dist = num(t[2]);
+        if (!Number.isNaN(h) && !Number.isNaN(dist)) { cur.obs.push({ name: t[0], h, dist, line: i + 1 }); return; }
+      }
+      skipped.push({ line: i + 1, text: line.slice(0, 60) });
+    });
+    return { blocks, skipped };
+  }
+  // 逐段化算。known：Map(點號→{y,x})（已知控制點）；段內新點會登錄，供後續測站使用（如 QC1）。
+  function reduceMac(blocks, known) {
+    const dict = new Map(known), points = [], checks = [], unresolved = [], stations = [];
+    for (const b of blocks) {
+      const st = dict.get(b.station), bk = dict.get(b.back);
+      if (!st || !bk) { unresolved.push({ station: b.station, back: b.back, line: b.line, missing: [!st && b.station, !bk && b.back].filter(Boolean) }); continue; }
+      const backAz = azimuth(st, bk); stations.push({ name: b.station, y: st.y, x: st.x, back: b.back, back_azimuth: backAz });
+      for (const o of b.obs) {
+        if (o.name === b.back && Math.abs(o.h) < 1e-9) {   // 後視檢核
+          const dc = Math.hypot(bk.x - st.x, bk.y - st.y); checks.push({ station: b.station, back: b.back, measured: o.dist, computed: dc, diff: o.dist - dc }); continue;
+        }
+        const az = (((backAz + o.h) % 360) + 360) % 360 * Math.PI / 180;
+        const p = { name: o.name, y: st.y + o.dist * Math.cos(az), x: st.x + o.dist * Math.sin(az), note: `測站${b.station}` };
+        points.push(p); dict.set(o.name, { y: p.y, x: p.x });
+      }
+    }
+    return { points, checks, unresolved, stations };
+  }
+
+  // ── 現況點與參考線 ───────────────────────────────────────────────────────
+  const newSurvey = () => ({ points: new Map(), lines: [], seq: 0 });
+  function addSurveyPoints(sv, pts) {
+    const added = [];
+    for (const p of pts) {
+      let n = String(p.name), k = 2; while (sv.points.has(n)) n = `${p.name}_${k++}`;
+      sv.points.set(n, { name: n, y: p.y, x: p.x, h: p.h, code: p.code, note: p.note }); added.push(n);
+    }
+    return added;
+  }
+  function addLine(sv, names, { name, closed = false } = {}) {
+    const ids = names.filter(n => sv.points.has(String(n))).map(String); if (ids.length < 2) return null;
+    const ln = { id: ++sv.seq, name: name || `參考線${sv.seq}`, points: ids, closed: !!closed }; sv.lines.push(ln); return ln;
+  }
+  function lineStats(sv, ln) {
+    let len = 0; const pts = ln.points.map(n => sv.points.get(n)), n = pts.length;
+    for (let i = 0; i < n - 1; i++) len += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+    if (ln.closed && n > 2) len += Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y);
+    let area = null;
+    if (ln.closed && n > 2) { let s = 0; for (let i = 0; i < n; i++) { const p = pts[i], q = pts[(i + 1) % n]; s += (p.x - pts[0].x) * (q.y - pts[0].y) - (q.x - pts[0].x) * (p.y - pts[0].y); } area = Math.abs(s) / 2; }
+    return { length: len, area };
+  }
+
+  // ── 坐標轉換：TWD97 TM2（EPSG:3826/3825）↔ WGS84 經緯度（GRS80，k0=0.9999，FE=250000）──
+  // 中央經線：本島 121°（3826），澎湖金門馬祖 119°（3825）。TWD67 與 TWD97 約差 800 m，不可混用。
+  const GRS = { a: 6378137, f: 1 / 298.257222101 };
+  GRS.e2 = 2 * GRS.f - GRS.f * GRS.f; GRS.ep2 = GRS.e2 / (1 - GRS.e2);
+  const D2R = Math.PI / 180, K0 = 0.9999, FE = 250000;
+  function meridianArc(phi) {
+    const { a, e2 } = GRS, e4 = e2 * e2, e6 = e4 * e2;
+    return a * ((1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256) * phi - (3 * e2 / 8 + 3 * e4 / 32 + 45 * e6 / 1024) * Math.sin(2 * phi) +
+      (15 * e4 / 256 + 45 * e6 / 1024) * Math.sin(4 * phi) - (35 * e6 / 3072) * Math.sin(6 * phi));
+  }
+  function latLonToTm2(lat, lon, cm = 121) {   // → { y: 縱坐標N, x: 橫坐標E }
+    const { a, e2, ep2 } = GRS, phi = lat * D2R, sin = Math.sin(phi), cos = Math.cos(phi), tan = Math.tan(phi);
+    const N = a / Math.sqrt(1 - e2 * sin * sin), T = tan * tan, C = ep2 * cos * cos, A = (lon - cm) * D2R * cos;
+    const x = K0 * N * (A + (1 - T + C) * A ** 3 / 6 + (5 - 18 * T + T * T + 72 * C - 58 * ep2) * A ** 5 / 120);
+    const y = K0 * (meridianArc(phi) + N * tan * (A * A / 2 + (5 - T + 9 * C + 4 * C * C) * A ** 4 / 24 + (61 - 58 * T + T * T + 600 * C - 330 * ep2) * A ** 6 / 720));
+    return { y, x: x + FE };
+  }
+  function tm2ToLatLon(y, x, cm = 121) {       // → { lat, lon }（度）
+    const { a, e2, ep2 } = GRS, e4 = e2 * e2, e6 = e4 * e2, X = x - FE;
+    const mu = (y / K0) / (a * (1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256)), e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+    const phi1 = mu + (3 * e1 / 2 - 27 * e1 ** 3 / 32) * Math.sin(2 * mu) + (21 * e1 * e1 / 16 - 55 * e1 ** 4 / 32) * Math.sin(4 * mu) + (151 * e1 ** 3 / 96) * Math.sin(6 * mu) + (1097 * e1 ** 4 / 512) * Math.sin(8 * mu);
+    const sin = Math.sin(phi1), cos = Math.cos(phi1), tan = Math.tan(phi1), C1 = ep2 * cos * cos, T1 = tan * tan;
+    const N1 = a / Math.sqrt(1 - e2 * sin * sin), R1 = a * (1 - e2) / Math.pow(1 - e2 * sin * sin, 1.5), D = X / (N1 * K0);
+    const lat = phi1 - (N1 * tan / R1) * (D * D / 2 - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * D ** 4 / 24 + (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * ep2 - 3 * C1 * C1) * D ** 6 / 720);
+    const lon = (cm * D2R) + (D - (1 + 2 * T1 + C1) * D ** 3 / 6 + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * D ** 5 / 120) / cos;
+    return { lat: lat / D2R, lon: lon / D2R };
+  }
+
+  // ── 輸出 ────────────────────────────────────────────────────────────────
+  // 回傳新的 D14 位元組：只改動 REF=0 且被移動的點的 COT_Y/COT_X。
+  function exportD14(pts, ds) {
+    const out = new Uint8Array(pts.u8); let n = 0;
+    for (const p of movedPoints(ds)) {
+      if (p.row == null) continue;
+      patchDbfNumber(out, pts, p.row, 'COT_Y', p.y); patchDbfNumber(out, pts, p.row, 'COT_X', p.x); n++;
+    }
+    return { bytes: out, changed: n };
+  }
+  // 供 AI/外部程式讀取的中繼資料（JSON，自帶欄位說明）
+  function exportSession(ds, extra = {}, sv = null) {
+    return {
+      format: 'cadastral-workbench/session@1',
+      description: '地籍圖調整工作階段。y=縱坐標(北), x=橫坐標(東), 單位公尺, TWD97。area 單位 m²。',
+      crs: 'EPSG:3826', source: ds.source,
+      points_moved: movedPoints(ds).map(p => ({ id: p.id, from: { y: p.y0, x: p.x0 }, to: { y: p.y, x: p.x }, shift_m: Math.hypot(p.y - p.y0, p.x - p.x0) })),
+      parcels_changed: ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > CHG).map(p => ({
+        label: p.label, old_label: p.oldLabel, key: p.key, area_before: p.areaOrig, area_after: p.area,
+        delta: p.area - p.areaOrig, area_ref: p.areaRef, delta_vs_ref: p.areaRef == null ? null : p.area - p.areaRef })),
+      survey_points: sv ? [...sv.points.values()].map(p => ({ name: p.name, y: p.y, x: p.x, h: p.h, code: p.code })) : [],
+      reference_lines: sv ? sv.lines.map(l => ({ name: l.name, points: l.points, closed: l.closed, ...lineStats(sv, l) })) : [],
+      ...extra,
+    };
+  }
+
+  return { parseDbf, patchDbfNumber, datasetFromD, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
+    xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon,
+    newSurvey, addSurveyPoints, addLine, lineStats };
+})();
+if (typeof module !== 'undefined') module.exports = Core;

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>地籍圖調整工作台</title>
+<style>
+:root{--bg:#f4f5f7;--panel:#fff;--ink:#1d2330;--muted:#69718a;--line:#d9dde6;--accent:#1f6feb;--accent-ink:#fff;
+  --canvas:#fbfcfd;--edge:#2b3445;--ref:#9aa3b5;--sel:#1f6feb;--hover:#00a3a3;--changed:rgba(255,160,0,.22);--bad:#d1242f;--ok:#1a7f37;--survey:#c2188e}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14171d;--panel:#1c2029;--ink:#e6e9f0;--muted:#98a1b6;--line:#2c3240;
+  --accent:#4c8dff;--canvas:#10131a;--edge:#c7cfdf;--ref:#5d667b;--sel:#5aa2ff;--hover:#2dd4d4;--changed:rgba(255,170,0,.25);--bad:#ff6b73;--ok:#4cc26a;--survey:#ff6fd0}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.45 "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
+#app{display:grid;grid-template-rows:auto 1fr auto;height:100%}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:15px;margin:0 8px 0 0;white-space:nowrap}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit}
+.btn:hover{border-color:var(--accent)} .btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{border:0;background:var(--panel);color:var(--ink);padding:5px 10px;cursor:pointer;font:inherit;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}.seg button.on{background:var(--accent);color:var(--accent-ink)}
+.sep{width:1px;height:22px;background:var(--line);margin:0 2px}
+main{display:grid;grid-template-columns:1fr 440px;min-height:0}
+#stage{position:relative;min-width:0;min-height:0;background:var(--canvas)}
+#cv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;display:none;white-space:pre;z-index:3;box-shadow:0 2px 8px #0003}
+#drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);pointer-events:none}
+#drop b{color:var(--ink);font-size:18px;display:block;margin-bottom:6px}
+aside{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:auto}
+section{padding:10px 12px;border-bottom:1px solid var(--line)}
+section h2{font-size:13px;margin:0 0 6px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+input[type=number],input[type=text]{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;padding:4px 6px;font:inherit;width:90px}
+input[type=text]{width:130px}
+label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
+table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left} th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
+tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-child{box-shadow:inset 3px 0 var(--sel)}
+.pos{color:var(--ok)} .neg{color:var(--bad)} .warn{background:rgba(209,36,47,.12)}
+.muted{color:var(--muted)} .small{font-size:12px}
+#tblwrap{max-height:42vh;overflow:auto}
+footer{display:flex;gap:16px;padding:4px 12px;background:var(--panel);border-top:1px solid var(--line);font-size:12px;color:var(--muted);flex-wrap:wrap}
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:640px}
+dialog::backdrop{background:#0006}
+#printArea{display:none}
+@media print{body.printing>#app,body.printing dialog{display:none!important}body.printing{background:#fff}body.printing #printArea{display:block}body.printing #printArea canvas{display:block}}
+kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;font-size:12px}
+@media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:minmax(280px,1fr) auto}#stage{min-height:280px}aside{max-height:45vh;border-left:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div id="printArea"></div>
+<div id="app">
+<header>
+  <h1>地籍圖調整工作台</h1>
+  <button class="btn primary" id="btnOpen">開啟檔案</button>
+  <button class="btn" id="btnFolder">開啟資料夾</button>
+  <button class="btn" id="btnImp">匯入現況點</button>
+  <input type="file" id="fileIn" multiple hidden>
+  <input type="file" id="dirIn" webkitdirectory hidden>
+  <span class="sep"></span>
+  <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button></div>
+  <div class="seg" id="filters" title="可複選：決定能選取哪些要素 (1/2/3)">
+    <button data-f="pt" class="on">點</button><button data-f="edge" class="on">線</button><button data-f="par" class="on">面</button></div>
+  <span class="sep"></span>
+  <button class="btn" id="btnUndo" disabled>復原</button><button class="btn" id="btnRedo" disabled>重做</button>
+  <button class="btn" id="btnReset" disabled>還原全部</button>
+  <span class="sep"></span>
+  <label class="chk"><input type="checkbox" id="chkRef" checked>舊圖</label>
+  <label class="chk"><input type="checkbox" id="chkLabel" checked>標註</label>
+  <label class="chk" title="在圖上直接標示面積較差"><input type="checkbox" id="chkDelta" checked>圖上較差</label>
+  <select id="deltaMode" title="較差基準"><option value="adj">對調整前</option><option value="reg">對登記面積</option></select>
+  <button class="btn" id="btnFit">全圖</button>
+  <span class="sep"></span>
+  <select id="bmSel" title="底圖（需連網，適用 TWD97）"><option value="none">底圖：無</option><option value="osm">OpenStreetMap</option><option value="emap">NLSC 電子地圖</option><option value="photo">NLSC 航照</option></select>
+  <input type="range" id="bmOp" min="0.2" max="1" step="0.05" value="0.9" title="底圖不透明度" style="width:64px">
+  <select id="bmCm" title="TWD97 中央經線"><option value="121">121°E 本島</option><option value="119">119°E 澎金馬</option></select>
+  <button class="btn" id="btnPrint" title="列印 (Ctrl+P)">列印</button>
+  <span class="sep"></span>
+  <button class="btn" id="btnExpD14" disabled>輸出 D14</button>
+  <button class="btn" id="btnExpJson" disabled>輸出 JSON</button>
+  <button class="btn" id="btnHelp">說明</button>
+</header>
+<main>
+  <div id="stage"><canvas id="cv"></canvas><div id="tip"></div><div id="hint" style="display:none;position:absolute;left:10px;top:10px;right:10px;z-index:3;background:var(--panel);border:1px solid var(--accent);border-radius:6px;padding:6px 10px;font-size:13px"></div>
+    <div id="drop"><div><b>把案件資料夾或檔案拖進來</b>支援 D11 / D13 / D14（可加 D2B / D2C 舊圖）<br>或 COA / BNP / PAR</div></div></div>
+  <aside>
+    <section><h2>選取</h2><div id="selInfo" class="small muted">尚未選取</div>
+      <div class="row" style="margin-top:8px">
+        <label>北 ΔN(m) <input type="number" id="dN" step="0.01" value="0"></label>
+        <label>東 ΔE(m) <input type="number" id="dE" step="0.01" value="0"></label>
+        <button class="btn" id="btnMove">移動</button></div>
+      <div class="row small" style="margin-top:6px"><span class="muted">方向鍵微調步距</span>
+        <select id="step"><option>0.01</option><option>0.05</option><option selected>0.10</option><option>0.50</option><option>1.00</option></select> m
+        <span class="muted">(Shift ×10)</span></div></section>
+    <section><h2>圖形變換（平移／旋轉）</h2>
+      <div class="row small"><span class="muted">旋轉角度</span><input type="text" id="rotDeg" value="0.5" style="width:84px" title="十進位度，或 度-分-秒（例 0-30-00）">
+        <button class="btn" id="btnRotL" title="逆時針（北向上俯視）">↺ 逆時針</button><button class="btn" id="btnRotR">↻ 順時針</button></div>
+      <div class="row small" style="margin-top:6px"><span id="pivotInfo" class="muted"></span><button class="btn" id="btnPivotReset">重設樞紐</button></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" id="btnAlign" title="依序點新圖點A→目標A′→新圖點B→目標B′，自動算旋轉與平移">兩點對位</button>
+        <span class="muted">對象：已選取的要素；未選取則為整張新圖。「移圖」工具下 Shift+拖曳可旋轉。</span></div></section>
+    <section><h2>控制點與補點（已知點）</h2>
+      <div id="ctlInfo" class="small muted"></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" id="btnCtlFit">縮放</button><button class="btn" id="btnCtlClear">清除</button>
+        <span class="muted">匯入：開啟檔案／拖入 CTL、CT2、CEN、L02 或含 D20 的資料夾</span></div></section>
+    <section><h2>現況點與參考線</h2>
+      <div class="row small"><button class="btn" id="btnImp2">匯入現況點</button><button class="btn" id="btnSvFit">縮放至現況點</button><button class="btn" id="btnSvClear">清除</button></div>
+      <div id="svInfo" class="small muted" style="margin:6px 0"></div>
+      <table><thead><tr><th>參考線</th><th>點</th><th>長 m</th><th>面積 m²</th><th></th><th></th></tr></thead><tbody id="lineList"></tbody></table>
+      <div class="small muted" style="margin-top:4px">「連線」工具 (L)：依序點現況點；Enter 完成；點回第一點閉合。</div></section>
+    <section><h2>面積較差</h2>
+      <div class="row small" style="margin-bottom:6px">
+        <label class="chk"><input type="radio" name="scope" value="changed" checked>有變動</label>
+        <label class="chk"><input type="radio" name="scope" value="selected">已選取</label>
+        <span class="muted">警示 &gt;</span><input type="number" id="tol" value="1" step="0.1" style="width:60px"><span class="muted">m²</span>
+        <input type="text" id="find" placeholder="跳至地號 (例 137-1)"></div>
+      <div id="tblwrap"><table><thead><tr><th>地號</th><th>登記</th><th>調整前</th><th>現面積</th><th>Δ調整</th><th>Δ登記</th></tr></thead><tbody id="tbody"></tbody></table></div>
+      <div id="sumInfo" class="small muted" style="margin-top:6px"></div></section>
+    <section><h2>圖層資訊</h2><div id="layerInfo" class="small muted">—</div></section>
+  </aside>
+</main>
+<footer><span id="stCoord">—</span><span id="stScale">—</span><span id="stMsg"></span></footer>
+</div>
+<dialog id="help"><h3 style="margin-top:0">操作說明</h3>
+<p><b>載入</b>：把案件資料夾拖進視窗，或按「開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
+<p><b>選取</b>：上方「點／線／面」可複選，決定點擊與框選能選到什麼。<kbd>Shift</kbd> 點擊加選／取消；在空白處拖曳框選。</p>
+<p><b>移動</b>：拖曳已選取的要素，或用方向鍵微調、或輸入 ΔN/ΔE。共用的界址點會讓相鄰地號一起變動，面積即時更新。選「線」會移動線的兩端點，選「面」會移動整宗地所有界址點。</p>
+<p><b>底圖與列印</b>：工具列「底圖」可選 OpenStreetMap、國土測繪中心電子地圖或正射影像（需連網；只適用 TWD97，TWD67 會偏移約 800 m；澎湖金門馬祖請改選 119°E）。「列印」(<kbd>Ctrl+P</kbd>) 可選 A4/A3、橫直式、指定比例尺（200～5000）與範圍，附標題欄、圖例、比例尺條與指北；列印時選「另存為 PDF」即可輸出 PDF。</p>
+<p><b>MAC 手簿檔</b>：MAC 是相對觀測，必須先匯入控制點（<code>CTL</code>）與補點（<code>CT2</code>，或 D20／L02）。再於「匯入現況點」選「MAC」，程式依「測站 後視」逐段化算，新測站（如 QC1）可供後續段落使用，並顯示後視距離檢核差。缺少已知點時會明確列出缺哪些點。</p>
+<p><b>現況點與參考線</b>：「匯入現況點」可貼上或選檔，支援「點號,N,E」座標檔，或「測站 角度 距離」（填測站坐標與後視方位角後自動化算）。匯入後用「連線」工具 (<kbd>L</kbd>) 依序點選現況點連成參考線，點回第一點可閉合並顯示面積；每條參考線可改名、刪除。</p>
+<p><b>旋轉與對位</b>：在「移圖」或已選取要素時，可輸入角度按「↺／↻」旋轉（樞紐預設為移動對象中心，Alt+點擊自訂）；「兩點對位」依序點新圖 A、目標 A′、新圖 B、目標 B′，自動算出旋轉與平移（不縮放，並回報兩對點距離比供檢查）。</p>
+<p><b>移圖（對照舊圖）</b>：切到「移圖」(<kbd>M</kbd>)，在圖上拖曳、用方向鍵或 ΔN/ΔE，整張新圖一起平移，舊圖不動；平移不改變面積，可復原。若已選取要素，則只移動選取的部分。</p>
+<p><b>平移／縮放</b>：滾輪縮放；中鍵或右鍵拖曳平移；或切到「平移」工具。</p>
+<p><b>快捷鍵</b>：<kbd>Ctrl+Z</kbd> 復原、<kbd>Ctrl+Y</kbd> 重做、<kbd>Esc</kbd> 取消選取、<kbd>V</kbd>/<kbd>H</kbd> 工具、<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切換點/線/面。</p>
+<p><b>輸出</b>：「輸出 D14」只改動被移動點的坐標，其餘位元組與原檔完全相同；覆蓋進案件資料夾前請先備份。D11 的面積欄位不改，請在 NECEXE 內用「重算面積」更新。「輸出 JSON」含移動點與面積變化，方便 AI／其他程式讀取。</p>
+<p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（getState / select / move / undo / exportSession），網址加 <code>?bridge=ws://127.0.0.1:埠號</code> 可接 WebSocket 橋接（預留給 MCP）。</p>
+<form method="dialog"><button class="btn primary">關閉</button></form></dialog>
+<dialog id="prtDlg" style="max-width:860px;width:96vw"><h3 style="margin-top:0">列印成果圖</h3>
+  <div class="row small">
+    <label>紙張 <select id="prtPaper"><option>A4</option><option>A3</option></select></label>
+    <label>方向 <select id="prtOrient"><option value="land">橫式</option><option value="port">直式</option></select></label>
+    <label>比例尺 <select id="prtScale"><option value="auto">自動（符合範圍）</option><option>200</option><option>250</option><option>300</option><option>500</option><option>600</option><option>1000</option><option>1200</option><option>2000</option><option>2500</option><option>3000</option><option>5000</option></select></label>
+    <label>範圍 <select id="prtExtent"><option value="screen">目前畫面</option><option value="all">全圖</option><option value="sel">已選取／有變動</option></select></label>
+    <label class="chk"><input type="checkbox" id="prtBase" checked>含底圖</label></div>
+  <div class="row small" style="margin-top:6px"><label>標題 <input type="text" id="prtTitle" style="width:220px"></label><label>備註 <input type="text" id="prtNote" style="width:260px"></label></div>
+  <div style="margin-top:8px;background:#fff;border:1px solid var(--line);border-radius:6px;overflow:auto;max-height:56vh"><canvas id="prtCanvas" style="width:100%;display:block"></canvas></div>
+  <div id="prtInfo" class="small muted" style="margin:6px 0"></div>
+  <div class="small muted">列印時選「另存為 PDF」即可輸出 PDF。比例尺以 96 dpi 換算，列印請選「實際大小／100%」。圖上是否顯示舊圖、標註、較差沿用主畫面的勾選。</div>
+  <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn" id="prtClose">關閉</button><button class="btn" id="prtPng">輸出 PNG</button><button class="btn primary" id="prtGo">列印</button></div></dialog>
+<dialog id="impDlg"><h3 style="margin-top:0">匯入現況點</h3>
+  <div class="row"><select id="impKind"><option value="xy">座標點檔（CSV / TXT）</option><option value="mac">MAC 手簿檔（需先匯入控制點）</option><option value="polar">測站 角度 距離（自填測站）</option></select>
+    <button class="btn" onclick="document.getElementById('impFile').click()">選擇檔案…</button><span id="impName" class="muted small"></span>
+    <input type="file" id="impFile" accept=".txt,.csv,.xyz,.pts,.dat,.asc,.mac,text/*" hidden></div>
+  <textarea id="impText" rows="9" style="width:100%;margin-top:8px;font:12px/1.4 ui-monospace,Consolas,monospace;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px" placeholder="座標點檔：點號,N,E[,H,代碼]（逗號、空白、Tab 皆可；只有兩欄時視為 N,E）&#10;測站觀測：每行 點號 水平角 [天頂距] 距離（水平角自後視起順時針）"></textarea>
+  <div id="macOpts" class="small" style="display:none;margin-top:8px"><div id="macKnown" class="small muted"></div><div class="muted" style="margin-top:4px">格式：首行 <code>LS ()</code>；每段「測站 後視」一行，接「點號 水平角(ddd.mmss) 距離」。測站與後視須已在控制點／補點中（或是先前化算出的現況點）；距離視為平距。</div></div>
+  <div id="xyOpts" class="row small" style="margin-top:8px"><span class="muted">座標順序</span><select id="xyOrder"><option value="auto">自動（大者為 N）</option><option value="NE">點號,N,E</option><option value="EN">點號,E,N</option></select></div>
+  <div id="polarOpts" class="small" style="display:none;margin-top:8px">
+    <div class="row">測站 N <input type="number" id="stY" step="0.001"> E <input type="number" id="stX" step="0.001"></div>
+    <div class="row" style="margin-top:6px">後視方位角 <input type="text" id="bsAz" style="width:110px" placeholder="例 123-45-30"> <span class="muted">或後視點</span> N <input type="number" id="bsY" step="0.001"> E <input type="number" id="bsX" step="0.001"></div>
+    <div class="row" style="margin-top:6px">角度格式 <select id="angFmt"><option value="auto">自動（有 - 為度分秒，否則十進位度）</option><option value="ddmmss">ddd.mmss（例 123.4530）</option><option value="deg">十進位度</option><option value="gon">梯度 (gon)</option></select>
+      距離 <select id="distKind"><option value="slope">斜距（需天頂距）</option><option value="horizontal">平距</option></select></div></div>
+  <div id="impPrev" class="small" style="margin:8px 0;min-height:1.4em"></div>
+  <div class="row" style="justify-content:flex-end"><button class="btn" id="impCancel">取消</button><button class="btn primary" id="impGo">匯入</button></div></dialog>
+</div>
+<script>
+/*CORE*/
+</script>
+<script>
+/*APP*/
+</script>
+</body>
+</html>

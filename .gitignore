@@ -1,0 +1,22 @@
+# 真實案件資料與廠商軟體：不得公開
+samples/
+NECEXE/
+svLand*/
+*.lic
+*.exe
+*.mdb
+*.D[0-9A-F][0-9A-F]
+*.B[0-9A-F][0-9A-F]
+*.NTX
+*.MTX
+# 逆向工程與暫存工作區（含 Ghidra、REA、舊專案副本、下載檔）
+_tools/
+_old/
+_dl/
+node_modules/
+*.zip
+__pycache__/
+# 逆向工程筆記（含對 NECEXE 的分析），僅留在本機
+NECEXE_findings.md
+tools/probe_*.py
+tools/validate_areas.py

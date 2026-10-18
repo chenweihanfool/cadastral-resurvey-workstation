@@ -1,0 +1,1596 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>地籍圖調整工作台</title>
+<style>
+:root{--bg:#f4f5f7;--panel:#fff;--ink:#1d2330;--muted:#69718a;--line:#d9dde6;--accent:#1f6feb;--accent-ink:#fff;
+  --canvas:#fbfcfd;--edge:#2b3445;--ref:#9aa3b5;--sel:#1f6feb;--hover:#00a3a3;--changed:rgba(255,160,0,.22);--bad:#d1242f;--ok:#1a7f37;--survey:#c2188e}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14171d;--panel:#1c2029;--ink:#e6e9f0;--muted:#98a1b6;--line:#2c3240;
+  --accent:#4c8dff;--canvas:#10131a;--edge:#c7cfdf;--ref:#5d667b;--sel:#5aa2ff;--hover:#2dd4d4;--changed:rgba(255,170,0,.25);--bad:#ff6b73;--ok:#4cc26a;--survey:#ff6fd0}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.45 "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
+#app{display:grid;grid-template-rows:auto 1fr auto;height:100%}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:15px;margin:0 8px 0 0;white-space:nowrap}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit}
+.btn:hover{border-color:var(--accent)} .btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{border:0;background:var(--panel);color:var(--ink);padding:5px 10px;cursor:pointer;font:inherit;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}.seg button.on{background:var(--accent);color:var(--accent-ink)}
+.sep{width:1px;height:22px;background:var(--line);margin:0 2px}
+main{display:grid;grid-template-columns:1fr 440px;min-height:0}
+#stage{position:relative;min-width:0;min-height:0;background:var(--canvas)}
+#cv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;display:none;white-space:pre;z-index:3;box-shadow:0 2px 8px #0003}
+#drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);pointer-events:none}
+#drop b{color:var(--ink);font-size:18px;display:block;margin-bottom:6px}
+aside{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:auto}
+section{padding:10px 12px;border-bottom:1px solid var(--line)}
+section h2{font-size:13px;margin:0 0 6px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+input[type=number],input[type=text]{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;padding:4px 6px;font:inherit;width:90px}
+input[type=text]{width:130px}
+label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
+table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left} th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
+tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-child{box-shadow:inset 3px 0 var(--sel)}
+.pos{color:var(--ok)} .neg{color:var(--bad)} .warn{background:rgba(209,36,47,.12)}
+.muted{color:var(--muted)} .small{font-size:12px}
+#tblwrap{max-height:42vh;overflow:auto}
+footer{display:flex;gap:16px;padding:4px 12px;background:var(--panel);border-top:1px solid var(--line);font-size:12px;color:var(--muted);flex-wrap:wrap}
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:640px}
+dialog::backdrop{background:#0006}
+#printArea{display:none}
+@media print{body.printing>#app,body.printing dialog{display:none!important}body.printing{background:#fff}body.printing #printArea{display:block}body.printing #printArea canvas{display:block}}
+kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;font-size:12px}
+@media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:minmax(280px,1fr) auto}#stage{min-height:280px}aside{max-height:45vh;border-left:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div id="printArea"></div>
+<div id="app">
+<header>
+  <h1>地籍圖調整工作台</h1>
+  <button class="btn primary" id="btnOpen">開啟檔案</button>
+  <button class="btn" id="btnFolder">開啟資料夾</button>
+  <button class="btn" id="btnImp">匯入現況點</button>
+  <input type="file" id="fileIn" multiple hidden>
+  <input type="file" id="dirIn" webkitdirectory hidden>
+  <span class="sep"></span>
+  <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button></div>
+  <div class="seg" id="filters" title="可複選：決定能選取哪些要素 (1/2/3)">
+    <button data-f="pt" class="on">點</button><button data-f="edge" class="on">線</button><button data-f="par" class="on">面</button></div>
+  <span class="sep"></span>
+  <button class="btn" id="btnUndo" disabled>復原</button><button class="btn" id="btnRedo" disabled>重做</button>
+  <button class="btn" id="btnReset" disabled>還原全部</button>
+  <span class="sep"></span>
+  <label class="chk"><input type="checkbox" id="chkRef" checked>舊圖</label>
+  <label class="chk"><input type="checkbox" id="chkLabel" checked>標註</label>
+  <label class="chk" title="在圖上直接標示面積較差"><input type="checkbox" id="chkDelta" checked>圖上較差</label>
+  <select id="deltaMode" title="較差基準"><option value="adj">對調整前</option><option value="reg">對登記面積</option></select>
+  <button class="btn" id="btnFit">全圖</button>
+  <span class="sep"></span>
+  <select id="bmSel" title="底圖（需連網，適用 TWD97）"><option value="none">底圖：無</option><option value="osm">OpenStreetMap</option><option value="emap">NLSC 電子地圖</option><option value="photo">NLSC 航照</option></select>
+  <input type="range" id="bmOp" min="0.2" max="1" step="0.05" value="0.9" title="底圖不透明度" style="width:64px">
+  <select id="bmCm" title="TWD97 中央經線"><option value="121">121°E 本島</option><option value="119">119°E 澎金馬</option></select>
+  <button class="btn" id="btnPrint" title="列印 (Ctrl+P)">列印</button>
+  <span class="sep"></span>
+  <button class="btn" id="btnExpD14" disabled>輸出 D14</button>
+  <button class="btn" id="btnExpJson" disabled>輸出 JSON</button>
+  <button class="btn" id="btnHelp">說明</button>
+</header>
+<main>
+  <div id="stage"><canvas id="cv"></canvas><div id="tip"></div><div id="hint" style="display:none;position:absolute;left:10px;top:10px;right:10px;z-index:3;background:var(--panel);border:1px solid var(--accent);border-radius:6px;padding:6px 10px;font-size:13px"></div>
+    <div id="drop"><div><b>把案件資料夾或檔案拖進來</b>支援 D11 / D13 / D14（可加 D2B / D2C 舊圖）<br>或 COA / BNP / PAR</div></div></div>
+  <aside>
+    <section><h2>選取</h2><div id="selInfo" class="small muted">尚未選取</div>
+      <div class="row" style="margin-top:8px">
+        <label>北 ΔN(m) <input type="number" id="dN" step="0.01" value="0"></label>
+        <label>東 ΔE(m) <input type="number" id="dE" step="0.01" value="0"></label>
+        <button class="btn" id="btnMove">移動</button></div>
+      <div class="row small" style="margin-top:6px"><span class="muted">方向鍵微調步距</span>
+        <select id="step"><option>0.01</option><option>0.05</option><option selected>0.10</option><option>0.50</option><option>1.00</option></select> m
+        <span class="muted">(Shift ×10)</span></div></section>
+    <section><h2>圖形變換（平移／旋轉）</h2>
+      <div class="row small"><span class="muted">旋轉角度</span><input type="text" id="rotDeg" value="0.5" style="width:84px" title="十進位度，或 度-分-秒（例 0-30-00）">
+        <button class="btn" id="btnRotL" title="逆時針（北向上俯視）">↺ 逆時針</button><button class="btn" id="btnRotR">↻ 順時針</button></div>
+      <div class="row small" style="margin-top:6px"><span id="pivotInfo" class="muted"></span><button class="btn" id="btnPivotReset">重設樞紐</button></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" id="btnAlign" title="依序點新圖點A→目標A′→新圖點B→目標B′，自動算旋轉與平移">兩點對位</button>
+        <span class="muted">對象：已選取的要素；未選取則為整張新圖。「移圖」工具下 Shift+拖曳可旋轉。</span></div></section>
+    <section><h2>控制點與補點（已知點）</h2>
+      <div id="ctlInfo" class="small muted"></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" id="btnCtlFit">縮放</button><button class="btn" id="btnCtlClear">清除</button>
+        <span class="muted">匯入：開啟檔案／拖入 CTL、CT2、CEN、L02 或含 D20 的資料夾</span></div></section>
+    <section><h2>現況點與參考線</h2>
+      <div class="row small"><button class="btn" id="btnImp2">匯入現況點</button><button class="btn" id="btnSvFit">縮放至現況點</button><button class="btn" id="btnSvClear">清除</button></div>
+      <div id="svInfo" class="small muted" style="margin:6px 0"></div>
+      <table><thead><tr><th>參考線</th><th>點</th><th>長 m</th><th>面積 m²</th><th></th><th></th></tr></thead><tbody id="lineList"></tbody></table>
+      <div class="small muted" style="margin-top:4px">「連線」工具 (L)：依序點現況點；Enter 完成；點回第一點閉合。</div></section>
+    <section><h2>面積較差</h2>
+      <div class="row small" style="margin-bottom:6px">
+        <label class="chk"><input type="radio" name="scope" value="changed" checked>有變動</label>
+        <label class="chk"><input type="radio" name="scope" value="selected">已選取</label>
+        <span class="muted">警示 &gt;</span><input type="number" id="tol" value="1" step="0.1" style="width:60px"><span class="muted">m²</span>
+        <input type="text" id="find" placeholder="跳至地號 (例 137-1)"></div>
+      <div id="tblwrap"><table><thead><tr><th>地號</th><th>登記</th><th>調整前</th><th>現面積</th><th>Δ調整</th><th>Δ登記</th></tr></thead><tbody id="tbody"></tbody></table></div>
+      <div id="sumInfo" class="small muted" style="margin-top:6px"></div></section>
+    <section><h2>圖層資訊</h2><div id="layerInfo" class="small muted">—</div></section>
+  </aside>
+</main>
+<footer><span id="stCoord">—</span><span id="stScale">—</span><span id="stMsg"></span></footer>
+</div>
+<dialog id="help"><h3 style="margin-top:0">操作說明</h3>
+<p><b>載入</b>：把案件資料夾拖進視窗，或按「開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
+<p><b>選取</b>：上方「點／線／面」可複選，決定點擊與框選能選到什麼。<kbd>Shift</kbd> 點擊加選／取消；在空白處拖曳框選。</p>
+<p><b>移動</b>：拖曳已選取的要素，或用方向鍵微調、或輸入 ΔN/ΔE。共用的界址點會讓相鄰地號一起變動，面積即時更新。選「線」會移動線的兩端點，選「面」會移動整宗地所有界址點。</p>
+<p><b>底圖與列印</b>：工具列「底圖」可選 OpenStreetMap、國土測繪中心電子地圖或正射影像（需連網；只適用 TWD97，TWD67 會偏移約 800 m；澎湖金門馬祖請改選 119°E）。「列印」(<kbd>Ctrl+P</kbd>) 可選 A4/A3、橫直式、指定比例尺（200～5000）與範圍，附標題欄、圖例、比例尺條與指北；列印時選「另存為 PDF」即可輸出 PDF。</p>
+<p><b>MAC 手簿檔</b>：MAC 是相對觀測，必須先匯入控制點（<code>CTL</code>）與補點（<code>CT2</code>，或 D20／L02）。再於「匯入現況點」選「MAC」，程式依「測站 後視」逐段化算，新測站（如 QC1）可供後續段落使用，並顯示後視距離檢核差。缺少已知點時會明確列出缺哪些點。</p>
+<p><b>現況點與參考線</b>：「匯入現況點」可貼上或選檔，支援「點號,N,E」座標檔，或「測站 角度 距離」（填測站坐標與後視方位角後自動化算）。匯入後用「連線」工具 (<kbd>L</kbd>) 依序點選現況點連成參考線，點回第一點可閉合並顯示面積；每條參考線可改名、刪除。</p>
+<p><b>旋轉與對位</b>：在「移圖」或已選取要素時，可輸入角度按「↺／↻」旋轉（樞紐預設為移動對象中心，Alt+點擊自訂）；「兩點對位」依序點新圖 A、目標 A′、新圖 B、目標 B′，自動算出旋轉與平移（不縮放，並回報兩對點距離比供檢查）。</p>
+<p><b>移圖（對照舊圖）</b>：切到「移圖」(<kbd>M</kbd>)，在圖上拖曳、用方向鍵或 ΔN/ΔE，整張新圖一起平移，舊圖不動；平移不改變面積，可復原。若已選取要素，則只移動選取的部分。</p>
+<p><b>平移／縮放</b>：滾輪縮放；中鍵或右鍵拖曳平移；或切到「平移」工具。</p>
+<p><b>快捷鍵</b>：<kbd>Ctrl+Z</kbd> 復原、<kbd>Ctrl+Y</kbd> 重做、<kbd>Esc</kbd> 取消選取、<kbd>V</kbd>/<kbd>H</kbd> 工具、<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切換點/線/面。</p>
+<p><b>輸出</b>：「輸出 D14」只改動被移動點的坐標，其餘位元組與原檔完全相同；覆蓋進案件資料夾前請先備份。D11 的面積欄位不改，請在 NECEXE 內用「重算面積」更新。「輸出 JSON」含移動點與面積變化，方便 AI／其他程式讀取。</p>
+<p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（getState / select / move / undo / exportSession），網址加 <code>?bridge=ws://127.0.0.1:埠號</code> 可接 WebSocket 橋接（預留給 MCP）。</p>
+<form method="dialog"><button class="btn primary">關閉</button></form></dialog>
+<dialog id="prtDlg" style="max-width:860px;width:96vw"><h3 style="margin-top:0">列印成果圖</h3>
+  <div class="row small">
+    <label>紙張 <select id="prtPaper"><option>A4</option><option>A3</option></select></label>
+    <label>方向 <select id="prtOrient"><option value="land">橫式</option><option value="port">直式</option></select></label>
+    <label>比例尺 <select id="prtScale"><option value="auto">自動（符合範圍）</option><option>200</option><option>250</option><option>300</option><option>500</option><option>600</option><option>1000</option><option>1200</option><option>2000</option><option>2500</option><option>3000</option><option>5000</option></select></label>
+    <label>範圍 <select id="prtExtent"><option value="screen">目前畫面</option><option value="all">全圖</option><option value="sel">已選取／有變動</option></select></label>
+    <label class="chk"><input type="checkbox" id="prtBase" checked>含底圖</label></div>
+  <div class="row small" style="margin-top:6px"><label>標題 <input type="text" id="prtTitle" style="width:220px"></label><label>備註 <input type="text" id="prtNote" style="width:260px"></label></div>
+  <div style="margin-top:8px;background:#fff;border:1px solid var(--line);border-radius:6px;overflow:auto;max-height:56vh"><canvas id="prtCanvas" style="width:100%;display:block"></canvas></div>
+  <div id="prtInfo" class="small muted" style="margin:6px 0"></div>
+  <div class="small muted">列印時選「另存為 PDF」即可輸出 PDF。比例尺以 96 dpi 換算，列印請選「實際大小／100%」。圖上是否顯示舊圖、標註、較差沿用主畫面的勾選。</div>
+  <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn" id="prtClose">關閉</button><button class="btn" id="prtPng">輸出 PNG</button><button class="btn primary" id="prtGo">列印</button></div></dialog>
+<dialog id="impDlg"><h3 style="margin-top:0">匯入現況點</h3>
+  <div class="row"><select id="impKind"><option value="xy">座標點檔（CSV / TXT）</option><option value="mac">MAC 手簿檔（需先匯入控制點）</option><option value="polar">測站 角度 距離（自填測站）</option></select>
+    <button class="btn" onclick="document.getElementById('impFile').click()">選擇檔案…</button><span id="impName" class="muted small"></span>
+    <input type="file" id="impFile" accept=".txt,.csv,.xyz,.pts,.dat,.asc,.mac,text/*" hidden></div>
+  <textarea id="impText" rows="9" style="width:100%;margin-top:8px;font:12px/1.4 ui-monospace,Consolas,monospace;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px" placeholder="座標點檔：點號,N,E[,H,代碼]（逗號、空白、Tab 皆可；只有兩欄時視為 N,E）&#10;測站觀測：每行 點號 水平角 [天頂距] 距離（水平角自後視起順時針）"></textarea>
+  <div id="macOpts" class="small" style="display:none;margin-top:8px"><div id="macKnown" class="small muted"></div><div class="muted" style="margin-top:4px">格式：首行 <code>LS ()</code>；每段「測站 後視」一行，接「點號 水平角(ddd.mmss) 距離」。測站與後視須已在控制點／補點中（或是先前化算出的現況點）；距離視為平距。</div></div>
+  <div id="xyOpts" class="row small" style="margin-top:8px"><span class="muted">座標順序</span><select id="xyOrder"><option value="auto">自動（大者為 N）</option><option value="NE">點號,N,E</option><option value="EN">點號,E,N</option></select></div>
+  <div id="polarOpts" class="small" style="display:none;margin-top:8px">
+    <div class="row">測站 N <input type="number" id="stY" step="0.001"> E <input type="number" id="stX" step="0.001"></div>
+    <div class="row" style="margin-top:6px">後視方位角 <input type="text" id="bsAz" style="width:110px" placeholder="例 123-45-30"> <span class="muted">或後視點</span> N <input type="number" id="bsY" step="0.001"> E <input type="number" id="bsX" step="0.001"></div>
+    <div class="row" style="margin-top:6px">角度格式 <select id="angFmt"><option value="auto">自動（有 - 為度分秒，否則十進位度）</option><option value="ddmmss">ddd.mmss（例 123.4530）</option><option value="deg">十進位度</option><option value="gon">梯度 (gon)</option></select>
+      距離 <select id="distKind"><option value="slope">斜距（需天頂距）</option><option value="horizontal">平距</option></select></div></div>
+  <div id="impPrev" class="small" style="margin:8px 0;min-height:1.4em"></div>
+  <div class="row" style="justify-content:flex-end"><button class="btn" id="impCancel">取消</button><button class="btn primary" id="impGo">匯入</button></div></dialog>
+</div>
+<script>
+/* core.js — 地籍圖資料核心：讀寫 NECEXE 的 DBF(D檔) 與 KC 文字檔(COA/BNP/PAR)、幾何、面積。
+ * 純函式、不碰 DOM，瀏覽器與 Node 共用。座標慣例：y = 縱坐標(北, TWD97 ~2.7e6)、x = 橫坐標(東)。
+ * 資料模型與驗證依據見 NECEXE_findings.md。 */
+const Core = (() => {
+  'use strict';
+  const CHG = 1e-6;   // 面積變動判定門檻（m²），低於此視為未變動
+
+  const dec = (u8, label = 'big5') => new TextDecoder(label).decode(u8);
+
+  // ── DBF 讀取 ─────────────────────────────────────────────────────────────
+  function parseDbf(buf) {
+    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const n = dv.getUint32(4, true), hl = dv.getUint16(8, true), rl = dv.getUint16(10, true);
+    const fields = [];
+    let off = 1;
+    for (let o = 32; u8[o] !== 0x0d && o < hl; o += 32) {
+      const name = dec(u8.subarray(o, o + 11)).split('\0')[0];
+      const f = { name, type: String.fromCharCode(u8[o + 11]), len: u8[o + 16], dec: u8[o + 17], off };
+      off += f.len; fields.push(f);
+    }
+    const rows = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const base = hl + i * rl, row = { _deleted: u8[base] === 0x2a };
+      for (const f of fields) {
+        const s = dec(u8.subarray(base + f.off, base + f.off + f.len)).trim();
+        if (f.type === 'N' || f.type === 'F') { const v = s === '' ? NaN : Number(s); row[f.name] = Number.isNaN(v) ? null : v; }
+        else if (f.type === 'L') row[f.name] = /^[TtYy]$/.test(s);
+        else row[f.name] = s;
+      }
+      rows[i] = row;
+    }
+    return { fields, rows, hl, rl, n, u8 };
+  }
+
+  // 就地修改數值欄位（右靠齊、補空白），回傳新的 Uint8Array；不改動其他位元組。
+  function patchDbfNumber(u8, dbf, rowIndex, fieldName, value) {
+    const f = dbf.fields.find(x => x.name === fieldName);
+    if (!f) throw new Error('無此欄位 ' + fieldName);
+    const s = value.toFixed(f.dec);
+    if (s.length > f.len) throw new Error(`${fieldName} 值 ${s} 超出欄寬 ${f.len}`);
+    const base = dbf.hl + rowIndex * dbf.rl + f.off;
+    const padded = s.padStart(f.len, ' ');
+    for (let i = 0; i < f.len; i++) u8[base + i] = padded.charCodeAt(i);
+  }
+
+  // ── 資料集 ───────────────────────────────────────────────────────────────
+  // dataset = { name, source, points: Map(id→{id,y,x,y0,x0}), parcels: [{idx,key,label,oldLabel,ids,areaRef,areaOrig}],
+  //             edges: Map("a-b"→{a,b,parcels:[idx]}), pointParcels: Map(id→[idx]) }
+  function newDataset(name, source) {
+    return { name, source, points: new Map(), parcels: [], edges: new Map(), pointParcels: new Map(), meta: {} };
+  }
+
+  function finalize(ds) {
+    ds.edges = new Map(); ds.pointParcels = new Map();
+    ds.parcels.forEach((p, idx) => {
+      p.idx = idx;
+      const ids = p.ids, n = ids.length;
+      for (let i = 0; i < n; i++) {
+        const a = ids[i], b = ids[(i + 1) % n];
+        if (a === b) continue;
+        const k = a < b ? a + '-' + b : b + '-' + a;
+        let e = ds.edges.get(k);
+        if (!e) ds.edges.set(k, e = { key: k, a: Math.min(a, b), b: Math.max(a, b), parcels: [] });
+        if (!e.parcels.includes(idx)) e.parcels.push(idx);
+        let pp = ds.pointParcels.get(a); if (!pp) ds.pointParcels.set(a, pp = []);
+        if (!pp.includes(idx)) pp.push(idx);
+      }
+    });
+    // 地中地：外圈地號面積 = 外圈 − 內圈（holeKeys 為內圈地號鍵）
+    const byKey = new Map(ds.parcels.map(p => [p.key, p]));
+    for (const p of ds.parcels) {
+      p.holes = []; p.containers = p.containers || [];
+    }
+    for (const p of ds.parcels) for (const hk of p.holeKeys || []) {
+      const h = byKey.get(hk); if (h && h !== p) { p.holes.push(h.idx); h.containers.push(p.idx); }
+    }
+    for (const p of ds.parcels) { p.areaOrig = parcelArea(ds, p); p.area = p.areaOrig; }
+    // 圓弧：mid[i] 為弧中點，前後頂點為弧端；弦邊標記 arcPart，繪圖時改畫弧
+    ds.arcs = new Map();
+    for (const p of ds.parcels) if (p.mid) {
+      const n = p.ids.length;
+      p.mid.forEach((m, i) => {
+        if (!m) return; const a = p.ids[(i - 1 + n) % n], b = p.ids[i], c = p.ids[(i + 1) % n];
+        ds.arcs.set(a + '|' + b + '|' + c, { a, b, c });
+        for (const [u, v] of [[a, b], [b, c]]) { const e = ds.edges.get(u < v ? u + '-' + v : v + '-' + u); if (e) e.arcPart = true; }
+      });
+    }
+    return ds;
+  }
+
+  // 從 D 檔建立：D14(點) + D13(界址串)，可選 D11(屬性)。pts/bnd/par 為 parseDbf 結果。
+  function datasetFromD({ pts, bnd, par, d12, name = 'D', source = 'D檔' }) {
+    const ds = newDataset(name, source);
+    pts.rows.forEach((r, i) => {
+      if (r._deleted || r.COT_REF !== 0 || r.COT_NUMBER == null || !r.COT_Y || !r.COT_X) return;   // 排除 (0,0) 空白佔位點
+      ds.points.set(r.COT_NUMBER, { id: r.COT_NUMBER, y: r.COT_Y, x: r.COT_X, y0: r.COT_Y, x0: r.COT_X, row: i });
+    });
+    const attr = new Map();
+    if (par) for (const r of par.rows) if (!r._deleted) attr.set(`${r.SECTION_O}|${r.PAR_O_M}|${r.PAR_O_C}`, r);
+    const groups = new Map();
+    for (const r of bnd.rows) {
+      if (r._deleted) continue;
+      const k = `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}`;
+      let g = groups.get(k); if (!g) groups.set(k, g = { sec: r.O_SECTION, m: r.O_PARCEL, c: r.O_PARCEL_E, ids: [], mid: [], arcs: false });
+      for (let i = 1; i <= 8; i++) {
+        const id = r['COORD_' + i];
+        if (id) { g.ids.push(id); g.mid.push(!!r['MIDARC_' + i]); if (r['MIDARC_' + i]) g.arcs = true; }
+      }
+    }
+    const holeMap = new Map();   // 外圈鍵 → [內圈鍵]
+    if (d12) for (const r of d12.rows) {
+      if (r._deleted) continue;
+      const ok = `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}`, ik = `${r.I_SECTION}|${r.I_PARCEL}|${r.I_PARCEL_E}`;
+      let l = holeMap.get(ok); if (!l) holeMap.set(ok, l = []); l.push(ik);
+    }
+    for (const [k, g] of groups) {
+      if (g.ids.length < 3 || g.ids.some(id => !ds.points.has(id))) continue;
+      const a = attr.get(k);
+      const fmt = (m, c) => (c ? `${m}-${c}` : `${m}`);
+      ds.parcels.push({
+        key: k, section: g.sec, label: a ? fmt(a.PAR_N_M, a.PAR_N_C) : fmt(g.m, g.c), oldLabel: fmt(g.m, g.c),
+        ids: g.ids, mid: g.mid, hasArc: g.arcs, holeKeys: holeMap.get(k),
+        areaRef: a ? Math.round(a.AREA_NEW * 1e10) / 1e6 : null,      // AREA_NEW 公頃 → m²
+        areaReg: a ? Math.round(a.AREA_OLD * 1e10) / 1e6 : null,      // AREA_OLD 登記面積 m²
+      });
+    }
+    return finalize(ds);
+  }
+
+  // ── KC 文字檔 (COA/BNP/PAR) ──────────────────────────────────────────────
+  const lines = t => (t.includes('\r\n') ? t.split('\r\n') : t.split(/\n/)).filter((l, i, a) => !(i === a.length - 1 && l === ''));
+
+  function parseCoa(text) {
+    const pts = new Map(), L = lines(text);
+    for (let i = 1; i < L.length; i++) {
+      const l = L[i]; if (l.length < 37) continue;
+      const id = parseInt(l.slice(0, 5), 10); if (Number.isNaN(id)) continue;
+      const y = parseFloat(l.slice(6, 22)), x = parseFloat(l.slice(22, 37));
+      if (Number.isNaN(y) || Number.isNaN(x)) continue;
+      pts.set(id, { id, y, x, y0: y, x0: x });
+    }
+    return pts;
+  }
+  function parseBnp(text) {
+    const parcels = new Map(), L = lines(text);
+    for (let i = 1; i < L.length; i++) {
+      const l = L[i]; if (l.length < 15 || !l.trim()) continue;
+      const sec = parseInt(l.slice(0, 4), 10), sub = parseInt(l.slice(4, 8), 10), seq = parseInt(l.slice(8, 11), 10);
+      if ([sec, sub, seq].some(Number.isNaN)) continue;
+      const ids = [], rest = l.slice(15);
+      for (let j = 0; j < rest.length; j += 6) {
+        const m = /^\s*(\d+)/.exec(rest.slice(j, j + 6)); if (m) ids.push(parseInt(m[1], 10));
+      }
+      const k = sec + '|' + sub; let g = parcels.get(k); if (!g) parcels.set(k, g = { sec, sub, parts: new Map() });
+      g.parts.set(seq, ids);
+    }
+    return parcels;
+  }
+  function parsePar(text) {
+    const recs = new Map(), L = lines(text);
+    for (let i = 1; i < L.length; i++) {
+      const l = L[i]; if (l.length < 40) continue;
+      const sec = parseInt(l.slice(0, 4), 10), sub = parseInt(l.slice(4, 8), 10);
+      const reg = parseFloat(l.slice(12, 22)), calc = parseFloat(l.slice(30, 40));
+      if ([sec, sub, reg, calc].some(Number.isNaN)) continue;
+      recs.set(sec + '|' + sub, { reg, calc });
+    }
+    return recs;
+  }
+  function datasetFromKC({ coa, bnp, par, name = 'KC', source = 'COA/BNP/PAR' }) {
+    const ds = newDataset(name, source);
+    ds.points = parseCoa(coa);
+    const bn = parseBnp(bnp), pr = par ? parsePar(par) : new Map();
+    for (const [k, g] of bn) {
+      const ids = []; for (const s of [...g.parts.keys()].sort((a, b) => a - b)) ids.push(...g.parts.get(s));
+      if (ids.length < 3 || ids.some(id => !ds.points.has(id))) continue;
+      const r = pr.get(k);
+      ds.parcels.push({ key: k, section: g.sec, label: String(g.sub), oldLabel: String(g.sub), ids,
+        areaRef: r ? r.calc : null, areaReg: r ? r.reg : null });
+    }
+    return finalize(ds);
+  }
+
+  // ── 幾何 ────────────────────────────────────────────────────────────────
+  // 有號面積（逆時針為正）。相對第一個頂點計算：座標 ~1e6 量級時，避免大數相減造成浮點誤差
+  function signedArea(ids, points) {
+    let s = 0; const n = ids.length, o = points.get(ids[0]);
+    for (let i = 0; i < n; i++) {
+      const p = points.get(ids[i]), q = points.get(ids[(i + 1) % n]);
+      s += (p.x - o.x) * (q.y - o.y) - (q.x - o.x) * (p.y - o.y);
+    }
+    return s / 2;
+  }
+  const ringArea = (ids, points) => Math.abs(signedArea(ids, points));
+  // mid[i]=true 表示頂點 i 是一段圓弧的中點（前後頂點為弧的兩端）；面積 = 折線多邊形 ± (弓形 − 三角形)
+  function ringAreaArc(ids, mid, points) {
+    let a = ringArea(ids, points); if (!mid || !mid.some(Boolean)) return a;
+    const n = ids.length, ccw = signedArea(ids, points) >= 0;
+    for (let i = 0; i < n; i++) {
+      if (!mid[i]) continue;
+      const A = points.get(ids[(i - 1 + n) % n]), B = points.get(ids[i]), C = points.get(ids[(i + 1) % n]);
+      const ab = Math.hypot(B.x - A.x, B.y - A.y), bc = Math.hypot(C.x - B.x, C.y - B.y), ca = Math.hypot(A.x - C.x, A.y - C.y);
+      const cr = (C.x - A.x) * (B.y - A.y) - (C.y - A.y) * (B.x - A.x), T = Math.abs(cr) / 2;
+      if (T < 1e-9) continue;
+      const R = (ab * bc * ca) / (4 * T), beta = Math.acos(Math.max(-1, Math.min(1, (ab * ab + bc * bc - ca * ca) / (2 * ab * bc))));
+      const theta = 2 * Math.PI - 2 * beta, seg = (R * R / 2) * (theta - Math.sin(theta));
+      const inward = ccw ? cr > 0 : cr < 0;
+      a += inward ? -(seg - T) : (seg - T);
+    }
+    return a;
+  }
+  // 過 A、B、C 三點的圓弧（A→B→C），取樣成折線供繪圖
+  function arcPolyline(A, B, C, n = 24) {
+    const bx = B.x - A.x, by = B.y - A.y, cx = C.x - A.x, cy = C.y - A.y, d = 2 * (bx * cy - by * cx);
+    if (Math.abs(d) < 1e-12) return [A, B, C];
+    const b2 = bx * bx + by * by, c2 = cx * cx + cy * cy, ux = (cy * b2 - by * c2) / d, uy = (bx * c2 - cx * b2) / d;
+    const R = Math.hypot(ux, uy), a0 = Math.atan2(-uy, -ux), norm = a => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    const sB = norm(Math.atan2(by - uy, bx - ux) - a0), sC = norm(Math.atan2(cy - uy, cx - ux) - a0), sweep = sB < sC ? sC : sC - 2 * Math.PI;
+    const out = []; for (let i = 0; i <= n; i++) { const a = a0 + sweep * i / n; out.push({ x: A.x + ux + R * Math.cos(a), y: A.y + uy + R * Math.sin(a) }); }
+    return out;
+  }
+  function parcelArea(ds, p) {
+    let a = ringAreaArc(p.ids, p.mid, ds.points);
+    for (const hi of p.holes || []) { const h = ds.parcels[hi]; a -= ringAreaArc(h.ids, h.mid, ds.points); }
+    return a;
+  }
+  function pointInRing(ids, points, y, x) {
+    let inside = false; const n = ids.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const p = points.get(ids[i]), q = points.get(ids[j]);
+      if ((p.y > y) !== (q.y > y) && x < ((q.x - p.x) * (y - p.y)) / (q.y - p.y) + p.x) inside = !inside;
+    }
+    return inside;
+  }
+  function distToSeg(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+  function bounds(ds) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const id of ds.pointParcels.keys()) { const p = ds.points.get(id); if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x; if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y; }
+    return { x0, y0, x1, y1 };
+  }
+
+  // ── 編輯：移動點集合（共點自動連動鄰地）；回傳受影響宗地索引 ───────────────
+  function movePoints(ds, ids, dy, dx) {
+    const affected = new Set();
+    for (const id of ids) {
+      const p = ds.points.get(id); if (!p) continue;
+      p.y += dy; p.x += dx;
+      for (const pi of ds.pointParcels.get(id) || []) affected.add(pi);
+    }
+    return recalc(ds, affected);
+  }
+  // 重算受影響宗地面積；內圈（地中地）受影響時，外圈一併重算
+  function recalc(ds, affected) {
+    for (const pi of [...affected]) for (const c of ds.parcels[pi].containers || []) affected.add(c);
+    for (const pi of affected) { const pc = ds.parcels[pi]; pc.area = parcelArea(ds, pc); }
+    return affected;
+  }
+  // 批次設定位置 entries=[[id,y,x],...]；每個受影響宗地只重算一次面積
+  function setPoints(ds, entries) {
+    const affected = new Set();
+    for (const [id, y, x] of entries) {
+      const p = ds.points.get(id); if (!p) continue;
+      p.y = y; p.x = x;
+      for (const pi of ds.pointParcels.get(id) || []) affected.add(pi);
+    }
+    return recalc(ds, affected);
+  }
+  function setPoint(ds, id, y, x) { const p = ds.points.get(id); return movePoints(ds, [id], y - p.y, x - p.x); }
+  function resetAll(ds) {
+    for (const p of ds.points.values()) { p.y = p.y0; p.x = p.x0; }
+    for (const pc of ds.parcels) pc.area = pc.areaOrig;
+  }
+  const isMoved = p => Math.abs(p.y - p.y0) > 1e-6 || Math.abs(p.x - p.x0) > 1e-6;   // 容差 1e-6 m，忽略來回旋轉的浮點殘差
+  function movedPoints(ds) { return [...ds.points.values()].filter(isMoved); }
+
+  // ── 變換（平移＋旋轉）─────────────────────────────────────────────────────
+  // T = { dy, dx, angle (弧度，逆時針為正，北向上俯視), pivot: {y, x} }：先繞 pivot 旋轉，再平移 (dy,dx)
+  function xform(p, T) {
+    const pv = T.pivot || { y: 0, x: 0 }, c = Math.cos(T.angle || 0), s = Math.sin(T.angle || 0), rx = p.x - pv.x, ry = p.y - pv.y;
+    return { y: pv.y + s * rx + c * ry + (T.dy || 0), x: pv.x + c * rx - s * ry + (T.dx || 0) };
+  }
+  function transformPoints(ds, ids, T) {
+    const entries = [];
+    for (const id of ids) { const p = ds.points.get(id); if (!p) continue; const q = xform(p, T); entries.push([id, q.y, q.x]); }
+    return setPoints(ds, entries);
+  }
+  function centroidOf(points, ids) {
+    let y = 0, x = 0, n = 0;
+    for (const id of ids) { const p = points.get(id); if (p) { y += p.y; x += p.x; n++; } }
+    return n ? { y: y / n, x: x / n } : { y: 0, x: 0 };
+  }
+  // 兩點對位：把來源 a→A、b→B。回傳 T（旋轉+平移，不縮放）與 scale（|AB|/|ab|，供檢查品質）
+  function twoPointFit(a, b, A, B) {
+    const ang = Math.atan2(B.y - A.y, B.x - A.x) - Math.atan2(b.y - a.y, b.x - a.x);
+    const la = Math.hypot(b.x - a.x, b.y - a.y), lA = Math.hypot(B.x - A.x, B.y - A.y);
+    return { T: { pivot: { y: a.y, x: a.x }, angle: ang, dy: A.y - a.y, dx: A.x - a.x }, scale: la ? lA / la : NaN, angle: ang, residual_b: null };
+  }
+
+  // ── 角度與座標文字解析 ───────────────────────────────────────────────────
+  // fmt: 'auto'（含 - ° ' " 視為度分秒，否則十進位度）| 'dms' | 'ddmmss'（ddd.mmss，測量常用）| 'deg' | 'gon'
+  function parseAngle(str, fmt = 'auto') {
+    let s = String(str).trim(); if (!s) return NaN;
+    let sign = 1; if (s[0] === '-' && /^-\s*\d/.test(s) && !/[°'"′″]|\d-\d/.test(s)) { sign = -1; s = s.slice(1); }
+    if (fmt === 'gon') return sign * Number(s) * 0.9;
+    const dmsLike = /[°'"′″]|\d-\d/.test(s) || fmt === 'dms';
+    if (dmsLike) {
+      const t = s.split(/[-°'"′″\s]+/).filter(Boolean).map(Number); if (t.some(Number.isNaN)) return NaN;
+      return sign * ((t[0] || 0) + (t[1] || 0) / 60 + (t[2] || 0) / 3600);
+    }
+    if (fmt === 'ddmmss') {
+      const m = /^(\d+)(?:\.(\d*))?$/.exec(s); if (!m) return NaN;
+      const frac = (m[2] || '').padEnd(4, '0'), mm = Number(frac.slice(0, 2)), ss = Number(frac.slice(2, 4) + (frac.length > 4 ? '.' + frac.slice(4) : ''));
+      return sign * (Number(m[1]) + mm / 60 + ss / 3600);
+    }
+    const v = Number(s); return Number.isNaN(v) ? NaN : sign * v;
+  }
+  const num = t => (t !== '' && t != null && /^[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?$/.test(t) ? Number(t) : NaN);
+  const splitTok = l => l.trim().split(/[\s,;\t]+/).filter(t => t !== '');
+
+  // 現況點座標檔：「點號,N,E[,H,代碼…]」或「N,E」；CSV/TXT/空白/Tab 分隔皆可。
+  // order: 'auto'（較大者視為縱坐標N，台灣 TM 坐標 N~2.7e6 > E~2e5）| 'NE' | 'EN'
+  function parsePoints(text, { order = 'auto' } = {}) {
+    const points = [], skipped = []; let auto = 0, usedOrder = order;
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim() || /^\s*(#|\/\/|;)/.test(line)) return;
+      const t = splitTok(line); let name, a, b, rest;
+      if (t.length >= 3 && !Number.isNaN(num(t[1])) && !Number.isNaN(num(t[2]))) { name = t[0]; a = num(t[1]); b = num(t[2]); rest = t.slice(3); }
+      else if (t.length >= 2 && !Number.isNaN(num(t[0])) && !Number.isNaN(num(t[1]))) { name = String(++auto); a = num(t[0]); b = num(t[1]); rest = t.slice(2); }
+      else { if (points.length || i > 0) skipped.push({ line: i + 1, text: line.slice(0, 60) }); return; }   // 標題列或無法解析
+      let o = order; if (o === 'auto') o = Math.abs(a) >= Math.abs(b) ? 'NE' : 'EN'; usedOrder = o;
+      const y = o === 'NE' ? a : b, x = o === 'NE' ? b : a;
+      const pt = { name, y, x }; const h = num(rest[0]); if (!Number.isNaN(h)) { pt.h = h; rest = rest.slice(1); } if (rest.length) pt.code = rest.join(' ');
+      points.push(pt);
+    });
+    return { points, skipped, order: usedOrder };
+  }
+  // 測站觀測：每行「點號 水平角 [天頂距] 距離」。水平角自後視方向起順時針量。
+  function parseObservations(text, { angleFmt = 'auto' } = {}) {
+    const obs = [], skipped = [];
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim()) return; const t = splitTok(line);
+      if (t.length < 3) { skipped.push({ line: i + 1, text: line.slice(0, 60) }); return; }
+      const h = parseAngle(t[1], angleFmt), dist = num(t.length > 3 ? t[3] : t[2]);
+      const z = t.length > 3 ? parseAngle(t[2], angleFmt) : null;
+      if (Number.isNaN(h) || Number.isNaN(dist) || (z != null && Number.isNaN(z))) { skipped.push({ line: i + 1, text: line.slice(0, 60) }); return; }
+      obs.push({ name: t[0], h, z, dist, note: t.slice(t.length > 3 ? 4 : 3).join(' ') });
+    });
+    return { obs, skipped };
+  }
+  // 極座標化算：station{y,x}、backAz（後視方位角，度）、obs[]、slope=true 表示距離為斜距（需天頂距）
+  function polarReduce({ station, backAz, obs, slope = true }) {
+    return obs.map(o => {
+      const hz = o.z != null && slope ? o.dist * Math.sin(o.z * Math.PI / 180) : o.dist;
+      const az = (((backAz + o.h) % 360) + 360) % 360 * Math.PI / 180;
+      return { name: o.name, y: station.y + hz * Math.cos(az), x: station.x + hz * Math.sin(az), note: o.note || undefined };
+    });
+  }
+  const azimuth = (a, b) => ((Math.atan2(b.x - a.x, b.y - a.y) * 180 / Math.PI) + 360) % 360;   // 由 a 看 b，自北順時針
+
+  // ── 控制點檔：CTL（控制點）、CT2（補點）、CEN、L02 ─────────────────────────
+  // 首行為案號；其後每行「點名 縱坐標Y 橫坐標X」。NECEXE 輸出用定寬格式，Y 與 X 可能緊貼無空白，故以小數三位切分。
+  function parseCtl(text) {
+    const points = [], skipped = []; let code = '';
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim()) return;
+      let t = splitTok(line);
+      if (t.length === 2 && /^-?\d+\.\d{3}-?\d+\.\d{3}$/.test(t[1])) { const m = /^(-?\d+\.\d{3})(-?\d+\.\d{3})$/.exec(t[1]); t = [t[0], m[1], m[2]]; }
+      const nums = []; for (let k = t.length - 1; k >= 1 && nums.length < 2; k--) { if (/^-?\d+\.\d+$/.test(t[k])) nums.unshift(Number(t[k])); else break; }
+      if (nums.length === 2) { points.push({ name: t[0], y: nums[0], x: nums[1] }); return; }
+      if (i === 0 && t.length === 1) { code = t[0]; return; }
+      skipped.push({ line: i + 1, text: line.slice(0, 60) });
+    });
+    return { code, points, skipped };
+  }
+
+  // ── MAC 手簿檔（測站 角度 距離）──────────────────────────────────────────
+  // 格式：首行 "LS ()" 為標頭；其後每段以「測站 後視」兩欄開頭，接著每行「點號 水平角(ddd.mmss) 距離」。
+  // 水平角自後視方向起順時針量；後視點本身角度為 0.0000（其距離作為檢核）。距離視為平距（檔內無天頂距）。
+  function parseMac(text, { angleFmt = 'ddmmss' } = {}) {
+    const blocks = [], skipped = []; let cur = null;
+    text.split(/\r?\n/).forEach((line, i) => {
+      const t = splitTok(line); if (!t.length) return;
+      if (i === 0 && /^LS\b/i.test(t[0])) return;
+      if (t.length === 2 && Number.isNaN(num(t[1]))) { cur = { station: t[0], back: t[1], obs: [], line: i + 1 }; blocks.push(cur); return; }
+      if (t.length >= 3 && cur) {
+        const h = parseAngle(t[1], angleFmt), dist = num(t[2]);
+        if (!Number.isNaN(h) && !Number.isNaN(dist)) { cur.obs.push({ name: t[0], h, dist, line: i + 1 }); return; }
+      }
+      skipped.push({ line: i + 1, text: line.slice(0, 60) });
+    });
+    return { blocks, skipped };
+  }
+  // 逐段化算。known：Map(點號→{y,x})（已知控制點）；段內新點會登錄，供後續測站使用（如 QC1）。
+  function reduceMac(blocks, known) {
+    const dict = new Map(known), points = [], checks = [], unresolved = [], stations = [];
+    for (const b of blocks) {
+      const st = dict.get(b.station), bk = dict.get(b.back);
+      if (!st || !bk) { unresolved.push({ station: b.station, back: b.back, line: b.line, missing: [!st && b.station, !bk && b.back].filter(Boolean) }); continue; }
+      const backAz = azimuth(st, bk); stations.push({ name: b.station, y: st.y, x: st.x, back: b.back, back_azimuth: backAz });
+      for (const o of b.obs) {
+        if (o.name === b.back && Math.abs(o.h) < 1e-9) {   // 後視檢核
+          const dc = Math.hypot(bk.x - st.x, bk.y - st.y); checks.push({ station: b.station, back: b.back, measured: o.dist, computed: dc, diff: o.dist - dc }); continue;
+        }
+        const az = (((backAz + o.h) % 360) + 360) % 360 * Math.PI / 180;
+        const p = { name: o.name, y: st.y + o.dist * Math.cos(az), x: st.x + o.dist * Math.sin(az), note: `測站${b.station}` };
+        points.push(p); dict.set(o.name, { y: p.y, x: p.x });
+      }
+    }
+    return { points, checks, unresolved, stations };
+  }
+
+  // ── 現況點與參考線 ───────────────────────────────────────────────────────
+  const newSurvey = () => ({ points: new Map(), lines: [], seq: 0 });
+  function addSurveyPoints(sv, pts) {
+    const added = [];
+    for (const p of pts) {
+      let n = String(p.name), k = 2; while (sv.points.has(n)) n = `${p.name}_${k++}`;
+      sv.points.set(n, { name: n, y: p.y, x: p.x, h: p.h, code: p.code, note: p.note }); added.push(n);
+    }
+    return added;
+  }
+  function addLine(sv, names, { name, closed = false } = {}) {
+    const ids = names.filter(n => sv.points.has(String(n))).map(String); if (ids.length < 2) return null;
+    const ln = { id: ++sv.seq, name: name || `參考線${sv.seq}`, points: ids, closed: !!closed }; sv.lines.push(ln); return ln;
+  }
+  function lineStats(sv, ln) {
+    let len = 0; const pts = ln.points.map(n => sv.points.get(n)), n = pts.length;
+    for (let i = 0; i < n - 1; i++) len += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+    if (ln.closed && n > 2) len += Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y);
+    let area = null;
+    if (ln.closed && n > 2) { let s = 0; for (let i = 0; i < n; i++) { const p = pts[i], q = pts[(i + 1) % n]; s += (p.x - pts[0].x) * (q.y - pts[0].y) - (q.x - pts[0].x) * (p.y - pts[0].y); } area = Math.abs(s) / 2; }
+    return { length: len, area };
+  }
+
+  // ── 坐標轉換：TWD97 TM2（EPSG:3826/3825）↔ WGS84 經緯度（GRS80，k0=0.9999，FE=250000）──
+  // 中央經線：本島 121°（3826），澎湖金門馬祖 119°（3825）。TWD67 與 TWD97 約差 800 m，不可混用。
+  const GRS = { a: 6378137, f: 1 / 298.257222101 };
+  GRS.e2 = 2 * GRS.f - GRS.f * GRS.f; GRS.ep2 = GRS.e2 / (1 - GRS.e2);
+  const D2R = Math.PI / 180, K0 = 0.9999, FE = 250000;
+  function meridianArc(phi) {
+    const { a, e2 } = GRS, e4 = e2 * e2, e6 = e4 * e2;
+    return a * ((1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256) * phi - (3 * e2 / 8 + 3 * e4 / 32 + 45 * e6 / 1024) * Math.sin(2 * phi) +
+      (15 * e4 / 256 + 45 * e6 / 1024) * Math.sin(4 * phi) - (35 * e6 / 3072) * Math.sin(6 * phi));
+  }
+  function latLonToTm2(lat, lon, cm = 121) {   // → { y: 縱坐標N, x: 橫坐標E }
+    const { a, e2, ep2 } = GRS, phi = lat * D2R, sin = Math.sin(phi), cos = Math.cos(phi), tan = Math.tan(phi);
+    const N = a / Math.sqrt(1 - e2 * sin * sin), T = tan * tan, C = ep2 * cos * cos, A = (lon - cm) * D2R * cos;
+    const x = K0 * N * (A + (1 - T + C) * A ** 3 / 6 + (5 - 18 * T + T * T + 72 * C - 58 * ep2) * A ** 5 / 120);
+    const y = K0 * (meridianArc(phi) + N * tan * (A * A / 2 + (5 - T + 9 * C + 4 * C * C) * A ** 4 / 24 + (61 - 58 * T + T * T + 600 * C - 330 * ep2) * A ** 6 / 720));
+    return { y, x: x + FE };
+  }
+  function tm2ToLatLon(y, x, cm = 121) {       // → { lat, lon }（度）
+    const { a, e2, ep2 } = GRS, e4 = e2 * e2, e6 = e4 * e2, X = x - FE;
+    const mu = (y / K0) / (a * (1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256)), e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+    const phi1 = mu + (3 * e1 / 2 - 27 * e1 ** 3 / 32) * Math.sin(2 * mu) + (21 * e1 * e1 / 16 - 55 * e1 ** 4 / 32) * Math.sin(4 * mu) + (151 * e1 ** 3 / 96) * Math.sin(6 * mu) + (1097 * e1 ** 4 / 512) * Math.sin(8 * mu);
+    const sin = Math.sin(phi1), cos = Math.cos(phi1), tan = Math.tan(phi1), C1 = ep2 * cos * cos, T1 = tan * tan;
+    const N1 = a / Math.sqrt(1 - e2 * sin * sin), R1 = a * (1 - e2) / Math.pow(1 - e2 * sin * sin, 1.5), D = X / (N1 * K0);
+    const lat = phi1 - (N1 * tan / R1) * (D * D / 2 - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * D ** 4 / 24 + (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * ep2 - 3 * C1 * C1) * D ** 6 / 720);
+    const lon = (cm * D2R) + (D - (1 + 2 * T1 + C1) * D ** 3 / 6 + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * D ** 5 / 120) / cos;
+    return { lat: lat / D2R, lon: lon / D2R };
+  }
+
+  // ── 輸出 ────────────────────────────────────────────────────────────────
+  // 回傳新的 D14 位元組：只改動 REF=0 且被移動的點的 COT_Y/COT_X。
+  function exportD14(pts, ds) {
+    const out = new Uint8Array(pts.u8); let n = 0;
+    for (const p of movedPoints(ds)) {
+      if (p.row == null) continue;
+      patchDbfNumber(out, pts, p.row, 'COT_Y', p.y); patchDbfNumber(out, pts, p.row, 'COT_X', p.x); n++;
+    }
+    return { bytes: out, changed: n };
+  }
+  // 供 AI/外部程式讀取的中繼資料（JSON，自帶欄位說明）
+  function exportSession(ds, extra = {}, sv = null) {
+    return {
+      format: 'cadastral-workbench/session@1',
+      description: '地籍圖調整工作階段。y=縱坐標(北), x=橫坐標(東), 單位公尺, TWD97。area 單位 m²。',
+      crs: 'EPSG:3826', source: ds.source,
+      points_moved: movedPoints(ds).map(p => ({ id: p.id, from: { y: p.y0, x: p.x0 }, to: { y: p.y, x: p.x }, shift_m: Math.hypot(p.y - p.y0, p.x - p.x0) })),
+      parcels_changed: ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > CHG).map(p => ({
+        label: p.label, old_label: p.oldLabel, key: p.key, area_before: p.areaOrig, area_after: p.area,
+        delta: p.area - p.areaOrig, area_ref: p.areaRef, delta_vs_ref: p.areaRef == null ? null : p.area - p.areaRef })),
+      survey_points: sv ? [...sv.points.values()].map(p => ({ name: p.name, y: p.y, x: p.x, h: p.h, code: p.code })) : [],
+      reference_lines: sv ? sv.lines.map(l => ({ name: l.name, points: l.points, closed: l.closed, ...lineStats(sv, l) })) : [],
+      ...extra,
+    };
+  }
+
+  return { parseDbf, patchDbfNumber, datasetFromD, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
+    xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon,
+    newSurvey, addSurveyPoints, addLine, lineStats };
+})();
+if (typeof module !== 'undefined') module.exports = Core;
+
+</script>
+<script>
+/* app.js — 介面與互動。UI 與 AI/外部橋接共用同一組操作函式（見檔尾 CadastralAPI）。 */
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const cv = $('cv'); let ctx = cv.getContext('2d');
+const NL = String.fromCharCode(10);
+
+const S = {
+  ds: null, ref: null, dbf: { pts: null }, names: {},
+  survey: Core.newSurvey(),                // 現況點與手動參考線
+  controls: new Map(),                     // 已知點庫：控制點(CTL/D20)、補點(CT2)…  name → {name,y,x,src}
+  view: { cx: 0, cy: 0, s: 1 },           // cx=東, cy=北, s=像素/公尺
+  sel: { pt: new Set(), edge: new Set(), par: new Set() },
+  filter: { pt: true, edge: true, par: true },
+  tool: 'select', hover: null, undo: [], redo: [], drag: null, box: null, space: false,
+  pivot: null,                             // 自訂旋轉樞紐 {y,x}；null=選取範圍/全圖中心
+  align: null,                             // 兩點對位狀態 {step, pts:[]}
+  draft: null,                             // 正在連的參考線 {names:[]}
+  cursor: null,                            // 滑鼠世界座標（橡皮筋線用）
+  basemap: { provider: 'none', opacity: 0.9, cm: 121 },   // 底圖（需 TWD97）
+  printing: false,
+};
+
+// ── 座標轉換 ───────────────────────────────────────────────────────────────
+let W = 0, H = 0, DPR = 1;
+const toSx = x => (x - S.view.cx) * S.view.s + W / 2;
+const toSy = y => H / 2 - (y - S.view.cy) * S.view.s;
+const toWx = sx => (sx - W / 2) / S.view.s + S.view.cx;
+const toWy = sy => (H / 2 - sy) / S.view.s + S.view.cy;
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  const r = cv.getBoundingClientRect(); W = r.width; H = r.height;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); draw();
+}
+new ResizeObserver(resize).observe(cv);
+
+// ── 選取 ───────────────────────────────────────────────────────────────────
+const selCount = () => S.sel.pt.size + S.sel.edge.size + S.sel.par.size;
+function clearSel() { S.sel.pt.clear(); S.sel.edge.clear(); S.sel.par.clear(); }
+function effectiveIds() {
+  const ids = new Set(S.sel.pt);
+  if (!S.ds) return ids;
+  for (const k of S.sel.edge) { const e = S.ds.edges.get(k); if (e) { ids.add(e.a); ids.add(e.b); } }
+  for (const i of S.sel.par) for (const id of S.ds.parcels[i].ids) ids.add(id);
+  return ids;
+}
+const isSel = h => h && S.sel[h.t].has(h.k);
+function addSel(h) { S.sel[h.t].add(h.k); }
+function toggleSel(h) { const s = S.sel[h.t]; s.has(h.k) ? s.delete(h.k) : s.add(h.k); }
+
+// ── 命中測試 ───────────────────────────────────────────────────────────────
+function nearestPoint(map, wx, wy, r) {
+  let best = null, bd = r;
+  for (const p of map.values()) { const d = Math.hypot(p.x - wx, p.y - wy); if (d < bd) { bd = d; best = p; } }
+  return best;
+}
+function hitTest(mx, my) {
+  const ds = S.ds; if (!ds) return null;
+  const wx = toWx(mx), wy = toWy(my), px = 1 / S.view.s;
+  if (S.filter.pt) { const b = nearestPoint(ds.points, wx, wy, 9 * px); if (b) return { t: 'pt', k: b.id }; }
+  if (S.filter.edge) {
+    let best = null, bd = 6 * px;
+    for (const e of ds.edges.values()) {
+      const a = ds.points.get(e.a), b = ds.points.get(e.b);
+      const d = Core.distToSeg(wx, wy, a.x, a.y, b.x, b.y);
+      if (d < bd) { bd = d; best = e; }
+    }
+    if (best) return { t: 'edge', k: best.key };
+  }
+  if (S.filter.par) {
+    let best = null, ba = Infinity;
+    for (const p of ds.parcels) if (p.area < ba && Core.pointInRing(p.ids, ds.points, wy, wx)) { ba = p.area; best = p; }
+    if (best) return { t: 'par', k: best.idx };
+  }
+  return null;
+}
+const hitSurvey = (mx, my) => { const b = nearestPoint(S.survey.points, toWx(mx), toWy(my), 10 / S.view.s); return b ? { t: 'sp', k: b.name } : null; };
+function boxSelect(x0, y0, x1, y1, add) {
+  const ds = S.ds; if (!ds) return;
+  if (!add) clearSel();
+  const [ex0, ex1] = [Math.min(toWx(x0), toWx(x1)), Math.max(toWx(x0), toWx(x1))];
+  const [ny0, ny1] = [Math.min(toWy(y0), toWy(y1)), Math.max(toWy(y0), toWy(y1))];
+  const inside = id => { const p = ds.points.get(id); return p.x >= ex0 && p.x <= ex1 && p.y >= ny0 && p.y <= ny1; };
+  if (S.filter.pt) for (const p of ds.points.values()) if (inside(p.id)) S.sel.pt.add(p.id);
+  if (S.filter.edge) for (const e of ds.edges.values()) if (inside(e.a) && inside(e.b)) S.sel.edge.add(e.key);
+  if (S.filter.par) for (const p of ds.parcels) if (p.ids.every(inside)) S.sel.par.add(p.idx);
+}
+
+// ── 編輯（含復原）：undo 項目為 {before,after}（點位）或 {undoFn,redoFn}（其他）────
+const snapshot = ids => [...ids].map(id => { const p = S.ds.points.get(id); return [id, p.y, p.x]; });
+function pushUndo(e) { S.undo.push(e); if (S.undo.length > 500) S.undo.shift(); S.redo.length = 0; refresh(); }
+function commit(before, after, label) {
+  if (before.every((b, i) => b[1] === after[i][1] && b[2] === after[i][2])) return;
+  pushUndo({ before, after, label });
+}
+const layerMode = () => S.tool === 'layer' && !selCount();   // 移圖工具且無選取 → 對象是整個作業圖層
+const moveIds = () => (layerMode() ? new Set(S.ds.points.keys()) : effectiveIds());
+const pivotOf = ids => S.pivot || Core.centroidOf(S.ds.points, ids);
+function transformSelection(T, label) {
+  if (!S.ds) return false; const ids = moveIds(); if (!ids.size) return false;
+  const before = snapshot(ids); Core.transformPoints(S.ds, ids, T); commit(before, snapshot(ids), label); return true;
+}
+function moveSelection(dy, dx, label = '移動') {
+  if (!S.ds || !(selCount() || layerMode())) return false;
+  return transformSelection({ dy, dx, angle: 0 }, layerMode() ? '整圖平移' : label);
+}
+function rotateSelection(deg) {
+  if (!S.ds) return false; const ids = moveIds(); if (!ids.size) return false;
+  return transformSelection({ angle: deg * Math.PI / 180, pivot: pivotOf(ids) }, '旋轉');
+}
+function applyEntries(entries) { if (!S.ds) return; Core.setPoints(S.ds, entries); }
+function undo() { const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); refresh(); }
+function redo() { const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); refresh(); }
+function resetAll() { if (!S.ds) return; Core.resetAll(S.ds); S.undo.length = 0; S.redo.length = 0; refresh(); }
+
+// ── 現況點與參考線 ─────────────────────────────────────────────────────────
+function addSurveyPoints(pts) {
+  const names = Core.addSurveyPoints(S.survey, pts);
+  pushUndo({ undoFn: () => names.forEach(n => S.survey.points.delete(n)), redoFn: () => pts.forEach((p, i) => S.survey.points.set(names[i], { name: names[i], y: p.y, x: p.x, h: p.h, code: p.code })) });
+  return names;
+}
+function addLine(names, opt) {
+  const ln = Core.addLine(S.survey, names, opt); if (!ln) return null;
+  pushUndo({ undoFn: () => { S.survey.lines = S.survey.lines.filter(l => l !== ln); }, redoFn: () => S.survey.lines.push(ln) });
+  return ln;
+}
+function deleteLine(id) {
+  const i = S.survey.lines.findIndex(l => l.id === id); if (i < 0) return false; const [ln] = S.survey.lines.splice(i, 1);
+  pushUndo({ undoFn: () => S.survey.lines.splice(i, 0, ln), redoFn: () => { S.survey.lines = S.survey.lines.filter(l => l !== ln); } }); return true;
+}
+function clearSurvey() {
+  const pts = [...S.survey.points.entries()], lines = [...S.survey.lines];
+  S.survey.points.clear(); S.survey.lines = []; S.draft = null;
+  pushUndo({ undoFn: () => { pts.forEach(([k, v]) => S.survey.points.set(k, v)); S.survey.lines = lines; }, redoFn: () => { S.survey.points.clear(); S.survey.lines = []; } });
+}
+function finishDraft(closed) {
+  const d = S.draft; S.draft = null;
+  if (d && d.names.length >= 2) { const ln = addLine(d.names, { closed }); if (ln) msg(`已建立 ${ln.name}（${ln.points.length} 點${closed ? '，閉合' : ''}）`); }
+  refresh();
+}
+// 匯入：kind='xy'（點號,N,E）或 'polar'（測站觀測）。回傳 {added, skipped, ...}
+function importSurvey(kind, text, o = {}) {
+  let pts, skipped;
+  if (kind === 'polar') {
+    const { obs, skipped: sk } = Core.parseObservations(text, { angleFmt: o.angleFmt || 'auto' }); skipped = sk;
+    const station = { y: Number(o.station.y), x: Number(o.station.x) };
+    let backAz = o.backAz != null && o.backAz !== '' ? (typeof o.backAz === 'number' ? o.backAz : Core.parseAngle(o.backAz, 'auto')) : NaN;
+    if (Number.isNaN(backAz) && o.backPoint) backAz = Core.azimuth(station, { y: Number(o.backPoint.y), x: Number(o.backPoint.x) });
+    if ([station.y, station.x, backAz].some(Number.isNaN)) throw new Error('極座標需要測站坐標與後視方位角（或後視點坐標）');
+    pts = Core.polarReduce({ station, backAz, obs, slope: o.slope !== false });
+  } else { const r = Core.parsePoints(text, { order: o.order || 'auto' }); pts = r.points; skipped = r.skipped; }
+  if (!pts.length) throw new Error('沒有可匯入的點');
+  const names = addSurveyPoints(pts);
+  if (o.fit !== false) fit(surveyBounds());
+  return { added: names.length, names, skipped };
+}
+// 已知點庫（MAC 化算的起算依據）。同名點以後匯入者覆蓋並提示。
+function addControls(points, src) {
+  const prev = new Map(), added = []; let replaced = 0, conflicts = 0;
+  for (const p of points) {
+    if (S.controls.has(p.name)) { const o = S.controls.get(p.name); prev.set(p.name, o); replaced++; if (Math.hypot(o.y - p.y, o.x - p.x) > 0.001) conflicts++; }
+    S.controls.set(p.name, { name: p.name, y: p.y, x: p.x, src }); added.push(p.name);
+  }
+  pushUndo({ undoFn: () => added.forEach(n => (prev.has(n) ? S.controls.set(n, prev.get(n)) : S.controls.delete(n))), redoFn: () => points.forEach(p => S.controls.set(p.name, { name: p.name, y: p.y, x: p.x, src })) });
+  return { added: added.length, replaced, conflicts };
+}
+function clearControls() {
+  const snap = new Map(S.controls); S.controls.clear();
+  pushUndo({ undoFn: () => snap.forEach((v, k) => S.controls.set(k, v)), redoFn: () => S.controls.clear() });
+}
+const knownPoints = () => { const m = new Map(); for (const p of S.controls.values()) m.set(p.name, p); for (const p of S.survey.points.values()) if (!m.has(p.name)) m.set(p.name, p); return m; };
+function macPlan(text) {
+  const { blocks, skipped } = Core.parseMac(text), res = Core.reduceMac(blocks, knownPoints());
+  return { blocks, skipped, ...res, maxCheck: res.checks.reduce((a, c) => Math.max(a, Math.abs(c.diff)), 0) };
+}
+// MAC 匯入：必須先有已知點（CTL 控制點／CT2 補點／D20…）。測站或後視無坐標的段落不化算，並回報缺哪些點。
+function importMac(text, o = {}) {
+  if (!S.controls.size && !S.survey.points.size) throw new Error('MAC 是相對觀測，請先匯入控制點（CTL）與補點（CT2）或 D20 控制點檔');
+  const plan = macPlan(text);
+  if (!plan.blocks.length) throw new Error('找不到測站段落（格式：「測站 後視」一行，接「點號 水平角 距離」）');
+  if (!plan.points.length) throw new Error('沒有可化算的點：' + plan.unresolved.map(u => `測站 ${u.station} 缺 ${u.missing.join('、')}`).join('；'));
+  const names = addSurveyPoints(plan.points);
+  if (o.fit !== false && S.survey.points.size) fit(surveyBounds());
+  return { added: names.length, names, unresolved: plan.unresolved, checks: plan.checks, max_check_diff: plan.maxCheck, stations: plan.stations };
+}
+function controlsBounds() {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of S.controls.values()) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+  return { x0: x0 - 5, x1: x1 + 5, y0: y0 - 5, y1: y1 + 5 };
+}
+function surveyBounds() {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of S.survey.points.values()) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+  return { x0: x0 - 2, x1: x1 + 2, y0: y0 - 2, y1: y1 + 2 };
+}
+
+// ── 兩點對位 ───────────────────────────────────────────────────────────────
+const ALIGN_HINT = [
+  '對位 1/4：點選【新圖】上要移動的第一點 A', '對位 2/4：點選目標位置 A′（舊圖點、現況點，或圖上任一處）',
+  '對位 3/4：點選【新圖】第二點 B（或按 Enter 只做平移）', '對位 4/4：點選目標位置 B′',
+];
+function startAlign() { if (!S.ds) return msg('請先載入圖資'); S.align = { step: 0, pts: [] }; setHint(ALIGN_HINT[0] + '　(Esc 取消)'); draw(); }
+function cancelAlign() { S.align = null; setHint(''); draw(); }
+function alignPick(mx, my) {
+  const a = S.align, wx = toWx(mx), wy = toWy(my), r = 10 / S.view.s; let pt = null;
+  if (a.step % 2 === 0) { const b = nearestPoint(S.ds.points, wx, wy, r); if (!b) return msg('請點選新圖的界址點'); pt = { y: b.y, x: b.x }; }
+  else {
+    const cands = [S.survey.points, S.ref && S.ref.points].filter(Boolean); let b = null;
+    for (const m of cands) { b = b || nearestPoint(m, wx, wy, r); }
+    pt = b ? { y: b.y, x: b.x } : { y: wy, x: wx };
+  }
+  a.pts.push(pt); a.step++;
+  if (a.step === 4) return finishAlign();
+  setHint(ALIGN_HINT[a.step] + '　(Esc 取消)'); draw();
+}
+function finishAlign() {
+  const a = S.align; if (!a) return;
+  const [A, A2, B, B2] = a.pts; S.align = null; setHint('');
+  const ids = selCount() ? effectiveIds() : new Set(S.ds.points.keys());
+  if (a.pts.length >= 4) {
+    const f = Core.twoPointFit(A, B, A2, B2), deg = f.angle * 180 / Math.PI;
+    transformSelectionIds(ids, f.T, '兩點對位');
+    msg(`對位完成：旋轉 ${deg.toFixed(4)}°（逆時針為正），平移 ${Math.hypot(f.T.dy, f.T.dx).toFixed(3)} m，兩對點距離比 ${f.scale.toFixed(6)}` + (Math.abs(f.scale - 1) > 2e-4 ? '（≠1：兩對點距離不一致，B 點會有殘差）' : ''));
+  } else { transformSelectionIds(ids, { dy: A2.y - A.y, dx: A2.x - A.x, angle: 0 }, '單點對位'); msg('已依第一對點平移'); }
+  refresh();
+}
+function transformSelectionIds(ids, T, label) {
+  const before = snapshot(ids); Core.transformPoints(S.ds, ids, T); commit(before, snapshot(ids), label);
+}
+
+// ── 繪圖 ───────────────────────────────────────────────────────────────────
+const PRINT_PALETTE = { '--edge': '#1d2330', '--ref': '#8a93a6', '--sel': '#1f6feb', '--hover': '#00a3a3', '--changed': 'rgba(255,160,0,.28)', '--bad': '#d1242f', '--survey': '#c2188e', '--ok': '#1a7f37', '--canvas': '#ffffff' };
+const css = n => (S.printing ? PRINT_PALETTE[n] : getComputedStyle(document.documentElement).getPropertyValue(n).trim());
+
+// ── 底圖：OSM／國土測繪中心(NLSC) 電子地圖、正射影像（XYZ 圖磚，以仿射近似貼到 TM2 方格上）────
+const PROVIDERS = {
+  osm: { name: 'OpenStreetMap', max: 19, attr: '© OpenStreetMap contributors', url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png` },
+  emap: { name: 'NLSC 通用版電子地圖', max: 19, attr: '底圖：內政部國土測繪中心 通用版電子地圖', url: (z, x, y) => `https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/${z}/${y}/${x}` },
+  photo: { name: 'NLSC 正射影像', max: 19, attr: '底圖：內政部國土測繪中心 正射影像', url: (z, x, y) => `https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/${z}/${y}/${x}` },
+};
+const tileCache = new Map();
+function getTile(url) {
+  let t = tileCache.get(url);
+  if (!t) {
+    const img = new Image(); t = { img, state: 'loading' }; img.crossOrigin = 'anonymous';
+    img.onload = () => { t.state = 'ok'; draw(); };
+    img.onerror = () => {   // 伺服器未開 CORS 時改以一般方式載入（可顯示、可列印；僅無法輸出 PNG）
+      if (t.retried) { t.state = 'err'; return; } t.retried = true; const i2 = new Image(); t.img = i2;
+      i2.onload = () => { t.state = 'ok'; draw(); }; i2.onerror = () => { t.state = 'err'; }; i2.src = url;
+    };
+    img.src = url; tileCache.set(url, t);
+    if (tileCache.size > 700) tileCache.delete(tileCache.keys().next().value);
+  }
+  return t;
+}
+function tileList(view, w, h) {
+  const pv = PROVIDERS[S.basemap.provider]; if (!pv) return null; const cm = S.basemap.cm;
+  const c = Core.tm2ToLatLon(view.cy, view.cx, cm);
+  let z = Math.round(Math.log2(156543.034 * Math.cos(c.lat * Math.PI / 180) * view.s)); z = Math.max(3, Math.min(pv.max, z));
+  const n = 2 ** z, tx = lon => (lon + 180) / 360 * n, ty = lat => { const r = lat * Math.PI / 180; return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n; };
+  const cs = [[0, 0], [w, 0], [0, h], [w, h]].map(([sx, sy]) => Core.tm2ToLatLon((h / 2 - sy) / view.s + view.cy, (sx - w / 2) / view.s + view.cx, cm));
+  const xs = cs.map(q => tx(q.lon)), ys = cs.map(q => ty(q.lat));
+  const x0 = Math.floor(Math.min(...xs)), x1 = Math.floor(Math.max(...xs)), y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(n - 1, Math.floor(Math.max(...ys)));
+  const tiles = []; if ((x1 - x0 + 1) * (y1 - y0 + 1) > 160) return { z, pv, tiles, cm };
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) tiles.push({ x, y, url: pv.url(z, ((x % n) + n) % n, y) });
+  return { z, pv, tiles, cm };
+}
+const tileCorner = (z, x, y, cm) => { const n = 2 ** z; return Core.latLonToTm2(Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI, x / n * 360 - 180, cm); };
+function drawBasemap() {
+  const tl = tileList(S.view, W, H); if (!tl) return;
+  ctx.save(); ctx.globalAlpha = S.basemap.opacity;
+  for (const t of tl.tiles) {
+    const tile = getTile(t.url); if (tile.state !== 'ok') continue;
+    const nw = tileCorner(tl.z, t.x, t.y, tl.cm), ne = tileCorner(tl.z, t.x + 1, t.y, tl.cm), sw = tileCorner(tl.z, t.x, t.y + 1, tl.cm);
+    const ax = toSx(nw.x), ay = toSy(nw.y);
+    ctx.setTransform(DPR * (toSx(ne.x) - ax) / 256, DPR * (toSy(ne.y) - ay) / 256, DPR * (toSx(sw.x) - ax) / 256, DPR * (toSy(sw.y) - ay) / 256, DPR * ax, DPR * ay);
+    ctx.drawImage(tile.img, 0, 0, 256.7, 256.7);
+  }
+  ctx.restore();
+}
+const waitTiles = async (tl, ms = 9000) => { const t0 = Date.now(); const list = tl ? tl.tiles.map(t => getTile(t.url)) : []; while (list.some(t => t.state === 'loading') && Date.now() - t0 < ms) await new Promise(r => setTimeout(r, 120)); return list.filter(t => t.state === 'ok').length + '/' + list.length; };
+let drawQueued = false;
+function draw() { if (drawQueued) return; drawQueued = true; requestAnimationFrame(() => { drawQueued = false; render(); }); }
+function arcsOf(d) { return d.arcs ? [...d.arcs.values()] : []; }
+function strokeArcs(d, color, w, dash) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.setLineDash(dash || []); ctx.beginPath();
+  for (const ar of arcsOf(d)) {
+    const pts = Core.arcPolyline(d.points.get(ar.a), d.points.get(ar.b), d.points.get(ar.c), 24);
+    pts.forEach((p, i) => i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)));
+  }
+  ctx.stroke(); ctx.setLineDash([]);
+}
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
+  drawBasemap(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const ds = S.ds, sc = S.view.s;
+  const cEdge = css('--edge'), cRef = css('--ref'), cSel = css('--sel'), cHov = css('--hover'), cChg = css('--changed'), cBad = css('--bad'), cSv = css('--survey');
+  const tracePoly = (d, ids) => { ctx.beginPath(); ids.forEach((id, i) => { const p = d.points.get(id); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); }); ctx.closePath(); };
+  // 舊圖
+  if (S.ref && $('chkRef').checked) {
+    ctx.strokeStyle = cRef; ctx.lineWidth = 1; ctx.setLineDash([5, 4]); ctx.beginPath();
+    for (const e of S.ref.edges.values()) { if (e.arcPart) continue; const a = S.ref.points.get(e.a), b = S.ref.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
+    ctx.stroke(); ctx.setLineDash([]); strokeArcs(S.ref, cRef, 1, [5, 4]);
+  }
+  if (ds) {
+    // 已變動宗地底色
+    ctx.fillStyle = cChg;
+    for (const p of ds.parcels) if (Math.abs(p.area - p.areaOrig) > 1e-6) { tracePoly(ds, p.ids); ctx.fill(); }
+    // 選取/懸停宗地
+    ctx.fillStyle = cSel + '33';
+    for (const i of S.sel.par) { tracePoly(ds, ds.parcels[i].ids); ctx.fill(); }
+    if (S.hover && S.hover.t === 'par') { ctx.fillStyle = cHov + '22'; tracePoly(ds, ds.parcels[S.hover.k].ids); ctx.fill(); }
+    // 邊
+    ctx.strokeStyle = cEdge; ctx.lineWidth = 1; ctx.beginPath();
+    for (const e of ds.edges.values()) { if (e.arcPart) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
+    ctx.stroke(); strokeArcs(ds, cEdge, 1);
+    const strokeEdges = (keys, color, w) => { ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath();
+      for (const k of keys) { const e = ds.edges.get(k); if (!e) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); } ctx.stroke(); };
+    strokeEdges(S.sel.edge, cSel, 3);
+    if (S.hover && S.hover.t === 'edge') strokeEdges([S.hover.k], cHov, 3);
+    for (const i of S.sel.par) { ctx.strokeStyle = cSel; ctx.lineWidth = 2; tracePoly(ds, ds.parcels[i].ids); ctx.stroke(); }
+    // 點
+    if (sc > 0.6) {
+      const r = sc > 8 ? 3 : 1.6;
+      for (const p of ds.points.values()) {
+        const sx = toSx(p.x), sy = toSy(p.y); if (sx < -5 || sy < -5 || sx > W + 5 || sy > H + 5) continue;
+        ctx.fillStyle = Core.isMoved(p) ? cBad : cEdge; ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
+      }
+    }
+    const eff = selCount() ? effectiveIds() : [];
+    ctx.fillStyle = cSel; for (const id of eff) { const p = ds.points.get(id); if (!p) continue; ctx.fillRect(toSx(p.x) - 4, toSy(p.y) - 4, 8, 8); }
+    if (S.hover && S.hover.t === 'pt') { const p = ds.points.get(S.hover.k); ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.strokeRect(toSx(p.x) - 6, toSy(p.y) - 6, 12, 12); }
+    // 標註
+    if ($('chkLabel').checked) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      if (sc > 1.2) {
+        ctx.font = `${Math.min(15, Math.max(9, sc * 1.6))}px sans-serif`; ctx.fillStyle = cEdge;
+        for (const p of ds.parcels) {
+          const c = Core.centroidOf(ds.points, p.ids), sx = toSx(c.x), sy = toSy(c.y); if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
+          ctx.fillText(p.label, sx, sy);
+        }
+      }
+      // 圖上面積較差：有變動或已選取的宗地，在地號下方標示 Δ（紅=超過警示值）
+      if ($('chkDelta').checked && sc > 0.25) {
+        const mode = $('deltaMode').value, tol = parseFloat($('tol').value) || 0, bg = css('--canvas');
+        ctx.font = `bold ${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.textAlign = 'center'; ctx.lineJoin = 'round'; ctx.lineWidth = 3;
+        for (const p of ds.parcels) {
+          const changed = Math.abs(p.area - p.areaOrig) > 1e-6;
+          if (!changed && !S.sel.par.has(p.idx)) continue;
+          const base = mode === 'reg' ? p.areaReg : p.areaOrig; if (base == null) continue;
+          const d = p.area - base, c = Core.centroidOf(ds.points, p.ids);
+          const sx = toSx(c.x), sy = toSy(c.y) + Math.min(15, Math.max(9, sc * 1.6)) + 1; if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
+          const t = (d >= 0 ? '+' : '') + d.toFixed(2);
+          ctx.strokeStyle = bg; ctx.strokeText(t, sx, sy); ctx.fillStyle = Math.abs(d) > tol ? cBad : css('--ok'); ctx.fillText(t, sx, sy);
+        }
+      }
+      if (sc > 14) {
+        ctx.font = '10px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = cRef;
+        for (const p of ds.points.values()) { const sx = toSx(p.x), sy = toSy(p.y); if (sx > 0 && sy > 0 && sx < W && sy < H) ctx.fillText(p.id, sx + 5, sy - 5); }
+      }
+    }
+  }
+  // 現況點與參考線
+  const sv = S.survey;
+  if (sv.lines.length) {
+    for (const ln of sv.lines) {
+      ctx.beginPath(); ln.points.forEach((n, i) => { const p = sv.points.get(n); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); });
+      if (ln.closed) { ctx.closePath(); ctx.fillStyle = cSv + '22'; ctx.fill(); }
+      ctx.strokeStyle = cSv; ctx.lineWidth = 2; ctx.stroke();
+    }
+  }
+  if (S.draft && S.draft.names.length) {
+    ctx.strokeStyle = cSv; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.beginPath();
+    S.draft.names.forEach((n, i) => { const p = sv.points.get(n); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); });
+    if (S.cursor) ctx.lineTo(toSx(S.cursor.x), toSy(S.cursor.y)); ctx.stroke(); ctx.setLineDash([]);
+  }
+  if (sv.points.size) {
+    const showName = $('chkLabel').checked && sc > 1.5, inDraft = S.draft ? new Set(S.draft.names) : new Set();
+    ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    for (const p of sv.points.values()) {
+      const sx = toSx(p.x), sy = toSy(p.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue;
+      ctx.fillStyle = inDraft.has(p.name) ? cSel : cSv; ctx.beginPath(); ctx.moveTo(sx, sy - 5); ctx.lineTo(sx + 5, sy); ctx.lineTo(sx, sy + 5); ctx.lineTo(sx - 5, sy); ctx.closePath(); ctx.fill();
+      if (showName) { ctx.fillStyle = cSv; ctx.fillText(p.name, sx + 8, sy - 6); }
+    }
+    if (S.hover && S.hover.t === 'sp') { const p = sv.points.get(S.hover.k); if (p) { ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(toSx(p.x), toSy(p.y), 9, 0, 7); ctx.stroke(); } }
+  }
+  // 控制點／補點（綠色三角形）
+  if (S.controls.size) {
+    const cOk = css('--ok'), showName = $('chkLabel').checked && sc > 0.8;
+    ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    for (const p of S.controls.values()) {
+      const sx = toSx(p.x), sy = toSy(p.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue;
+      ctx.fillStyle = cOk; ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 5.5, sy + 4); ctx.lineTo(sx - 5.5, sy + 4); ctx.closePath(); ctx.fill();
+      if (showName) ctx.fillText(p.name, sx + 8, sy - 5);
+    }
+  }
+  // 旋轉樞紐
+  if (ds && (S.tool === 'layer' || selCount())) {
+    const pv = S.pivot || Core.centroidOf(ds.points, moveIds()), sx = toSx(pv.x), sy = toSy(pv.y);
+    ctx.strokeStyle = cBad; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(sx - 9, sy); ctx.lineTo(sx + 9, sy); ctx.moveTo(sx, sy - 9); ctx.lineTo(sx, sy + 9); ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx, sy, 5, 0, 7); ctx.stroke();
+  }
+  // 兩點對位標記
+  if (S.align) {
+    const labels = ['A', 'A′', 'B', 'B′']; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    S.align.pts.forEach((p, i) => {
+      const sx = toSx(p.x), sy = toSy(p.y); ctx.strokeStyle = i % 2 ? cSv : cBad; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 8, 0, 7); ctx.stroke();
+      ctx.fillStyle = ctx.strokeStyle; ctx.fillText(labels[i], sx + 14, sy - 10);
+    });
+  }
+  // 底圖版權
+  if (S.basemap.provider !== 'none') { const t = PROVIDERS[S.basemap.provider].attr; ctx.font = '10px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'; const tw = ctx.measureText(t).width;
+    ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillRect(W - tw - 10, H - 15, tw + 8, 13); ctx.fillStyle = '#333'; ctx.fillText(t, W - 6, H - 3); }
+  // 框選
+  if (S.box) {
+    ctx.fillStyle = cSel + '22'; ctx.strokeStyle = cSel; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    const { x0, y0, x1, y1 } = S.box; ctx.fillRect(x0, y0, x1 - x0, y1 - y0); ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.setLineDash([]);
+  }
+}
+
+// ── 面板 ───────────────────────────────────────────────────────────────────
+const f2 = v => v == null ? '—' : v.toFixed(2);
+const sgn = v => (v >= 0 ? '+' : '') + v.toFixed(2);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let panelQueued = false;
+function refresh() { if (panelQueued) return; panelQueued = true; requestAnimationFrame(() => { panelQueued = false; panel(); draw(); }); }
+function setHint(t) { const h = $('hint'); h.textContent = t; h.style.display = t ? 'block' : 'none'; }
+function lineList() {
+  const sv = S.survey;
+  $('svInfo').textContent = sv.points.size ? `現況點 ${sv.points.size} 個，參考線 ${sv.lines.length} 條` : '尚未匯入現況點';
+  $('lineList').innerHTML = sv.lines.map(l => {
+    const st = Core.lineStats(sv, l);
+    return `<tr data-id="${l.id}"><td><input type="text" class="lname" value="${esc(l.name)}" style="width:92px"></td><td>${l.points.length}</td><td>${st.length.toFixed(2)}</td>` +
+      `<td>${st.area == null ? '—' : st.area.toFixed(2)}</td><td><label class="chk"><input type="checkbox" class="lclosed" ${l.closed ? 'checked' : ''}>閉</label></td><td><button class="btn lzoom">看</button> <button class="btn ldel">刪</button></td></tr>`;
+  }).join('');
+}
+function panel() {
+  const ds = S.ds;
+  $('btnUndo').disabled = !S.undo.length; $('btnRedo').disabled = !S.redo.length;
+  $('btnReset').disabled = !ds || !Core.movedPoints(ds).length;
+  $('btnExpD14').disabled = !ds || !S.dbf.pts || !Core.movedPoints(ds).length;
+  $('btnExpJson').disabled = !ds && !S.survey.points.size;
+  $('drop').style.display = (ds || S.survey.points.size) ? 'none' : 'flex';
+  lineList();
+  const srcs = [...new Set([...S.controls.values()].map(p => p.src))];
+  $('ctlInfo').textContent = S.controls.size ? `已知點 ${S.controls.size} 個（${srcs.join('、')}）` : '尚未匯入控制點 — 匯入 MAC 前需先匯入 CTL／CT2（或載入含 D20 的案件）';
+  $('btnCtlClear').disabled = !S.controls.size;
+  if (!ds) { $('selInfo').textContent = '尚未載入圖資'; return; }
+  // 選取摘要
+  const ids = effectiveIds(), parts = [];
+  if (S.sel.pt.size) parts.push(`${S.sel.pt.size} 點`); if (S.sel.edge.size) parts.push(`${S.sel.edge.size} 線`); if (S.sel.par.size) parts.push(`${S.sel.par.size} 面`);
+  let info = layerMode() ? `移圖模式：拖曳畫面、方向鍵或 ΔN/ΔE 會平移整張新圖（${ds.points.size} 點），Shift+拖曳為旋轉，舊圖不動` : parts.length ? `已選 ${parts.join('、')}，連動 ${ids.size} 個界址點` : '尚未選取（點擊或框選）';
+  if (S.sel.pt.size === 1 && !S.sel.edge.size && !S.sel.par.size) { const p = ds.points.get([...S.sel.pt][0]); info += NL + `點 ${p.id}　N ${p.y.toFixed(3)}　E ${p.x.toFixed(3)}`; }
+  if (S.sel.edge.size === 1 && !S.sel.pt.size && !S.sel.par.size) { const e = ds.edges.get([...S.sel.edge][0]), a = ds.points.get(e.a), b = ds.points.get(e.b); info += NL + `線 ${e.a}–${e.b}　長 ${Math.hypot(a.x - b.x, a.y - b.y).toFixed(3)} m`; }
+  $('selInfo').innerHTML = info.split(NL).map(s => `<div>${s}</div>`).join('');
+  $('pivotInfo').textContent = S.pivot ? `樞紐：N ${S.pivot.y.toFixed(3)}  E ${S.pivot.x.toFixed(3)}（自訂）` : '樞紐：移動對象的中心（Alt+點擊可自訂）';
+  // 較差表
+  const scope = document.querySelector('input[name=scope]:checked').value, tol = parseFloat($('tol').value) || 0;
+  const touched = new Set(); for (const id of ids) for (const pi of ds.pointParcels.get(id) || []) touched.add(pi);
+  for (const i of S.sel.par) touched.add(i);
+  const rows = scope === 'selected' ? [...touched] : ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).map(p => p.idx);
+  for (const i of S.sel.par) if (!rows.includes(i)) rows.push(i);
+  rows.sort((a, b) => Math.abs(ds.parcels[b].area - ds.parcels[b].areaOrig) - Math.abs(ds.parcels[a].area - ds.parcels[a].areaOrig));
+  const cls = d => (Math.abs(d) > tol ? 'neg' : 'pos');
+  $('tbody').innerHTML = rows.slice(0, 300).map(i => {
+    const p = ds.parcels[i], d1 = p.area - p.areaOrig, d2 = p.areaReg == null ? null : p.area - p.areaReg;
+    return `<tr data-i="${i}" class="${S.sel.par.has(i) ? 'sel' : ''}${d2 != null && Math.abs(d2) > tol ? ' warn' : ''}"><td>${p.label}</td><td>${f2(p.areaReg)}</td><td>${f2(p.areaOrig)}</td><td>${f2(p.area)}</td>` +
+      `<td class="${cls(d1)}">${sgn(d1)}</td><td class="${d2 == null ? '' : cls(d2)}">${d2 == null ? '—' : sgn(d2)}</td></tr>`;
+  }).join('');
+  const changed = ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6), tot = changed.reduce((s, p) => s + (p.area - p.areaOrig), 0);
+  $('sumInfo').textContent = `共 ${changed.length} 宗地號面積有變動，合計 ${sgn(tot)} m²；已移動 ${Core.movedPoints(ds).length} 個界址點。` + (rows.length > 300 ? '（表格只列前 300 筆）' : '');
+  $('layerInfo').innerHTML = `<div>作業圖層：${ds.source}（${ds.points.size} 點／${ds.edges.size} 線／${ds.parcels.length} 面）</div>` +
+    (S.ref ? `<div>舊圖參考：${S.ref.source}（${S.ref.parcels.length} 面）</div>` : '<div>舊圖參考：無</div>') +
+    `<div class="muted">檔案：${Object.values(S.names).join('、')}</div>` + (ds.arcs && ds.arcs.size ? `<div class="muted">含 ${ds.arcs.size} 段圓弧（面積已依弧線計算）</div>` : '');
+}
+$('tbody').addEventListener('click', e => {
+  const tr = e.target.closest('tr'); if (!tr) return;
+  const i = +tr.dataset.i; clearSel(); S.sel.par.add(i); zoomTo([i]); refresh();
+});
+$('lineList').addEventListener('click', e => {
+  const tr = e.target.closest('tr'); if (!tr) return; const id = +tr.dataset.id, ln = S.survey.lines.find(l => l.id === id); if (!ln) return;
+  if (e.target.classList.contains('ldel')) { deleteLine(id); }
+  else if (e.target.classList.contains('lzoom')) { let b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }; for (const n of ln.points) { const p = S.survey.points.get(n); b = { x0: Math.min(b.x0, p.x), x1: Math.max(b.x1, p.x), y0: Math.min(b.y0, p.y), y1: Math.max(b.y1, p.y) }; } fit({ x0: b.x0 - 2, x1: b.x1 + 2, y0: b.y0 - 2, y1: b.y1 + 2 }); }
+});
+$('lineList').addEventListener('change', e => {
+  const tr = e.target.closest('tr'); if (!tr) return; const ln = S.survey.lines.find(l => l.id === +tr.dataset.id); if (!ln) return;
+  if (e.target.classList.contains('lname')) ln.name = e.target.value; if (e.target.classList.contains('lclosed')) ln.closed = e.target.checked; refresh();
+});
+
+// ── 檢視 ───────────────────────────────────────────────────────────────────
+function fit(box) {
+  let b = box;
+  if (!b) {
+    b = S.ds ? Core.bounds(S.ds) : null;
+    if (S.survey.points.size) { const s = surveyBounds(); b = b ? { x0: Math.min(b.x0, s.x0), x1: Math.max(b.x1, s.x1), y0: Math.min(b.y0, s.y0), y1: Math.max(b.y1, s.y1) } : s; }
+  }
+  if (!b || !isFinite(b.x0)) return;
+  const w = Math.max(b.x1 - b.x0, 1), h = Math.max(b.y1 - b.y0, 1);
+  S.view.s = Math.min(W / w, H / h) * 0.9; S.view.cx = (b.x0 + b.x1) / 2; S.view.cy = (b.y0 + b.y1) / 2; draw();
+}
+function zoomTo(parIdx) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const i of parIdx) for (const id of S.ds.parcels[i].ids) { const p = S.ds.points.get(id); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+  fit({ x0: x0 - 3, x1: x1 + 3, y0: y0 - 3, y1: y1 + 3 });
+}
+cv.addEventListener('wheel', e => {
+  e.preventDefault(); const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const wx = toWx(mx), wy = toWy(my), k = Math.exp(-e.deltaY * 0.0015);
+  S.view.s = Math.min(2000, Math.max(0.02, S.view.s * k)); S.view.cx = wx - (mx - W / 2) / S.view.s; S.view.cy = wy + (my - H / 2) / S.view.s; draw();
+}, { passive: false });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+// ── 滑鼠互動 ───────────────────────────────────────────────────────────────
+const pos = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+cv.addEventListener('pointerdown', e => {
+  cv.setPointerCapture(e.pointerId); const [mx, my] = pos(e);
+  if (e.button === 1 || e.button === 2 || S.tool === 'pan' || S.space) { S.drag = { kind: 'pan', mx, my, cx: S.view.cx, cy: S.view.cy }; return; }
+  if (e.button !== 0) return;
+  if (S.align) { alignPick(mx, my); return; }
+  if (S.tool === 'line') {
+    const h = hitSurvey(mx, my); if (!h) return;
+    if (!S.draft) S.draft = { names: [h.k] };
+    else if (S.draft.names.length >= 3 && h.k === S.draft.names[0]) { finishDraft(true); return; }
+    else if (S.draft.names[S.draft.names.length - 1] !== h.k) S.draft.names.push(h.k);
+    setHint(`連線中：已選 ${S.draft.names.length} 點。繼續點選；Enter 完成、點回第一點閉合、Backspace 退一點、Esc 取消`); refresh(); return;
+  }
+  if (!S.ds) return;
+  if (e.altKey) { S.pivot = { y: toWy(my), x: toWx(mx) }; refresh(); return; }
+  if (layerMode()) {
+    const ids = moveIds(), pv = pivotOf(ids), wx = toWx(mx), wy = toWy(my);
+    S.drag = { kind: 'move', mx, my, wx, wy, before: snapshot(ids), moved: false, hit: null, toggleOff: false, rot: e.shiftKey, pv, a0: Math.atan2(wy - pv.y, wx - pv.x) }; return;
+  }
+  const h = hitTest(mx, my), add = e.shiftKey || e.ctrlKey;
+  if (h) {
+    let toggleOff = false;
+    if (isSel(h)) toggleOff = add; else { if (!add) clearSel(); addSel(h); }
+    S.drag = { kind: 'move', mx, my, wx: toWx(mx), wy: toWy(my), before: snapshot(effectiveIds()), moved: false, hit: h, toggleOff };
+  } else { if (!add) clearSel(); S.drag = { kind: 'box', mx, my, add }; }
+  refresh();
+});
+cv.addEventListener('pointermove', e => {
+  const [mx, my] = pos(e), d = S.drag;
+  S.cursor = { y: toWy(my), x: toWx(mx) };
+  { const ll = Core.tm2ToLatLon(S.cursor.y, S.cursor.x, S.basemap.cm); $('stCoord').textContent = `N ${S.cursor.y.toFixed(3)}　E ${S.cursor.x.toFixed(3)}　(${ll.lat.toFixed(6)}°, ${ll.lon.toFixed(6)}°)`; }
+  $('stScale').textContent = `1 px = ${(1 / S.view.s).toFixed(3)} m`;
+  if (!d) {
+    const h = S.align ? null : S.tool === 'line' ? hitSurvey(mx, my) : S.tool === 'select' && S.ds ? hitTest(mx, my) : null;
+    if (JSON.stringify(h) !== JSON.stringify(S.hover)) { S.hover = h; draw(); }
+    tip(h, e); if (S.draft || S.align) draw(); return;
+  }
+  if (d.kind === 'pan') { S.view.cx = d.cx - (mx - d.mx) / S.view.s; S.view.cy = d.cy + (my - d.my) / S.view.s; draw(); return; }
+  if (d.kind === 'box') { if (Math.hypot(mx - d.mx, my - d.my) > 3) { S.box = { x0: d.mx, y0: d.my, x1: mx, y1: my }; draw(); } return; }
+  if (d.kind === 'move') {
+    if (!d.moved && Math.hypot(mx - d.mx, my - d.my) < 4) return;
+    d.moved = true; const wx = toWx(mx), wy = toWy(my);
+    if (d.rot) {
+      const ang = Math.atan2(wy - d.pv.y, wx - d.pv.x) - d.a0, T = { angle: ang, pivot: d.pv }; d.angle = ang;
+      Core.setPoints(S.ds, d.before.map(([id, y, x]) => { const q = Core.xform({ y, x }, T); return [id, q.y, q.x]; }));
+      setHint(`旋轉 ${(ang * 180 / Math.PI).toFixed(3)}°`);
+    } else { const dx = wx - d.wx, dy = wy - d.wy; Core.setPoints(S.ds, d.before.map(([id, y, x]) => [id, y + dy, x + dx])); }
+    refresh();
+  }
+});
+cv.addEventListener('pointerup', () => {
+  const d = S.drag; S.drag = null; if (!d) return;
+  if (d.kind === 'box') { if (S.box) { boxSelect(S.box.x0, S.box.y0, S.box.x1, S.box.y1, d.add); S.box = null; } refresh(); return; }
+  if (d.kind === 'move') {
+    if (d.moved) commit(d.before, snapshot(new Set(d.before.map(b => b[0]))), d.rot ? '旋轉' : d.hit ? '拖曳' : '整圖平移');
+    else if (d.toggleOff) toggleSel(d.hit);
+    if (d.rot) setHint(''); refresh();
+  }
+});
+cv.addEventListener('dblclick', () => { if (S.tool === 'line' && S.draft) finishDraft(false); });
+function tip(h, e) {
+  const t = $('tip'); if (!h) { t.style.display = 'none'; return; }
+  let s = '';
+  if (h.t === 'sp') { const p = S.survey.points.get(h.k); s = `現況點 ${p.name}\nN ${p.y.toFixed(3)}  E ${p.x.toFixed(3)}` + (p.code ? `\n${p.code}` : ''); }
+  else if (!S.ds) { t.style.display = 'none'; return; }
+  else if (h.t === 'pt') { const p = S.ds.points.get(h.k); s = `點 ${p.id}\nN ${p.y.toFixed(3)}  E ${p.x.toFixed(3)}`; }
+  else if (h.t === 'edge') { const ed = S.ds.edges.get(h.k), a = S.ds.points.get(ed.a), b = S.ds.points.get(ed.b); s = `線 ${ed.a}–${ed.b}\n長 ${Math.hypot(a.x - b.x, a.y - b.y).toFixed(3)} m\n鄰接：${ed.parcels.map(i => S.ds.parcels[i].label).join('、')}`; }
+  else { const p = S.ds.parcels[h.k]; s = `地號 ${p.label}（舊 ${p.oldLabel}）\n面積 ${p.area.toFixed(2)} m²` + (p.areaReg != null ? `\n登記 ${p.areaReg.toFixed(2)} m²` : ''); }
+  const r = cv.getBoundingClientRect(); t.textContent = s; t.style.display = 'block';
+  t.style.left = Math.min(e.clientX - r.left + 14, r.width - 180) + 'px'; t.style.top = (e.clientY - r.top + 14) + 'px';
+}
+
+// ── 鍵盤 ───────────────────────────────────────────────────────────────────
+addEventListener('keydown', e => {
+  if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) && e.key !== 'Escape') return;
+  if ($('impDlg').open) return;
+  const k = e.key;
+  if (k === ' ') { S.space = true; e.preventDefault(); }
+  else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+  else if (k === 'Escape') { if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
+  else if (k === 'Enter') { if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
+  else if (k === 'Backspace' && S.draft) { S.draft.names.pop(); if (!S.draft.names.length) { S.draft = null; setHint(''); } draw(); }
+  else if (k === 'v' || k === 'V') setTool('select'); else if (k === 'h' || k === 'H') setTool('pan'); else if (k === 'm' || k === 'M') setTool('layer'); else if (k === 'l' || k === 'L') setTool('line');
+  else if (k === '1') toggleFilter('pt'); else if (k === '2') toggleFilter('edge'); else if (k === '3') toggleFilter('par');
+  else if (k.startsWith('Arrow') && (selCount() || layerMode())) {
+    e.preventDefault(); const st = parseFloat($('step').value) * (e.shiftKey ? 10 : 1);
+    const dy = k === 'ArrowUp' ? st : k === 'ArrowDown' ? -st : 0, dx = k === 'ArrowRight' ? st : k === 'ArrowLeft' ? -st : 0;
+    moveSelection(dy, dx, '微調');
+  }
+});
+addEventListener('keyup', e => { if (e.key === ' ') S.space = false; });
+
+// ── 工具列 ─────────────────────────────────────────────────────────────────
+function setTool(t) {
+  S.tool = t; if (t !== 'line' && S.draft) { S.draft = null; } if (t !== 'line' && !S.align) setHint('');
+  document.querySelectorAll('#tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+  cv.style.cursor = t === 'pan' ? 'grab' : t === 'layer' ? 'move' : t === 'line' ? 'crosshair' : 'default';
+  if (t === 'line') setHint('連線工具：依序點選現況點（Enter 完成、點回第一點閉合、Backspace 退一點、Esc 取消）'); refresh();
+}
+function toggleFilter(f) { S.filter[f] = !S.filter[f]; document.querySelector(`#filters [data-f=${f}]`).classList.toggle('on', S.filter[f]); }
+document.querySelectorAll('#tools button').forEach(b => b.onclick = () => setTool(b.dataset.tool));
+document.querySelectorAll('#filters button').forEach(b => b.onclick = () => toggleFilter(b.dataset.f));
+$('btnUndo').onclick = undo; $('btnRedo').onclick = redo; $('btnReset').onclick = () => confirm('確定還原所有移動？') && resetAll();
+$('btnFit').onclick = () => fit(); $('btnHelp').onclick = () => $('help').showModal();
+$('chkRef').onchange = $('chkLabel').onchange = $('chkDelta').onchange = $('deltaMode').onchange = draw;
+document.querySelectorAll('input[name=scope]').forEach(r => r.onchange = refresh); $('tol').oninput = refresh;
+$('btnMove').onclick = () => { if (!moveSelection(parseFloat($('dN').value) || 0, parseFloat($('dE').value) || 0, '數值移動')) msg('請先選取要素，或切到「移圖」工具'); };
+const rotAngle = () => { const v = Core.parseAngle($('rotDeg').value, 'auto'); return Number.isNaN(v) ? null : v; };
+$('btnRotL').onclick = () => { const a = rotAngle(); if (a == null) return msg('旋轉角度格式不正確（例 0.5 或 0-30-00）'); if (!rotateSelection(a)) msg('請先選取要素，或切到「移圖」工具'); };
+$('btnRotR').onclick = () => { const a = rotAngle(); if (a == null) return msg('旋轉角度格式不正確（例 0.5 或 0-30-00）'); if (!rotateSelection(-a)) msg('請先選取要素，或切到「移圖」工具'); };
+$('btnPivotReset').onclick = () => { S.pivot = null; refresh(); };
+$('btnAlign').onclick = startAlign;
+$('find').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || !S.ds) return; const q = $('find').value.trim();
+  const p = S.ds.parcels.find(p => p.label === q || p.oldLabel === q); if (!p) return msg(`找不到地號 ${q}`);
+  clearSel(); S.sel.par.add(p.idx); zoomTo([p.idx]); refresh();
+});
+const msg = t => { $('stMsg').textContent = t; clearTimeout(msg.t); msg.t = setTimeout(() => $('stMsg').textContent = '', 9000); };
+
+// ── 輸出 ───────────────────────────────────────────────────────────────────
+function download(name, data, type = 'application/octet-stream') {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data], { type })); a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+$('btnExpD14').onclick = () => {
+  const r = Core.exportD14(S.dbf.pts, S.ds); download(S.names.d14 || 'out.D14', r.bytes);
+  msg(`已輸出 ${S.names.d14}：只改動 ${r.changed} 個點的坐標。覆蓋原檔前請先備份案件資料夾。`);
+};
+$('btnExpJson').onclick = () => download((S.names.d14 || 'session').replace(/\.\w+$/, '') + '.adjust.json', JSON.stringify(Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })) }, S.survey), null, 2), 'application/json');
+
+// ── 載入檔案 ───────────────────────────────────────────────────────────────
+const extOf = n => (n.split('.').pop() || '').toLowerCase();
+const readBuf = f => f.arrayBuffer().then(b => new Uint8Array(b));
+const readText = f => readBuf(f).then(u => { try { return new TextDecoder('utf-8', { fatal: true }).decode(u); } catch { return new TextDecoder('big5').decode(u); } });
+async function loadFiles(files) {
+  const by = {}, dup = [], texts = [], macs = [], ctlFiles = [];
+  for (const f of files) {
+    const x = extOf(f.name);
+    if (/^(txt|csv|xyz|pts|dat|asc)$/.test(x)) { texts.push(f); continue; }
+    if (x === 'mac') { macs.push(f); continue; }
+    if (/^(ctl|ct2|cen|l02)$/.test(x)) { ctlFiles.push(f); continue; }
+    if (!/^(d11|d12|d13|d14|d20|d2b|d2c|coa|bnp|par)$/.test(x)) continue; if (by[x]) dup.push(f.name); else by[x] = f;
+  }
+  // 控制點／補點：CTL、CT2、CEN、L02、D20 —— 可在圖資之前或之後匯入
+  let ctlMsg = '';
+  const ctlAdd = (pts, src) => { if (pts.length) { const r = addControls(pts, src); ctlMsg += `${src} ${r.added} 點${r.replaced ? `（覆蓋同名 ${r.replaced}${r.conflicts ? `，其中 ${r.conflicts} 點坐標不同⚠` : '，坐標相同'}）` : ''}　`; } };
+  for (const f of ctlFiles) ctlAdd(Core.parseCtl(await readText(f)).points, f.name);
+  if (by.d20) ctlAdd(Core.parseDbf(await readBuf(by.d20)).rows.filter(r => !r._deleted && r.CTL_NAME && r.CTL_Y && r.CTL_X).map(r => ({ name: r.CTL_NAME, y: r.CTL_Y, x: r.CTL_X })), by.d20.name);
+  if (ctlMsg) { msg('已匯入已知點：' + ctlMsg); if (!S.ds && S.controls.size) fit(controlsBounds()); }
+  const has = (...xs) => xs.every(x => by[x]);
+  let ds = null, ref = null; const names = {};
+  const DS = async (cp, cb, extra = {}) => Core.datasetFromD({ pts: Core.parseDbf(await readBuf(cp)), bnd: Core.parseDbf(await readBuf(cb)), ...extra });
+  if (has('d14', 'd13')) {
+    const par = by.d11 ? Core.parseDbf(await readBuf(by.d11)) : null, d12 = by.d12 ? Core.parseDbf(await readBuf(by.d12)) : null;
+    ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d14));
+    names.d14 = by.d14.name; names.d13 = by.d13.name; if (by.d11) names.d11 = by.d11.name; if (by.d12) names.d12 = by.d12.name;
+    if (has('d2c', 'd2b')) { ref = await DS(by.d2c, by.d2b, { name: 'old', source: 'D2C/D2B 舊圖' }); names.d2c = by.d2c.name; names.d2b = by.d2b.name; }
+  } else if (has('coa', 'bnp')) {
+    ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null;
+    names.coa = by.coa.name; names.bnp = by.bnp.name; if (by.par) names.par = by.par.name;
+  } else if (has('d2c', 'd2b')) {
+    ds = await DS(by.d2c, by.d2b, { name: by.d2c.name, source: 'D2C/D2B 舊圖' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d2c));
+    names.d14 = by.d2c.name; names.d2c = by.d2c.name; names.d2b = by.d2b.name;
+  }
+  if (!ds) {
+    if (macs.length) { openImport(await readText(macs[0]), macs[0].name, 'mac'); return true; }
+    if (texts.length) { openImport(await readText(texts[0]), texts[0].name); return true; }
+    if (ctlMsg) return true;
+    msg('缺少必要檔案：需要 D14+D13，或 COA+BNP，或 D2C+D2B；控制點用 CTL/CT2/D20；現況點請用「匯入現況點」'); return false;
+  }
+  S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
+  fit(); refresh();
+  msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
+  return true;
+}
+$('btnOpen').onclick = () => $('fileIn').click(); $('btnFolder').onclick = () => $('dirIn').click();
+$('fileIn').onchange = e => { loadFiles([...e.target.files]); e.target.value = ''; };
+$('dirIn').onchange = e => { loadFiles([...e.target.files]); e.target.value = ''; };
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', async e => {
+  e.preventDefault(); const files = [];
+  const walk = async en => {
+    if (en.isFile) files.push(await new Promise(r => en.file(r)));
+    else if (en.isDirectory) { const rd = en.createReader(); let all = []; for (;;) { const b = await new Promise(r => rd.readEntries(r)); if (!b.length) break; all = all.concat(b); } for (const c of all) await walk(c); }
+  };
+  const items = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (items.length) for (const en of items) await walk(en); else files.push(...e.dataTransfer.files);
+  loadFiles(files);
+});
+
+// ── 現況點匯入對話框 ───────────────────────────────────────────────────────
+function impOpts() {
+  const kind = $('impKind').value;
+  if (kind === 'polar') return { kind, o: { station: { y: $('stY').value, x: $('stX').value }, backAz: $('bsAz').value.trim() || null,
+    backPoint: ($('bsY').value && $('bsX').value) ? { y: $('bsY').value, x: $('bsX').value } : null, angleFmt: $('angFmt').value, slope: $('distKind').value === 'slope' } };
+  return { kind, o: { order: $('xyOrder').value } };
+}
+function impPreview() {
+  const kind = $('impKind').value, text = $('impText').value; $('xyOpts').style.display = kind === 'xy' ? '' : 'none'; $('polarOpts').style.display = kind === 'polar' ? '' : 'none';
+  $('macOpts').style.display = kind === 'mac' ? '' : 'none';
+  const noKnown = kind === 'mac' && !S.controls.size && !S.survey.points.size; $('impGo').disabled = noKnown;
+  let t = '';
+  try {
+    if (kind === 'mac') {
+      $('macKnown').textContent = noKnown ? '尚無已知點：MAC 是相對觀測，請先關閉本視窗，用「開啟檔案」匯入 CTL（控制點）、CT2（補點）或含 D20 的案件資料夾。' : `已知點 ${knownPoints().size} 個（控制點／補點 ${S.controls.size}，現況點 ${S.survey.points.size}）`;
+      $('macKnown').className = noKnown ? 'small neg' : 'small muted';
+      if (noKnown) t = '';
+      else if (!text.trim()) t = '貼上 MAC 文字或選擇檔案';
+      else {
+        const p = macPlan(text); const miss = [...new Set(p.unresolved.flatMap(u => u.missing))];
+        t = `${p.blocks.length} 個測站段，可化算 ${p.points.length} 點` + (p.checks.length ? `；後視檢核最大差 ${(p.maxCheck * 1000).toFixed(1)} mm` : '') + (p.skipped.length ? `；無法解析 ${p.skipped.length} 行` : '');
+        if (miss.length) t += `。⚠ 缺少已知點：${miss.join('、')}（含這些測站／後視的段落不會化算）`;
+      }
+    }
+    else if (!text.trim()) t = '貼上文字或選擇檔案';
+    else if (kind === 'xy') { const r = Core.parsePoints(text, { order: $('xyOrder').value }); t = `可匯入 ${r.points.length} 點（座標順序：${r.order === 'NE' ? 'N,E' : 'E,N'}），無法解析 ${r.skipped.length} 行` + (r.points[0] ? `；首點 ${r.points[0].name}: N ${r.points[0].y} E ${r.points[0].x}` : ''); }
+    else { const r = Core.parseObservations(text, { angleFmt: $('angFmt').value }); t = `解析 ${r.obs.length} 筆觀測，無法解析 ${r.skipped.length} 行`; }
+  } catch (err) { t = String(err.message || err); }
+  $('impPrev').textContent = t;
+}
+function openImport(text = '', fname = '', kind = null) { if (kind) $('impKind').value = kind; $('impText').value = text; $('impName').textContent = fname; impPreview(); $('impDlg').showModal(); }
+$('btnImp').onclick = $('btnImp2').onclick = () => openImport();
+$('impFile').onchange = async e => { const f = e.target.files[0]; if (f) { $('impText').value = await readText(f); $('impName').textContent = f.name; impPreview(); } e.target.value = ''; };
+['impKind', 'impText', 'xyOrder', 'angFmt', 'stY', 'stX'].forEach(id => $(id).addEventListener('input', impPreview));
+$('impGo').onclick = e => {
+  e.preventDefault(); const { kind, o } = impOpts();
+  try {
+    if (kind === 'mac') {
+      const r = importMac($('impText').value); $('impDlg').close();
+      msg(`MAC：已化算 ${r.added} 個現況點` + (r.checks.length ? `，後視檢核最大差 ${(r.max_check_diff * 1000).toFixed(1)} mm` : '') + (r.unresolved.length ? `；⚠ ${r.unresolved.length} 段缺已知點未化算（${[...new Set(r.unresolved.flatMap(u => u.missing))].join('、')}）` : '')); return;
+    }
+    const r = importSurvey(kind, $('impText').value, o); $('impDlg').close(); msg(`已匯入 ${r.added} 個現況點` + (r.skipped.length ? `（略過 ${r.skipped.length} 行）` : '') + '。用「連線」工具(L)手動連成參考線'); }
+  catch (err) { $('impPrev').textContent = '無法匯入：' + (err.message || err); }
+};
+$('impCancel').onclick = e => { e.preventDefault(); $('impDlg').close(); };
+$('btnCtlClear').onclick = () => S.controls.size && confirm('清除全部已知點（控制點／補點）？（可復原）') && clearControls();
+$('btnCtlFit').onclick = () => S.controls.size && fit(controlsBounds());
+$('btnSvFit').onclick = () => S.survey.points.size && fit(surveyBounds());
+$('btnSvClear').onclick = () => S.survey.points.size && confirm('清除全部現況點與參考線？（可復原）') && clearSurvey();
+
+
+// ── 底圖設定 ───────────────────────────────────────────────────────────────
+try { const b = JSON.parse(localStorage.getItem('cw.basemap') || 'null'); if (b && PROVIDERS[b.provider]) Object.assign(S.basemap, b); } catch (e) { /* 無儲存或被封鎖時忽略 */ }
+const saveBasemap = () => { try { localStorage.setItem('cw.basemap', JSON.stringify(S.basemap)); } catch (e) { /* ignore */ } };
+$('bmSel').value = S.basemap.provider; $('bmOp').value = S.basemap.opacity; $('bmCm').value = String(S.basemap.cm);
+$('bmSel').onchange = () => { S.basemap.provider = $('bmSel').value; saveBasemap(); draw(); if (S.basemap.provider !== 'none') msg('底圖需連網，且只適用 TWD97 坐標（TWD67 會偏移約 800 m）'); };
+$('bmOp').oninput = () => { S.basemap.opacity = parseFloat($('bmOp').value); saveBasemap(); draw(); };
+$('bmCm').onchange = () => { S.basemap.cm = parseInt($('bmCm').value, 10); saveBasemap(); draw(); };
+
+// ── 列印（A4/A3、指定比例尺、含底圖／標題欄／圖例／比例尺／指北）────────────────────────
+const PAPER = { A4: [1123, 794], A3: [1587, 1123] };          // 96 dpi 的 CSS 像素；A4=297×210 mm
+const STD_SCALES = [200, 250, 300, 500, 600, 1000, 1200, 2000, 2500, 3000, 5000, 10000];
+const PX_PER_M_AT_1 = 96 / 0.0254;                              // 紙上 1:1 時每公尺的像素數
+function allBounds() {
+  let b = S.ds ? Core.bounds(S.ds) : null;
+  const add = c => { b = b ? { x0: Math.min(b.x0, c.x0), x1: Math.max(b.x1, c.x1), y0: Math.min(b.y0, c.y0), y1: Math.max(b.y1, c.y1) } : c; };
+  if (S.survey.points.size) add(surveyBounds()); if (S.controls.size && !S.ds) add(controlsBounds()); return b;
+}
+function printExtent(mode) {
+  if (mode === 'screen') return { x0: toWx(0), x1: toWx(W), y0: toWy(H), y1: toWy(0) };
+  if (mode === 'sel' && S.ds) {
+    const ids = selCount() ? effectiveIds() : new Set(S.ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).flatMap(p => p.ids));
+    if (ids.size) { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const id of ids) { const p = S.ds.points.get(id); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); } return { x0: x0 - 3, x1: x1 + 3, y0: y0 - 3, y1: y1 + 3 }; }
+  }
+  return allBounds();
+}
+function prtOpts() {
+  return { paper: $('prtPaper').value, land: $('prtOrient').value === 'land', scale: $('prtScale').value, extent: $('prtExtent').value,
+    title: $('prtTitle').value, note: $('prtNote').value, basemap: $('prtBase').checked && S.basemap.provider !== 'none' };
+}
+function printPlan(o) {
+  let [pw, ph] = PAPER[o.paper]; if (!o.land) [pw, ph] = [ph, pw];
+  const M = 30, TB = 96, frame = { x: M, y: M, w: pw - 2 * M, h: ph - 2 * M - TB };
+  const e = printExtent(o.extent); if (!e) return null;
+  const ecx = (e.x0 + e.x1) / 2, ecy = (e.y0 + e.y1) / 2, ew = Math.max(e.x1 - e.x0, 1), eh = Math.max(e.y1 - e.y0, 1);
+  let N = o.scale === 'auto' ? null : parseInt(o.scale, 10);
+  if (!N) { const need = PX_PER_M_AT_1 / Math.min(frame.w * 0.96 / ew, frame.h * 0.96 / eh); N = STD_SCALES.find(v => v >= need) || Math.ceil(need / 1000) * 1000; }
+  const sc = PX_PER_M_AT_1 / N, sxc = frame.x + frame.w / 2, syc = frame.y + frame.h / 2;
+  return { pw, ph, frame, TB, M, N, view: { cx: ecx - (sxc - pw / 2) / sc, cy: ecy + (syc - ph / 2) / sc, s: sc } };
+}
+async function renderPrint(canvas, o, dpr) {
+  const plan = printPlan(o); if (!plan) throw new Error('沒有可列印的內容，請先載入圖資或匯入現況點');
+  const { pw, ph, frame } = plan;
+  if (o.basemap) await waitTiles(tileList(plan.view, pw, ph));
+  const keep = { ctx, W, H, DPR, view: S.view, sel: S.sel, hover: S.hover, align: S.align, draft: S.draft, box: S.box, tool: S.tool, printing: S.printing, provider: S.basemap.provider };
+  try {
+    canvas.width = Math.round(pw * dpr); canvas.height = Math.round(ph * dpr);
+    ctx = canvas.getContext('2d'); W = pw; H = ph; DPR = dpr; S.view = plan.view; S.printing = true;
+    S.sel = { pt: new Set(), edge: new Set(), par: new Set() }; S.hover = null; S.align = null; S.draft = null; S.box = null; S.tool = 'select';
+    if (!o.basemap) S.basemap.provider = 'none';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pw, ph);
+    ctx.save(); ctx.beginPath(); ctx.rect(frame.x, frame.y, frame.w, frame.h); ctx.clip(); render(); ctx.restore();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); drawPrintFrame(o, plan);
+  } finally { ctx = keep.ctx; W = keep.W; H = keep.H; DPR = keep.DPR; S.view = keep.view; S.sel = keep.sel; S.hover = keep.hover; S.align = keep.align; S.draft = keep.draft; S.box = keep.box; S.tool = keep.tool; S.printing = keep.printing; S.basemap.provider = keep.provider; }
+  return plan;
+}
+function drawPrintFrame(o, plan) {
+  const { frame, TB, N } = plan, sc = plan.view.s, ink = '#1d2330', ty = frame.y + frame.h;
+  ctx.strokeStyle = ink; ctx.lineWidth = 1.5; ctx.strokeRect(frame.x, frame.y, frame.w, frame.h); ctx.lineWidth = 1; ctx.strokeRect(frame.x, ty, frame.w, TB);
+  ctx.fillStyle = ink; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+  const names = S.names.d14 || S.names.coa || (S.ds && S.ds.name) || '', d = new Date(), ds2 = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+  const bx = frame.x + 10; ctx.font = 'bold 16px sans-serif'; ctx.fillText(o.title || '地籍圖調整成果圖', bx, ty + 8);
+  ctx.font = '12px sans-serif'; ctx.fillText(`案件：${names.replace(/\.\w+$/, '')}　列印日期：${ds2}`, bx, ty + 32); if (o.note) ctx.fillText(o.note, bx, ty + 50);
+  const changed = S.ds ? S.ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0;
+  ctx.fillStyle = '#69718a'; ctx.fillText(`座標系統 TWD97（中央經線 ${S.basemap.cm}°E）　${S.ds ? `作業圖 ${S.ds.parcels.length} 宗` : ''}${changed ? `　面積變動 ${changed} 宗` : ''}`, bx, ty + 68);
+  // 比例尺文字與圖例
+  const mx = frame.x + frame.w * 0.42; ctx.fillStyle = ink; ctx.font = 'bold 15px sans-serif'; ctx.fillText(`比例尺 1:${N}`, mx, ty + 8);
+  ctx.font = '11px sans-serif'; let lx = mx, ly = ty + 34;
+  const item = (label, drawIcon) => { drawIcon(lx, ly + 6); ctx.fillStyle = ink; ctx.textBaseline = 'middle'; ctx.fillText(label, lx + 26, ly + 6); ctx.textBaseline = 'top'; lx += 26 + ctx.measureText(label).width + 12; };
+  item('新圖', (x, y) => { ctx.strokeStyle = '#1d2330'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke(); });
+  if (S.ref && $('chkRef').checked) item('舊圖', (x, y) => { ctx.strokeStyle = '#8a93a6'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke(); ctx.setLineDash([]); });
+  if (changed) item('面積變動', (x, y) => { ctx.fillStyle = 'rgba(255,160,0,.45)'; ctx.fillRect(x, y - 5, 20, 10); });
+  ly += 18; lx = mx;
+  if (S.survey.points.size) item('現況點', (x, y) => { ctx.fillStyle = '#c2188e'; ctx.beginPath(); ctx.moveTo(x + 10, y - 5); ctx.lineTo(x + 15, y); ctx.lineTo(x + 10, y + 5); ctx.lineTo(x + 5, y); ctx.closePath(); ctx.fill(); });
+  if (S.survey.lines.length) item('參考線', (x, y) => { ctx.strokeStyle = '#c2188e'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke(); });
+  if (S.controls.size) item('控制點', (x, y) => { ctx.fillStyle = '#1a7f37'; ctx.beginPath(); ctx.moveTo(x + 10, y - 5); ctx.lineTo(x + 15, y + 4); ctx.lineTo(x + 5, y + 4); ctx.closePath(); ctx.fill(); });
+  if (o.basemap) { ctx.fillStyle = '#69718a'; ctx.font = '10px sans-serif'; ctx.textBaseline = 'top'; ctx.fillText(PROVIDERS[S.basemap.provider].attr, mx, ty + 76); }
+  // 比例尺條（4 段）
+  const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000], L = nice.filter(v => v * sc <= 150).pop() || 1, bw = L * sc, bx0 = frame.x + frame.w - bw - 70, by0 = ty + 60;
+  for (let i = 0; i < 4; i++) { ctx.fillStyle = i % 2 ? '#fff' : ink; ctx.fillRect(bx0 + i * bw / 4, by0, bw / 4, 6); } ctx.strokeStyle = ink; ctx.lineWidth = 1; ctx.strokeRect(bx0, by0, bw, 6);
+  ctx.fillStyle = ink; ctx.font = '11px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.fillText('0', bx0, by0 - 2); ctx.fillText(`${L} m`, bx0 + bw, by0 - 2); ctx.textAlign = 'left';
+  // 指北針（坐標北，圖面向上）
+  const nx = frame.x + frame.w - 32, ny = ty + 44; ctx.fillStyle = ink; ctx.beginPath(); ctx.moveTo(nx, ny - 26); ctx.lineTo(nx + 9, ny + 10); ctx.lineTo(nx, ny + 3); ctx.lineTo(nx - 9, ny + 10); ctx.closePath(); ctx.fill();
+  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText('N', nx, ny + 12); ctx.textAlign = 'left';
+}
+let prtTimer = null, prtBusy = false;
+async function prtPreview() {
+  if (prtBusy) { clearTimeout(prtTimer); prtTimer = setTimeout(prtPreview, 300); return; } prtBusy = true;
+  try {
+    $('prtInfo').textContent = '產生預覽中…'; const o = prtOpts(), plan = await renderPrint($('prtCanvas'), o, 1.5);
+    $('prtInfo').textContent = `${o.paper} ${o.land ? '橫式' : '直式'}，比例尺 1:${plan.N}` + (o.basemap ? `，底圖：${PROVIDERS[S.basemap.provider].name}` : '') + (S.basemap.provider !== 'none' && !o.basemap ? '（本次不含底圖）' : '');
+  } catch (err) { $('prtInfo').textContent = String(err.message || err); } finally { prtBusy = false; }
+}
+function openPrint() {
+  if (!S.ds && !S.survey.points.size && !S.controls.size) return msg('請先載入圖資');
+  $('prtBase').checked = S.basemap.provider !== 'none'; $('prtBase').disabled = S.basemap.provider === 'none';
+  if (!$('prtTitle').value) $('prtTitle').value = '地籍圖調整成果圖'; $('prtDlg').showModal(); prtPreview();
+}
+['prtPaper', 'prtOrient', 'prtScale', 'prtExtent', 'prtBase'].forEach(id => $(id).addEventListener('change', () => { clearTimeout(prtTimer); prtTimer = setTimeout(prtPreview, 150); }));
+['prtTitle', 'prtNote'].forEach(id => $(id).addEventListener('input', () => { clearTimeout(prtTimer); prtTimer = setTimeout(prtPreview, 400); }));
+$('btnPrint').onclick = openPrint; $('prtClose').onclick = e => { e.preventDefault(); $('prtDlg').close(); };
+$('prtGo').onclick = async e => {
+  e.preventDefault(); const o = prtOpts(), area = $('printArea'); area.textContent = '';
+  try {
+    const c = document.createElement('canvas'), plan = await renderPrint(c, o, 3); c.style.width = (plan.pw * 25.4 / 96) + 'mm'; c.style.height = (plan.ph * 25.4 / 96) + 'mm'; area.appendChild(c);
+    let st = document.getElementById('pageStyle'); if (!st) { st = document.createElement('style'); st.id = 'pageStyle'; document.head.appendChild(st); }
+    st.textContent = `@page{size:${o.paper} ${o.land ? 'landscape' : 'portrait'};margin:0}`;
+    $('prtDlg').close(); document.body.classList.add('printing');
+    const done = () => { document.body.classList.remove('printing'); area.textContent = ''; removeEventListener('afterprint', done); }; addEventListener('afterprint', done);
+    setTimeout(() => window.print(), 150);
+  } catch (err) { $('prtInfo').textContent = '無法列印：' + (err.message || err); }
+};
+$('prtPng').onclick = async e => {
+  e.preventDefault();
+  try { const c = document.createElement('canvas'); await renderPrint(c, prtOpts(), 2); c.toBlob(b => { if (!b) return msg('底圖來源未開放跨網域，無法輸出 PNG；請用「列印」再選「另存為 PDF」'); download('成果圖.png', b, 'image/png'); }); }
+  catch (err) { msg('無法輸出 PNG：' + (err.message || '底圖來源未開放跨網域，請改用列印另存 PDF')); }
+};
+addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') { e.preventDefault(); openPrint(); } });
+
+// ── AI / MCP 預留介面 ─────────────────────────────────────────────────────
+const findPar = q => S.ds.parcels.find(p => p.label === String(q) || p.oldLabel === String(q));
+const api = {
+  getState: () => ({ loaded: !!S.ds, source: S.ds && S.ds.source, points: S.ds ? S.ds.points.size : 0, parcels: S.ds ? S.ds.parcels.length : 0,
+    moved_points: S.ds ? Core.movedPoints(S.ds).length : 0, control_points: S.controls.size, survey_points: S.survey.points.size, reference_lines: S.survey.lines.length,
+    selection: { points: [...S.sel.pt], edges: [...S.sel.edge], parcels: S.ds ? [...S.sel.par].map(i => S.ds.parcels[i].label) : [] } }),
+  setBasemap: ({ provider = 'none', opacity, cm } = {}) => { if (provider !== 'none' && !PROVIDERS[provider]) throw new Error('provider 需為 none/osm/emap/photo'); S.basemap.provider = provider; if (opacity != null) S.basemap.opacity = opacity; if (cm != null) S.basemap.cm = cm; $('bmSel').value = provider; saveBasemap(); draw(); return { ...S.basemap }; },
+  toLatLon: ({ y, x }) => Core.tm2ToLatLon(y, x, S.basemap.cm),
+  getView: () => ({ cx: S.view.cx, cy: S.view.cy, px_per_m: S.view.s, width: W, height: H, note: 'screen_x=(E-cx)*px_per_m+width/2, screen_y=height/2-(N-cy)*px_per_m' }),
+  listParcels: () => S.ds.parcels.map(p => ({ label: p.label, old_label: p.oldLabel, area: p.area, area_before: p.areaOrig, area_ref: p.areaRef, area_registered: p.areaReg, points: p.ids })),
+  select: ({ points = [], edges = [], parcels = [], add = false } = {}) => {
+    if (!add) clearSel(); points.forEach(id => S.sel.pt.add(id)); edges.forEach(k => S.sel.edge.add(k));
+    parcels.forEach(q => { const p = findPar(q); if (p) S.sel.par.add(p.idx); }); refresh(); return api.getState();
+  },
+  move: ({ dy = 0, dx = 0 } = {}) => ({ ok: moveSelection(dy, dx, 'API'), ...api.getState() }),
+  // 變換目前選取（無選取且在移圖工具＝整張圖）：angle_deg 逆時針為正；pivot 省略＝移動對象中心
+  transform: ({ dy = 0, dx = 0, angle_deg = 0, pivot = null } = {}) => {
+    if (!S.ds) throw new Error('尚未載入圖資'); const saved = S.tool; if (!selCount()) S.tool = 'layer';
+    try { const ids = moveIds(); const ok = transformSelection({ dy, dx, angle: angle_deg * Math.PI / 180, pivot: pivot || pivotOf(ids) }, 'API 變換'); return { ok, ...api.getState() }; }
+    finally { S.tool = saved; refresh(); }
+  },
+  alignTwoPoints: ({ src, dst } = {}) => {   // src/dst 各兩點 [{y,x},{y,x}]；對象同 transform
+    if (!S.ds) throw new Error('尚未載入圖資'); const ids = selCount() ? effectiveIds() : new Set(S.ds.points.keys());
+    const f = Core.twoPointFit(src[0], src[1], dst[0], dst[1]); transformSelectionIds(ids, f.T, 'API 對位'); refresh();
+    return { angle_deg: f.angle * 180 / Math.PI, scale: f.scale, shift_m: Math.hypot(f.T.dy, f.T.dx) };
+  },
+  // 已知點（先匯入才能匯入 MAC）：text 為 CTL/CT2/CEN/L02 內容
+  importControls: ({ text, source = 'API' }) => { const r = Core.parseCtl(text); const a = addControls(r.points, source); refresh(); return { ...a, code: r.code, skipped: r.skipped.length }; },
+  listControls: () => [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })),
+  importMac: ({ text }) => { const r = importMac(text); refresh(); return r; },
+  importSurveyPoints: ({ text, order = 'auto' }) => importSurvey('xy', text, { order }),
+  importPolar: opts => importSurvey('polar', opts.text, opts),
+  addSurveyPoints: pts => { const names = addSurveyPoints(pts); refresh(); return names; },
+  listSurveyPoints: () => [...S.survey.points.values()].map(p => ({ name: p.name, y: p.y, x: p.x, h: p.h, code: p.code })),
+  addLine: ({ points, closed = false, name } = {}) => { const l = addLine(points, { closed, name }); refresh(); return l && { id: l.id, name: l.name, points: l.points, closed: l.closed, ...Core.lineStats(S.survey, l) }; },
+  listLines: () => S.survey.lines.map(l => ({ id: l.id, name: l.name, points: l.points, closed: l.closed, ...Core.lineStats(S.survey, l) })),
+  deleteLine: ({ id }) => deleteLine(id),
+  undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
+  exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })) }, S.survey),
+};
+window.CadastralAPI = api;
+const bridge = new URLSearchParams(location.search).get('bridge');
+if (bridge) {   // 例：?bridge=ws://127.0.0.1:8765 ；收 {id,method,params}，回 {id,result|error}
+  const ws = new WebSocket(bridge);
+  ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; }
+    try { ws.send(JSON.stringify({ id: m.id, result: api[m.method](m.params) })); } catch (err) { ws.send(JSON.stringify({ id: m.id, error: String(err) })); } };
+  ws.onopen = () => msg('AI 橋接已連線');
+}
+resize(); panel();
+})();
+
+</script>
+</body>
+</html>
