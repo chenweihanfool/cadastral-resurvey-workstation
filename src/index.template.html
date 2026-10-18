@@ -44,6 +44,37 @@ tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-ch
 footer{display:flex;gap:16px;padding:4px 12px;background:var(--panel);border-top:1px solid var(--line);font-size:12px;color:var(--muted);flex-wrap:wrap}
 dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:640px}
 dialog::backdrop{background:#0006}
+/* 版本歷程時間軸 */
+dialog.verdlg{width:min(96vw,1400px);height:88vh;max-width:none;padding:0;overflow:hidden}
+dialog.verdlg[open]{display:flex;flex-direction:column}
+.vhead{padding:14px 20px 12px;border-bottom:1px solid var(--line)}
+.vhead h3{margin:0 0 8px;font-size:17px}
+.vbody{flex:1;overflow-y:auto;padding:12px 20px 20px}
+.updbanner{margin:0 0 10px;padding:8px 12px;border:1px solid var(--accent);border-radius:8px;background:color-mix(in srgb,var(--accent) 10%,transparent);font-size:13px}
+.updbanner a{color:var(--accent)}
+.updbanner .notes{margin-top:4px;color:var(--muted);font-size:12px;white-space:pre-wrap;max-height:5.5em;overflow:hidden}
+.tl{list-style:none;margin:0;padding:0}
+.tl > li{display:grid;grid-template-columns:132px 28px minmax(0,1fr)}
+.tl .ver{padding:10px 8px 0 0;text-align:right}
+.tl .ver b{display:block;font:700 14px ui-monospace,Consolas,monospace}
+.tl .ver span{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tl .axis{position:relative;display:flex;justify-content:center}
+.tl .axis::before{content:"";position:absolute;left:50%;width:1px;background:var(--line);top:0;bottom:0}
+.tl > li:first-child .axis::before{top:15px}.tl > li:last-child .axis::before{bottom:calc(100% - 15px)}
+.tl > li:only-child .axis::before{display:none}
+.tl .dot{position:relative;margin-top:15px;width:10px;height:10px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px color-mix(in srgb,currentColor 20%,transparent)}
+.tl .t-major{color:#8b5cf6}.tl .t-minor{color:var(--accent)}.tl .t-patch{color:var(--muted)}
+.tl .item{padding-bottom:6px;min-width:0;color:var(--ink)}
+.tl .head{width:100%;display:flex;align-items:center;gap:8px;border:0;background:none;color:var(--ink);font:inherit;text-align:left;padding:8px 10px;border-radius:8px;cursor:pointer}
+.tl .head:hover,.tl .open .head{background:var(--bg)}
+.tl .badge{flex:none;font-size:10px;padding:1px 6px;border-radius:4px;color:inherit;background:color-mix(in srgb,currentColor 14%,transparent)}
+.tl .ttl{flex:1;min-width:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl .open .ttl{white-space:normal;font-weight:600}
+.tl .chev{flex:none;color:var(--muted);transition:transform .15s}.tl .open .chev{transform:rotate(180deg)}
+.tl ul{margin:4px 0 8px 12px;padding:0 0 0 16px;border-left:1px solid var(--line);list-style:none}
+.tl ul li{position:relative;margin:6px 0;font-size:13px;line-height:1.55;color:var(--muted)}
+.tl ul li::before{content:"";position:absolute;left:-19px;top:9px;width:6px;height:6px;border-radius:50%;background:var(--line)}
+@media (max-width:700px){.tl > li{grid-template-columns:64px 18px minmax(0,1fr)}.tl .ver b{font-size:12px}}
 #printArea{display:none}
 @media print{body.printing>#app,body.printing dialog{display:none!important}body.printing{background:#fff}body.printing #printArea{display:block}body.printing #printArea canvas{display:block}}
 kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;font-size:12px}
@@ -82,6 +113,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <button class="btn" id="btnExpD14" disabled>輸出 D14</button>
   <button class="btn" id="btnExpJson" disabled>輸出 JSON</button>
   <button class="btn" id="btnHelp">說明</button>
+  <button class="btn" id="btnVer" title="版本歷程與更新">版本</button>
 </header>
 <main>
   <div id="stage"><canvas id="cv"></canvas><div id="tip"></div><div id="hint" style="display:none;position:absolute;left:10px;top:10px;right:10px;z-index:3;background:var(--panel);border:1px solid var(--accent);border-radius:6px;padding:6px 10px;font-size:13px"></div>
@@ -137,6 +169,22 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <p><b>輸出</b>：「輸出 D14」只改動被移動點的坐標，其餘位元組與原檔完全相同；覆蓋進案件資料夾前請先備份。D11 的面積欄位不改，請在 NECEXE 內用「重算面積」更新。「輸出 JSON」含移動點與面積變化，方便 AI／其他程式讀取。</p>
 <p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（getState / select / move / undo / exportSession），網址加 <code>?bridge=ws://127.0.0.1:埠號</code> 可接 WebSocket 橋接（預留給 MCP）。</p>
 <form method="dialog"><button class="btn primary">關閉</button></form></dialog>
+<dialog id="verDlg" class="verdlg">
+  <div class="vhead">
+    <h3>版本歷程 <span id="verCount" class="muted small" style="font-weight:400"></span></h3>
+    <div id="updBanner" class="updbanner" hidden></div>
+    <div class="row">
+      <input type="text" id="verQ" placeholder="搜尋版本、標題或內容…" style="width:240px">
+      <div class="seg" id="verTypes"><button data-t="all" class="on">全部</button><button data-t="major">重大</button><button data-t="minor">新功能</button><button data-t="patch">修正</button></div>
+      <button class="btn" id="verAll">全部展開</button>
+      <span style="flex:1"></span>
+      <label class="chk small"><input type="checkbox" id="chkAutoUpd">啟動時檢查更新</label>
+      <button class="btn" id="btnCheckUpd">檢查更新</button>
+      <button class="btn primary" id="verClose">關閉</button>
+    </div>
+  </div>
+  <div class="vbody"><ol class="tl" id="verList"></ol></div>
+</dialog>
 <dialog id="prtDlg" style="max-width:860px;width:96vw"><h3 style="margin-top:0">列印成果圖</h3>
   <div class="row small">
     <label>紙張 <select id="prtPaper"><option>A4</option><option>A3</option></select></label>
@@ -166,6 +214,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 </div>
 <script>
 /*CORE*/
+</script>
+<script>
+/*CHANGELOG*/
 </script>
 <script>
 /*APP*/

@@ -1,0 +1,38 @@
+name: Release
+
+# 合併到 main 後：若 package.json 的版本號還沒有對應的 tag，就自動建立 Release 並附上 HTML。
+# （建立 tag 與 Release 在同一個 job 內完成，避免 GITHUB_TOKEN 建立的 tag 不會觸發其他工作流程。）
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 測試與建置
+        run: |
+          node test/synthetic.test.mjs
+          node build.mjs
+          git diff --exit-code -- product/index.html
+      - name: 建立 Release（版本號新增時）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="v$(node -p "require('./package.json').version")"
+          if git ls-remote --exit-code --tags origin "refs/tags/$VER" >/dev/null 2>&1; then
+            echo "$VER 已存在，不重複發行"; exit 0
+          fi
+          mkdir -p dist
+          cp product/index.html dist/cadastral-resurvey-workstation.html
+          cp product/index.html "dist/cadastral-resurvey-workstation-$VER.html"
+          node scripts/release-notes.mjs "$VER" > dist/notes.md
+          gh release create "$VER" --target "$GITHUB_SHA" --title "地籍圖重測工作站 $VER" --notes-file dist/notes.md \
+            "dist/cadastral-resurvey-workstation.html" "dist/cadastral-resurvey-workstation-$VER.html"

@@ -21,6 +21,13 @@
 
 **覆蓋案件資料夾前請先備份。** 輸出的 `D11` 面積欄位不會被改寫，請在 NECEXE 內「重算面積」。
 
+## 版本與更新
+
+- 工具列「版本」開啟**版本歷程時間軸**（可搜尋、依類型篩選、展開內容）
+- 啟動時會向 GitHub 查詢最新 Release（可在版本視窗關閉）；有新版本時按鈕顯示提示，按「立即更新」：Chrome／Edge 可直接覆寫目前開啟的檔案，其他瀏覽器改為下載新檔。更新前請先輸出 D14／JSON
+- 每個版本都有 [Release](https://github.com/chenweihanfool/cadastral-resurvey-workstation/releases)，附 `cadastral-resurvey-workstation.html`
+- 最新版固定下載網址：`https://github.com/chenweihanfool/cadastral-resurvey-workstation/releases/latest/download/cadastral-resurvey-workstation.html`
+
 ## 資料模型（摘要）
 
 - 坐標：`Y`＝縱坐標（北，約 2.7e6）、`X`＝橫坐標（東），TWD97；`D14`／`D2C` 同一點號有多筆觀測，**`COT_REF=0` 才是採用的坐標**
@@ -40,6 +47,7 @@ node test/core.test.mjs        # 需要本機真實案件樣本（samples/，不
 - `src/core.js`：資料讀寫、幾何與面積、變換、解析、坐標轉換（不碰 DOM，瀏覽器與 Node 共用）
 - `src/app.js`、`src/index.template.html`：介面與互動
 - 無任何執行期相依套件
+- 修改流程（分支 → Pull Request → CI → 合併 → 自動 Release）見 [CLAUDE.md](CLAUDE.md)
 
 ## 已知限制
 

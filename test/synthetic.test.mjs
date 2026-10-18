@@ -127,4 +127,16 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const ll = Core.latLonToTm2(24.4939, 120.6824), rt = Core.tm2ToLatLon(ll.y, ll.x); near(rt.lat, 24.4939, 1e-9); near(rt.lon, 120.6824, 1e-9);
   const w = Core.latLonToTm2(23.5, 119.5, 119); near(Core.tm2ToLatLon(w.y, w.x, 119).lon, 119.5, 1e-9);
 }
+// ── 版本號與版本歷程資料 ──
+{
+  assert.ok(Core.compareVersions('v0.10.0', 'v0.9.9') > 0 && Core.compareVersions('1.0.0', 'v1.0.0') === 0 && Core.compareVersions('v0.3.0', 'v0.4.0') < 0 && Core.compareVersions('v1.2', 'v1.2.1') < 0);
+  const log = createRequire(import.meta.url)('../src/changelog.js'), pkg = createRequire(import.meta.url)('../package.json');
+  assert.equal('v' + pkg.version, log[0].version, 'package.json 版本需等於 changelog 最新一筆');
+  const seen = new Set();
+  log.forEach((e, i) => {
+    assert.match(e.version, /^v\d+\.\d+\.\d+$/); assert.match(e.date, /^\d{4}-\d{2}-\d{2}$/); assert.ok(['major', 'minor', 'patch'].includes(e.type), e.version + ' type');
+    assert.ok(e.title && Array.isArray(e.changes) && e.changes.length, e.version + ' 內容'); assert.ok(!seen.has(e.version), '版本重複 ' + e.version); seen.add(e.version);
+    if (i) assert.ok(Core.compareVersions(log[i - 1].version, e.version) > 0, '版本需由新到舊：' + e.version);
+  });
+}
 console.log('SYNTHETIC OK');
