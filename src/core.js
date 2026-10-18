@@ -650,6 +650,27 @@ const Core = (() => {
     }
     return rows.map(r => r.map(v => (/[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v)).join(',')).join('\n');
   }
+  // ── 影像定位檔（World file：JGW／PGW／WLD）────────────────────────────────
+  // 六行：A（x 方向像元大小）、D（y 方向旋轉）、B（x 方向旋轉）、E（y 方向像元大小，通常為負）、C（左上像元「中心」的 x＝橫坐標 E）、F（左上像元中心的 y＝縱坐標 N）。
+  //   X = A·col + B·row + C ；Y = D·col + E·row + F（col、row 為像元中心）。
+  function parseWorldFile(text) {
+    const v = String(text).split(/\r?\n/).map(l => l.trim()).filter(l => l !== '').slice(0, 6).map(Number);
+    if (v.length < 6 || v.some(x => !Number.isFinite(x))) throw new Error('定位檔需要 6 行數字（A D B E C F）');
+    const [a, d, b, e, c, f] = v;
+    if (Math.abs(a * e - b * d) < 1e-18) throw new Error('定位檔的像元大小為 0');
+    return { a, d, b, e, c, f };
+  }
+  const worldFileText = wf => [wf.a, wf.d, wf.b, wf.e, wf.c, wf.f].map(n => n.toFixed(10)).join('\r\n') + '\r\n';
+  // 影像四個角（邊緣，不是像元中心）的世界坐標：左上、右上、右下、左下
+  function imageCorners(wf, w, h) {
+    const at = (u, v) => ({ x: wf.a * (u - 0.5) + wf.b * (v - 0.5) + wf.c, y: wf.d * (u - 0.5) + wf.e * (v - 0.5) + wf.f });
+    return [at(0, 0), at(w, 0), at(w, h), at(0, h)];
+  }
+  function imageBounds(wf, w, h) {
+    const q = imageCorners(wf, w, h), xs = q.map(p => p.x), ys = q.map(p => p.y);
+    return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  }
+
   // ── 輸出 ────────────────────────────────────────────────────────────────
   // 回傳新的 D14 位元組：只改動 REF=0 且被移動的點的 COT_Y/COT_X。
   function exportD14(pts, ds) {
@@ -679,6 +700,6 @@ const Core = (() => {
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
-    newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv };
+    newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds };
 })();
 if (typeof module !== 'undefined') module.exports = Core;

@@ -3,6 +3,17 @@
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.7.0', date: '2026-10-18', type: 'minor',
+    title: '新增影像疊圖：載入 JPG／PNG＋JGW 定位檔，可平移對位並即時顯示位置，輸出調整後的 JGW',
+    changes: [
+      '「輸入」分頁「載入影像」：同時選 JPG（或 PNG）與同名 JGW（PGW／WLD），可多組；拖入資料夾也會自動載入。定位檔六行（A D B E C F，含旋轉項）依 World file 規格解讀，左上像元中心＝(C, F)；沒有定位檔時放在畫面中央，再手動對位',
+      '「移影像」工具（快捷鍵 I）：拖曳作用中影像平移，點選哪張就以哪張為作用中，方向鍵微調（步距同選取）；底部狀態列與「處理」分頁即時顯示左上像元中心 N／E 與相對原定位的 Δ北／Δ東；也可輸入 ΔN／ΔE 移動、一鍵還原定位；可復原／重做',
+      '影像畫在底圖之上、向量圖之下，每張可顯示／隱藏、調不透明度、移除；列印成果圖會一併印出；全圖縮放包含影像範圍',
+      '「輸出」分頁可下載平移後的 JGW（影像檔本身不變），套回 GIS／NECEXE 可用的定位',
+      'AI／MCP：CadastralAPI 新增 listImages／addImage／setImage／removeImage／exportWorldFile',
+    ],
+  },
+  {
     version: 'v0.6.0', date: '2026-10-18', type: 'minor',
     title: '版面改為輸入／處理／輸出三分頁；新增異動點位 CSV 與輸出說明；大量鄰段繪圖提速（全圖每幀約 30 倍）',
     changes: [

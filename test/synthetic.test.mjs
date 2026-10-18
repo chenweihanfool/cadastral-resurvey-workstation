@@ -149,6 +149,15 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const two = ds([[11, 0, 10.2], [15, 0.1, 10.5], [12, 0, 20], [13, 10, 20], [14, 10, 10.2]], [ring(2, 1, 0, [11, 15, 12, 13, 14])]), jt = Core.seamJoin(two, [{ name: 'NB', ds: nb }], {});
   assert.ok(jt.unresolved.some(u => u.reason === 'conflict') && jt.moves.some(m => m.id === 11 && m.type === 'vertex'));
 }
+// ── 影像定位檔 JGW ──
+{
+  const wf = Core.parseWorldFile('0.1\r\n0\r\n0\r\n-0.1\r\n222000.05\r\n2706000.05\r\n'), q = Core.imageCorners(wf, 100, 50);
+  near(q[0].x, 222000.0, 1e-9); near(q[0].y, 2706000.10, 1e-9); near(q[2].x, 222010.0, 1e-9); near(q[2].y, 2705995.10, 1e-9);   // 左上角在左上像元中心再往左上半個像元
+  const b = Core.imageBounds(wf, 100, 50); near(b.x1 - b.x0, 10, 1e-9); near(b.y1 - b.y0, 5, 1e-9);
+  const rt = Core.parseWorldFile(Core.worldFileText(wf)); near(rt.c, wf.c, 1e-9); near(rt.f, wf.f, 1e-9); near(rt.e, -0.1, 1e-12);
+  const rot = Core.imageBounds({ a: 0, d: 1, b: 1, e: 0, c: 0, f: 0 }, 10, 10); near(rot.x1 - rot.x0, 10, 1e-9);                  // 旋轉 90°（含鏡射）的範圍
+  assert.throws(() => Core.parseWorldFile('1\n2\n3'), /6 行/); assert.throws(() => Core.parseWorldFile('0\n0\n0\n0\n1\n1'), /像元大小/);
+}
 // ── TWD97 ↔ 經緯度 ──
 {
   const o = Core.latLonToTm2(0, 121); near(o.x, 250000, 1e-6); near(o.y, 0, 1e-6);
