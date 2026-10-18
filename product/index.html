@@ -330,6 +330,7 @@ const Core = (() => {
       let l = holeMap.get(ok); if (!l) holeMap.set(ok, l = []); l.push(ik);
     }
     for (const [k, g] of groups) {
+      if (!g.sec && !g.m && !g.c) continue;   // 地號全為 0＝無宗地身分的線串（如 D2B 舊圖數化），不是界址環；線改由 D2D 讀（datasetFromLines）
       if (g.ids.length < 3 || g.ids.some(id => !ds.points.has(id))) continue;
       const a = attr.get(k);
       const fmt = (m, c) => (c ? `${m}-${c}` : `${m}`);
@@ -341,6 +342,26 @@ const Core = (() => {
       });
     }
     return finalize(ds);
+  }
+
+  // 從點表＋界址線表建立「只有線、沒有宗地」的資料集（D2C＋D2D 舊圖數化）。
+  // 每筆線 LIN_TOP→LIN_BOT；LIN_MID 非 0 時為圓弧中點。lin 為 parseDbf 結果。
+  function datasetFromLines({ pts, lin, name = 'D', source = 'D檔線' }) {
+    const ds = newDataset(name, source); ds.arcs = new Map();
+    pts.rows.forEach((r, i) => {
+      if (r._deleted || r.COT_REF !== 0 || r.COT_NUMBER == null || !r.COT_Y || !r.COT_X) return;
+      ds.points.set(r.COT_NUMBER, { id: r.COT_NUMBER, y: r.COT_Y, x: r.COT_X, y0: r.COT_Y, x0: r.COT_X, row: i });
+    });
+    for (const r of lin.rows) {
+      if (r._deleted) continue;
+      const a = r.LIN_TOP, c = r.LIN_BOT, m = r.LIN_MID;
+      if (!a || !c || a === c || !ds.points.has(a) || !ds.points.has(c)) continue;
+      const k = a < c ? a + '-' + c : c + '-' + a;
+      const e = ds.edges.get(k) || { key: k, a: Math.min(a, c), b: Math.max(a, c), parcels: [] };
+      ds.edges.set(k, e);
+      if (m && ds.points.has(m)) { e.arcPart = true; ds.arcs.set(a + '|' + m + '|' + c, { a, b: m, c }); }
+    }
+    return ds;
   }
 
   // ── KC 文字檔 (COA/BNP/PAR) ──────────────────────────────────────────────
@@ -712,7 +733,7 @@ const Core = (() => {
     };
   }
 
-  return { parseDbf, patchDbfNumber, datasetFromD, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
+  return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats };
@@ -725,6 +746,14 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.4.1', date: '2026-10-18', type: 'patch',
+    title: '修正讀取含舊圖數化（D2C／D2B／D2D）的案件時舊圖線段亂掉',
+    changes: [
+      '舊圖數化的 D2B 地號欄位全為 0（沒有宗地身分），先前被誤當成一個超大界址環，把全圖的點連成密密麻麻的亂線；現在這類資料不再當宗地',
+      '舊圖參考改讀 D2D 界址線表（起點→終點，LIN_MID 為圓弧中點），畫出正確的舊圖線段；載入資料夾時 D2D 會自動納入',
+    ],
+  },
   {
     version: 'v0.4.0', date: '2026-10-18', type: 'minor',
     title: '新增版本歷程時間軸、檢查更新與一鍵更新；每個新版本自動發行 Release HTML',
@@ -1259,7 +1288,7 @@ function panel() {
   const changed = ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6), tot = changed.reduce((s, p) => s + (p.area - p.areaOrig), 0);
   $('sumInfo').textContent = `共 ${changed.length} 宗地號面積有變動，合計 ${sgn(tot)} m²；已移動 ${Core.movedPoints(ds).length} 個界址點。` + (rows.length > 300 ? '（表格只列前 300 筆）' : '');
   $('layerInfo').innerHTML = `<div>作業圖層：${ds.source}（${ds.points.size} 點／${ds.edges.size} 線／${ds.parcels.length} 面）</div>` +
-    (S.ref ? `<div>舊圖參考：${S.ref.source}（${S.ref.parcels.length} 面）</div>` : '<div>舊圖參考：無</div>') +
+    (S.ref ? `<div>舊圖參考：${S.ref.source}（${S.ref.parcels.length ? S.ref.parcels.length + ' 面' : S.ref.edges.size + ' 線'}）</div>` : '<div>舊圖參考：無</div>') +
     `<div class="muted">檔案：${Object.values(S.names).join('、')}</div>` + (ds.arcs && ds.arcs.size ? `<div class="muted">含 ${ds.arcs.size} 段圓弧（面積已依弧線計算）</div>` : '');
 }
 $('tbody').addEventListener('click', e => {
@@ -1442,7 +1471,7 @@ async function loadFiles(files) {
     if (/^(txt|csv|xyz|pts|dat|asc)$/.test(x)) { texts.push(f); continue; }
     if (x === 'mac') { macs.push(f); continue; }
     if (/^(ctl|ct2|cen|l02)$/.test(x)) { ctlFiles.push(f); continue; }
-    if (!/^(d11|d12|d13|d14|d20|d2b|d2c|coa|bnp|par)$/.test(x)) continue; if (by[x]) dup.push(f.name); else by[x] = f;
+    if (!/^(d11|d12|d13|d14|d20|d2b|d2c|d2d|coa|bnp|par)$/.test(x)) continue; if (by[x]) dup.push(f.name); else by[x] = f;
   }
   // 控制點／補點：CTL、CT2、CEN、L02、D20 —— 可在圖資之前或之後匯入
   let ctlMsg = '';
@@ -1453,11 +1482,13 @@ async function loadFiles(files) {
   const has = (...xs) => xs.every(x => by[x]);
   let ds = null, ref = null; const names = {};
   const DS = async (cp, cb, extra = {}) => Core.datasetFromD({ pts: Core.parseDbf(await readBuf(cp)), bnd: Core.parseDbf(await readBuf(cb)), ...extra });
+  const DL = async (cp, cl, extra = {}) => Core.datasetFromLines({ pts: Core.parseDbf(await readBuf(cp)), lin: Core.parseDbf(await readBuf(cl)), ...extra });
   if (has('d14', 'd13')) {
     const par = by.d11 ? Core.parseDbf(await readBuf(by.d11)) : null, d12 = by.d12 ? Core.parseDbf(await readBuf(by.d12)) : null;
     ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d14));
     names.d14 = by.d14.name; names.d13 = by.d13.name; if (by.d11) names.d11 = by.d11.name; if (by.d12) names.d12 = by.d12.name;
-    if (has('d2c', 'd2b')) { ref = await DS(by.d2c, by.d2b, { name: 'old', source: 'D2C/D2B 舊圖' }); names.d2c = by.d2c.name; names.d2b = by.d2b.name; }
+    if (has('d2c', 'd2d')) { ref = await DL(by.d2c, by.d2d, { name: 'old', source: 'D2C/D2D 舊圖線' }); names.d2c = by.d2c.name; names.d2d = by.d2d.name; }
+    else if (has('d2c', 'd2b')) { ref = await DS(by.d2c, by.d2b, { name: 'old', source: 'D2C/D2B 舊圖' }); names.d2c = by.d2c.name; names.d2b = by.d2b.name; }
   } else if (has('coa', 'bnp')) {
     ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null;
     names.coa = by.coa.name; names.bnp = by.bnp.name; if (by.par) names.par = by.par.name;

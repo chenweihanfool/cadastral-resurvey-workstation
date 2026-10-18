@@ -118,6 +118,16 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.deepEqual(names, ['a', 'a_2', 'b', 'c']); const ln = Core.addLine(sv, names, { closed: true }); const st = Core.lineStats(sv, ln); near(st.area, 100); near(st.length, 40);
 }
 
+// ── 舊圖數化：D2B 地號全為 0 不是界址環；線由 D2D 讀 ──
+{
+  const F_LIN = ['LIN_TOP', 'LIN_MID', 'LIN_BOT'].map(name => ({ name, type: 'N', len: 5 }));
+  const P = Core.parseDbf(makeDbf(F_D14, [pt(1, 2700010, 200010), pt(2, 2700010, 200020), pt(3, 2700020, 200020), pt(4, 2700015, 200025)]));
+  const B = Core.parseDbf(makeDbf(F_D13, [ring(0, 0, 0, [1, 2, 3, 4])]));
+  assert.equal(Core.datasetFromD({ pts: P, bnd: B }).parcels.length, 0, '地號全 0 的串不當宗地');
+  const L = Core.parseDbf(makeDbf(F_LIN, [{ LIN_TOP: 1, LIN_MID: 0, LIN_BOT: 2 }, { LIN_TOP: 2, LIN_MID: 4, LIN_BOT: 3 }, { LIN_TOP: 9, LIN_MID: 0, LIN_BOT: 3 }, { LIN_TOP: 1, LIN_MID: 0, LIN_BOT: 1 }]));
+  const dl = Core.datasetFromLines({ pts: P, lin: L });
+  assert.equal(dl.edges.size, 2, '缺點與退化線略過'); assert.equal(dl.parcels.length, 0); assert.ok(dl.arcs.has('2|4|3') && dl.edges.get('2-3').arcPart);
+}
 // ── TWD97 ↔ 經緯度 ──
 {
   const o = Core.latLonToTm2(0, 121); near(o.x, 250000, 1e-6); near(o.y, 0, 1e-6);
