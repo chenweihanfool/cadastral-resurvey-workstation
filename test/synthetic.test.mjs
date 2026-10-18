@@ -156,6 +156,11 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const b = Core.imageBounds(wf, 100, 50); near(b.x1 - b.x0, 10, 1e-9); near(b.y1 - b.y0, 5, 1e-9);
   const rt = Core.parseWorldFile(Core.worldFileText(wf)); near(rt.c, wf.c, 1e-9); near(rt.f, wf.f, 1e-9); near(rt.e, -0.1, 1e-12);
   const rot = Core.imageBounds({ a: 0, d: 1, b: 1, e: 0, c: 0, f: 0 }, 10, 10); near(rot.x1 - rot.x0, 10, 1e-9);                  // 旋轉 90°（含鏡射）的範圍
+  // 影像尺寸：JPEG（前面有 APP0 與 DHT 段）、PNG
+  const jpg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 4, 1, 2, 0xff, 0xc4, 0, 3, 9, 0xff, 0xc0, 0, 11, 8, 0x04, 0xb0, 0x06, 0x40, 1, 1, 0x11, 0, 0xff, 0xd9]);
+  assert.deepEqual(Core.imageSize(jpg), { w: 1600, h: 1200 });
+  const png = new Uint8Array(33); png.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x03, 0x20, 0, 0, 0x02, 0x58]);
+  assert.deepEqual(Core.imageSize(png), { w: 800, h: 600 }); assert.equal(Core.imageSize(Uint8Array.from([1, 2, 3, 4, 5])), null);
   assert.throws(() => Core.parseWorldFile('1\n2\n3'), /6 行/); assert.throws(() => Core.parseWorldFile('0\n0\n0\n0\n1\n1'), /像元大小/);
 }
 // ── TWD97 ↔ 經緯度 ──
