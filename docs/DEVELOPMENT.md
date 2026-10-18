@@ -72,7 +72,7 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 
 **TWD97↔經緯度**：GRS80，k0=0.9999，FE=250000；中央經線 121°（本島）／119°（澎金馬）。已用子午線弧長數值積分獨立檢驗。**TWD67 與 TWD97 約差 800 m，底圖僅適用 TWD97。**
 
-**影像疊圖（v0.7.0）**：`S.img` 存 `createImageBitmap(file,{imageOrientation:'none'})`（不套 EXIF 旋轉，讓像元順序與定位檔一致）與 world file。World file：`X=A·col+B·row+C、Y=D·col+E·row+F`，(C,F) 是左上像元**中心**，畫圖時需往左上退半個像元（`drawImages` 的 `ox,oy`）。平移只改 C、F。限制：只支援瀏覽器能解碼的 JPG／PNG（TIFF 不行）；尚未實作影像縮放／旋轉對位與兩點對位（可沿用 `Core.twoPointFit`）；超大影像（上萬像素）未做影像金字塔。**驗證**：合成測試（角點、往返、旋轉範圍）＋瀏覽器端到端（拖曳位移＝像素／比例、方向鍵、復原、輸出 JGW）；尚未用真實舊圖掃描檔驗證。
+**影像疊圖（v0.7.0）**：`S.img` 存 `createImageBitmap(file,{imageOrientation:'none'})`（不套 EXIF 旋轉，讓像元順序與定位檔一致）與 world file。World file：`X=A·col+B·row+C、Y=D·col+E·row+F`，(C,F) 是左上像元**中心**，畫圖時需往左上退半個像元（`drawImages` 的 `ox,oy`）。平移只改 C、F。v0.8.0：影像先登記（`Core.imageSize` 讀 JPEG SOF／PNG IHDR 取尺寸）、預設隱藏、第一次顯示才 `createImageBitmap`、隱藏即 `close()`；`S.img` 陣列順序＝上下層（後面在上），`above` 決定畫在向量圖之下（`drawImages(false)`）或之上（`drawImages(true)`）。限制：只支援瀏覽器能解碼的 JPG／PNG（TIFF 不行）；尚未實作影像縮放／旋轉對位與兩點對位（可沿用 `Core.twoPointFit`）；超大影像（上萬像素）未做影像金字塔。**驗證**：合成測試（角點、往返、旋轉範圍）＋瀏覽器端到端（拖曳位移＝像素／比例、方向鍵、復原、輸出 JGW）；尚未用真實舊圖掃描檔驗證。
 
 ### AI／MCP 現況（誠實版）
 目前**只有頁面端**：`window.CadastralAPI`（含鄰段、載入 `loadCase`、輸出 `exportD14`）與 `?bridge=ws://…` 的 WebSocket 客戶端（頁面主動連出去，收 `{id,method,params}`、回 `{id,result|error}`，支援非同步）。**還沒有 MCP server**（ROADMAP #15）：需要一支本機程式同時當 MCP server（給 Claude Desktop／Claude Code 呼叫）與 WebSocket server（給頁面連），把工具呼叫轉成 `api[method](params)`，並由它讀本機資料夾、以 base64 餵給 `loadCase`／`addNeighbor`。在那之前，AI 若能控制瀏覽器（如 Claude in Chrome），可在頁面直接執行 `CadastralAPI.*`，但仍需使用者用檔案選擇器載入檔案。

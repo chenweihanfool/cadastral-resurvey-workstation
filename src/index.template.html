@@ -127,9 +127,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="nbList" class="small" style="margin:6px 0"></div>
       <div class="small muted">選含多個案件資料夾的上層資料夾可一次全開；每段不同顏色。</div></section>
     <section><h2>影像（JPG／PNG＋JGW 定位檔）</h2>
-      <div class="row small"><button class="btn" id="btnImgAdd">載入影像</button><button class="btn" id="btnImgFit">縮放至影像</button></div>
-      <div id="imgList" class="small" style="margin:6px 0"></div>
-      <div class="small muted">舊圖掃描影像等。同時選 JPG 與同名 JGW（可多組）；沒有 JGW 時放在畫面中央，用「移影像」平移對位。</div></section>
+      <div class="row small"><button class="btn" id="btnImgAdd">載入影像</button><button class="btn" id="btnImgFit">縮放至作用中影像</button><button class="btn" id="btnImgManage">影像圖層設定 →</button></div>
+      <div id="imgSummary" class="small" style="margin:6px 0">尚未載入影像</div>
+      <div class="small muted">可一次選資料夾內所有 JPG（與同名 JGW）：全部先登記、預設不顯示，到「處理」分頁逐張決定顯示、透明度、上下層。只選一張時直接顯示。沒有 JGW 時放畫面中央，用「移影像」平移對位。</div></section>
     <section><h2>控制點與補點（已知點）</h2>
       <div id="ctlInfo" class="small muted"></div>
       <div class="row small" style="margin-top:6px"><button class="btn" id="btnCtlFit">縮放</button><button class="btn" id="btnCtlClear">清除</button>
@@ -154,6 +154,10 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div class="row small" style="margin-top:6px"><span id="pivotInfo" class="muted"></span><button class="btn" id="btnPivotReset">重設樞紐</button></div>
       <div class="row small" style="margin-top:6px"><button class="btn" id="btnAlign" title="依序點新圖點A→目標A′→新圖點B→目標B′，自動算旋轉與平移">兩點對位</button>
         <span class="muted">對象：已選取的要素；未選取則為整張新圖。「移圖」工具下 Shift+拖曳可旋轉。</span></div></section>
+    <section><h2>影像圖層</h2>
+      <div class="row small"><input type="text" id="imgFilter" placeholder="篩選檔名" style="width:110px"><button class="btn" id="btnImgAll" title="顯示（符合篩選的）全部影像">全部顯示</button><button class="btn" id="btnImgNone">全部隱藏</button></div>
+      <div id="imgList" class="small" style="margin:6px 0"></div>
+      <div class="small muted">清單由上而下＝上層到下層（▲▼ 調整）。「向量之下」畫在底圖與向量圖之間，「向量之上」蓋在向量圖上。隱藏的影像不佔記憶體。</div></section>
     <section><h2>影像平移對位</h2>
       <div class="row small"><button class="btn" id="btnImgTool" title="切到「移影像」工具 (I)">移影像工具</button><select id="imgActiveSel" title="作用中影像"></select></div>
       <div id="imgPos" class="small" style="margin:6px 0">尚未載入影像</div>
@@ -204,7 +208,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <p><b>版面</b>：右側分三個分頁——<b>① 輸入</b>（主要測區、鄰段、控制點、現況點）、<b>② 處理</b>（選取移動、變換、鄰段接合、參考線、面積較差）、<b>③ 輸出</b>（D14、異動點位 CSV、JSON、接合報告、列印）。上方工具列放繪圖工具與顯示選項。</p>
 <p><b>載入</b>：把案件資料夾拖進視窗，或在「輸入」分頁按「開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
 <p><b>鄰段接合</b>：先開主要測區，再按「加入鄰段」（或「加入鄰段資料夾」，可選含多個案件資料夾的上層資料夾；也可 Shift＋拖入）。每個鄰段以不同顏色顯示。「檢查接合」逐點檢查主區段界點與鄰段段界：<b>重合</b>（落在鄰段界址點／界線上）、<b>重疊</b>（跑進鄰段宗地內）、<b>脫開</b>（離鄰段段界有縫）。鄰段已重測時勾選「以鄰段為準」，按「自動接合」把主區點吸附到鄰段界址點（可復原）；報告可輸出 CSV／JSON。AI 可用 <code>CadastralAPI.joinSeam()</code>。</p>
-<p><b>影像疊圖</b>：「輸入」分頁「載入影像」選 JPG（或 PNG）與同名 JGW（PGW／WLD）。用上方「移影像」工具 (I) 拖曳作用中影像平移對位，或用方向鍵、輸入 ΔN／ΔE；「處理」分頁即時顯示左上像元中心坐標與位移，「輸出」分頁可下載調整後的 JGW。影像畫在底圖之上、向量圖之下，可調不透明度。</p>
+<p><b>影像疊圖</b>：「輸入」分頁「載入影像」選 JPG（或 PNG）與同名 JGW（PGW／WLD），可一次選整個資料夾的影像——全部先登記但預設不顯示，到「處理」分頁「影像圖層」逐張勾選顯示、調透明度、選「向量之下／之上」、用 ▲▼ 調上下層。用上方「移影像」工具 (I) 拖曳作用中影像平移對位，或用方向鍵、輸入 ΔN／ΔE；「處理」分頁即時顯示左上像元中心坐標與位移，「輸出」分頁可下載調整後的 JGW。影像畫在底圖之上、向量圖之下，可調不透明度。</p>
 <p><b>選取</b>：上方「點／線／面」可複選，決定點擊與框選能選到什麼。<kbd>Shift</kbd> 點擊加選／取消；在空白處拖曳框選。</p>
 <p><b>移動</b>：拖曳已選取的要素，或用方向鍵微調、或輸入 ΔN/ΔE。共用的界址點會讓相鄰地號一起變動，面積即時更新。選「線」會移動線的兩端點，選「面」會移動整宗地所有界址點。</p>
 <p><b>底圖與列印</b>：上方工具列「底圖」可選 OpenStreetMap、國土測繪中心電子地圖或正射影像（需連網；只適用 TWD97，TWD67 會偏移約 800 m；澎湖金門馬祖請改選 119°E）。「列印」(<kbd>Ctrl+P</kbd>) 可選 A4/A3、橫直式、指定比例尺（200～5000）與範圍，附標題欄、圖例、比例尺條與指北；列印時選「另存為 PDF」即可輸出 PDF。</p>

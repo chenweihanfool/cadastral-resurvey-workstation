@@ -296,7 +296,7 @@ function strokeArcs(d, color, w, dash) {
 }
 function render() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
-  drawBasemap(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); drawImages();
+  drawBasemap(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); drawImages(false);
   const ds = S.ds, sc = S.view.s;
   const cEdge = css('--edge'), cRef = css('--ref'), cSel = css('--sel'), cHov = css('--hover'), cChg = css('--changed'), cBad = css('--bad'), cSv = css('--survey');
   const tracePoly = (d, ids) => { ctx.beginPath(); ids.forEach((id, i) => { const p = d.points.get(id); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); }); ctx.closePath(); };
@@ -366,6 +366,7 @@ function render() {
       }
     }
   }
+  drawImages(true);
   // 現況點與參考線
   const sv = S.survey;
   if (sv.lines.length) {
@@ -727,10 +728,20 @@ addEventListener('drop', async e => {
   e.shiftKey ? loadNeighbors(files) : loadFiles(files);
 });
 
-// ── 影像疊圖（JPG／PNG ＋ JGW 定位檔）：載入舊圖掃描影像、平移對位、輸出調整後定位檔 ─────────
+// ── 影像疊圖（JPG／PNG ＋ JGW 定位檔）：資料夾內的影像全部先登記（只讀檔頭與定位檔），由使用者逐張決定是否顯示 ─────────
+// 每張可個別：顯示、不透明度、疊在向量圖之下／之上、上下層順序、平移對位。第一次顯示才解碼，隱藏即釋放記憶體。
 const IMG_RE = /^(jpg|jpeg|png)$/, WLD_RE = /^(jgw|jpgw|pgw|wld)$/;
 const imgActive = () => S.img[S.imgActive] || null;
 const imgBox = im => Core.imageBounds(im.wf, im.w, im.h);
+const imgIdx = im => S.img.indexOf(im);
+function ensureBitmap(im) {
+  if (im.bmp) return Promise.resolve(im.bmp);
+  if (!im.p) im.p = createImageBitmap(im.file, { imageOrientation: 'none' }).catch(() => createImageBitmap(im.file)).then(b => { if (im.visible && S.img.includes(im)) im.bmp = b; else b.close && b.close(); return im.bmp || null; })
+    .catch(e => { im.error = e.message; msg(`影像 ${im.name} 無法解碼：${e.message}`); return null; }).finally(() => { im.p = null; draw(); refresh(); });
+  return im.p;
+}
+function releaseBitmap(im) { if (im.bmp) { im.bmp.close && im.bmp.close(); im.bmp = null; } }
+function setImgVisible(im, v) { im.visible = v; if (v) ensureBitmap(im); else releaseBitmap(im); }
 async function loadImages(files) {
   const groups = new Map();
   for (const f of files) {
@@ -738,41 +749,50 @@ async function loadImages(files) {
     const key = nbDirOf(f) + m[1].toLowerCase(); let g = groups.get(key); if (!g) groups.set(key, g = { name: m[1] });
     if (isImg) g.img = f; else g.wld = f;
   }
-  const added = [], skipped = [];
-  for (const g of groups.values()) {
-    if (!g.img) { skipped.push(g.wld.name + '（找不到同名影像）'); continue; }
+  const withImg = [...groups.values()].filter(g => g.img), many = withImg.length > 1, added = [];
+  const skipped = [...groups.values()].filter(g => !g.img).map(g => g.wld.name + '（找不到同名影像）');
+  for (const g of withImg) {
     try {
-      const bmp = await createImageBitmap(g.img, { imageOrientation: 'none' }).catch(() => createImageBitmap(g.img));
+      let size = Core.imageSize(new Uint8Array(await g.img.slice(0, 262144).arrayBuffer())), bmp0 = null;
+      if (!size || !size.w) { bmp0 = await createImageBitmap(g.img, { imageOrientation: 'none' }).catch(() => createImageBitmap(g.img)); size = { w: bmp0.width, h: bmp0.height }; }
       let wf = null; if (g.wld) wf = Core.parseWorldFile(await readText(g.wld));
-      if (!wf) { const s = Math.max(W, 200) / S.view.s * 0.6 / bmp.width; wf = { a: s, d: 0, b: 0, e: -s, c: S.view.cx - bmp.width * s / 2, f: S.view.cy + bmp.height * s / 2 }; }   // 沒有定位檔：放在畫面中央，之後手動平移對位
-      const im = { name: g.img.name, w: bmp.width, h: bmp.height, bmp, wf, wf0: { ...wf }, visible: true, opacity: 0.8, located: !!g.wld };
+      if (!wf) { const s = Math.max(W, 200) / S.view.s * 0.6 / size.w; wf = { a: s, d: 0, b: 0, e: -s, c: S.view.cx - size.w * s / 2, f: S.view.cy + size.h * s / 2 }; }   // 沒有定位檔：放在畫面中央，之後手動平移對位
+      const im = { name: g.img.name, file: g.img, w: size.w, h: size.h, bmp: null, wf, wf0: { ...wf }, visible: false, opacity: 0.7, above: false, located: !!g.wld };
       const old = S.img.findIndex(q => q.name.toLowerCase() === im.name.toLowerCase());
-      if (old >= 0) { S.img[old].bmp.close && S.img[old].bmp.close(); S.img[old] = im; S.imgActive = old; } else { S.img.push(im); S.imgActive = S.img.length - 1; }
+      if (old >= 0) { releaseBitmap(S.img[old]); S.img[old] = im; } else S.img.push(im);
+      if (!many) { im.visible = true; if (bmp0) { im.bmp = bmp0; bmp0 = null; } else ensureBitmap(im); }   // 只載入單張：直接顯示；多張：全部先不顯示
+      if (bmp0 && bmp0.close) bmp0.close();
+      S.imgActive = S.img.indexOf(im);
       added.push(im.name + (g.wld ? '' : '（無定位檔，請平移對位）'));
     } catch (e) { skipped.push(g.img.name + '（' + e.message + '）'); }
   }
-  if (added.length) { const a = imgActive(); if (a) fit(imgBox(a)); }
+  if (added.length && !many) { const a = imgActive(); if (a) fit(imgBox(a)); }
   refresh();
-  msg(added.length ? `已載入影像：${added.join('、')}` + (skipped.length ? `；略過 ${skipped.join('、')}` : '') : '沒有可載入的影像' + (skipped.length ? `：${skipped.join('、')}` : '（需要 JPG／PNG，建議附同名 JGW／PGW）'));
+  msg(added.length ? (many ? `已登記 ${added.length} 張影像（預設不顯示）：到「處理」分頁的「影像圖層」勾選要顯示的` : `已載入影像：${added.join('、')}`) + (skipped.length ? `；略過 ${skipped.join('、')}` : '') : '沒有可載入的影像' + (skipped.length ? `：${skipped.join('、')}` : '（需要 JPG／PNG，建議附同名 JGW／PGW）'));
   return { added, skipped };
 }
-function drawImages() {
+// 影像 above=false 畫在向量圖之下、true 畫在向量圖之上；陣列後面的在上層
+function drawImages(above) {
   const vx0 = toWx(0), vx1 = toWx(W), vy0 = toWy(H), vy1 = toWy(0), act = imgActive();
   for (const im of S.img) {
-    if (!im.visible) continue;
+    if (!im.visible || !!im.above !== !!above) continue;
     const b = imgBox(im); if (b.x1 < vx0 || b.x0 > vx1 || b.y1 < vy0 || b.y0 > vy1) continue;
+    if (!im.bmp) { ensureBitmap(im); continue; }
     const { a, d, b: bb, e, c, f } = im.wf, s = S.view.s, ox = c - a / 2 - bb / 2, oy = f - d / 2 - e / 2;   // 影像左上角（像元邊緣）的世界坐標
     ctx.save(); ctx.globalAlpha = im.opacity; ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     ctx.setTransform(DPR * s * a, -DPR * s * d, DPR * s * bb, -DPR * s * e, DPR * toSx(ox), DPR * toSy(oy));
     ctx.drawImage(im.bmp, 0, 0); ctx.restore();
   }
-  if (act && act.visible && S.tool === 'img' && !S.printing) {   // 移影像工具：畫出作用中影像的外框
+  if (act && act.visible && !!act.above === !!above && S.tool === 'img' && !S.printing) {   // 移影像工具：畫出作用中影像的外框
     const q = Core.imageCorners(act.wf, act.w, act.h); ctx.save(); ctx.strokeStyle = css('--sel'); ctx.lineWidth = 2; ctx.setLineDash([8, 5]); ctx.beginPath();
     q.forEach((p, i) => i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y))); ctx.closePath(); ctx.stroke(); ctx.restore();
   }
 }
 const pointInQuad = (q, x, y) => { let ins = false; for (let i = 0, j = 3; i < 4; j = i++) if ((q[i].y > y) !== (q[j].y > y) && x < (q[j].x - q[i].x) * (y - q[i].y) / (q[j].y - q[i].y) + q[i].x) ins = !ins; return ins; };
-const imgAt = (wx, wy) => { for (let i = S.img.length - 1; i >= 0; i--) { const im = S.img[i]; if (im.visible && pointInQuad(Core.imageCorners(im.wf, im.w, im.h), wx, wy)) return i; } return -1; };
+const imgAt = (wx, wy) => {   // 由上層往下找：先看「向量之上」的，再看「向量之下」的
+  for (const ab of [true, false]) for (let i = S.img.length - 1; i >= 0; i--) { const im = S.img[i]; if (im.visible && !!im.above === ab && pointInQuad(Core.imageCorners(im.wf, im.w, im.h), wx, wy)) return i; }
+  return -1;
+};
 function imgPosText(im) {
   const dn = im.wf.f - im.wf0.f, de = im.wf.c - im.wf0.c;
   return `左上像元中心　N ${im.wf.f.toFixed(3)}　E ${im.wf.c.toFixed(3)}　｜　相對原定位 Δ北 ${dn >= 0 ? '+' : ''}${dn.toFixed(3)}　Δ東 ${de >= 0 ? '+' : ''}${de.toFixed(3)} m`;
@@ -782,28 +802,48 @@ function pushImgUndo(im, c0, f0, c1, f1) {
   const st = S.seamStale; pushUndo({ undoFn: () => { im.wf.c = c0; im.wf.f = f0; }, redoFn: () => { im.wf.c = c1; im.wf.f = f1; } }); S.seamStale = st;
 }
 function moveImage(im, dy, dx) { const c0 = im.wf.c, f0 = im.wf.f; setImgPos(im, c0 + dx, f0 + dy); pushImgUndo(im, c0, f0, im.wf.c, im.wf.f); }
+// 上下層：dir = 'up'（往上一層）、'down'、'top'、'bottom'
+function moveImgLayer(im, dir) {
+  const i = imgIdx(im); if (i < 0) return; const act = imgActive(); S.img.splice(i, 1);
+  const j = dir === 'top' ? S.img.length : dir === 'bottom' ? 0 : dir === 'up' ? Math.min(S.img.length, i + 1) : Math.max(0, i - 1);
+  S.img.splice(j, 0, im); S.imgActive = S.img.indexOf(act); draw(); refresh();
+}
+function removeImage(im) { const act = imgActive(), i = imgIdx(im); releaseBitmap(im); S.img.splice(i, 1); S.imgActive = act === im ? Math.min(i, S.img.length - 1) : S.img.indexOf(act); refresh(); }
 function imgPanel() {
-  const act = imgActive();
-  $('imgList').innerHTML = S.img.length ? S.img.map((im, i) => `<div class="row" style="margin:3px 0"><label class="chk" title="作用中（移影像工具的對象）"><input type="radio" name="imgAct" data-i="${i}" data-k="active"${i === S.imgActive ? ' checked' : ''}><b>${esc(im.name)}</b></label>` +
-    `<span class="muted">${im.w}×${im.h} px　${(Math.hypot(im.wf.a, im.wf.d)).toFixed(4)} m/px${im.located ? '' : '　<span class="neg">無定位檔</span>'}</span>` +
-    `<label class="chk"><input type="checkbox" data-i="${i}" data-k="visible"${im.visible ? ' checked' : ''}>顯示</label><input type="range" min="0.1" max="1" step="0.05" value="${im.opacity}" data-i="${i}" data-k="opacity" title="不透明度" style="width:64px">` +
-    `<button class="btn imgdel" data-i="${i}">✕</button></div>`).join('') : '<span class="muted">尚未載入影像</span>';
-  $('btnImgFit').disabled = !act; $('btnImgTool').classList.toggle('primary', S.tool === 'img');
+  const act = imgActive(), q = ($('imgFilter').value || '').trim().toLowerCase(), shown = S.img.filter(im => im.visible).length;
+  $('imgSummary').textContent = S.img.length ? `已登記 ${S.img.length} 張影像，顯示中 ${shown} 張。` : '尚未載入影像';
+  $('btnImgManage').disabled = !S.img.length; $('btnImgFit').disabled = !act;
+  const rows = []; for (let i = S.img.length - 1; i >= 0; i--) { const im = S.img[i]; if (q && !im.name.toLowerCase().includes(q)) continue;
+    rows.push(`<div style="border:1px solid var(--line);border-radius:6px;padding:6px;margin:5px 0${i === S.imgActive ? ';box-shadow:inset 3px 0 var(--sel)' : ''}"><div class="row"><label class="chk" title="顯示／隱藏這張影像"><input type="checkbox" data-i="${i}" data-k="visible"${im.visible ? ' checked' : ''}><b>${esc(im.name)}</b></label>` +
+      `<span class="muted small">${im.w}×${im.h}　${Math.hypot(im.wf.a, im.wf.d).toFixed(4)} m/px${im.located ? '' : '　<span class="neg">無定位檔</span>'}${im.visible && !im.bmp ? '　解碼中…' : ''}</span><span style="flex:1"></span>` +
+      `<button class="btn" data-i="${i}" data-k="up" title="上移一層">▲</button><button class="btn" data-i="${i}" data-k="down" title="下移一層">▼</button><button class="btn" data-i="${i}" data-k="fit" title="縮放到這張影像">縮放</button><button class="btn" data-i="${i}" data-k="del" title="移除">✕</button></div>` +
+      `<div class="row small" style="margin-top:4px"><span class="muted">透明度</span><input type="range" min="0.05" max="1" step="0.05" value="${im.opacity}" data-i="${i}" data-k="opacity" style="width:90px"><span class="muted" data-pct="${i}">${Math.round(im.opacity * 100)}%</span>` +
+      `<select data-i="${i}" data-k="above" title="疊在向量圖之下或之上"><option value="0"${im.above ? '' : ' selected'}>向量之下</option><option value="1"${im.above ? ' selected' : ''}>向量之上</option></select>` +
+      `<label class="chk" title="作用中：移影像工具與下方平移對位的對象"><input type="radio" name="imgAct" data-i="${i}" data-k="active"${i === S.imgActive ? ' checked' : ''}>作用中</label></div></div>`); }
+  $('imgList').innerHTML = S.img.length ? (rows.join('') || '<span class="muted">沒有符合的影像</span>') : '<span class="muted">尚未載入影像 — 到「輸入」分頁載入</span>';
+  $('btnImgTool').classList.toggle('primary', S.tool === 'img');
   $('imgActiveSel').innerHTML = S.img.map((im, i) => `<option value="${i}"${i === S.imgActive ? ' selected' : ''}>${esc(im.name)}</option>`).join('');
   $('imgActiveSel').disabled = !S.img.length; $('btnImgMove').disabled = $('btnImgReset').disabled = !act;
   $('imgPos').textContent = act ? imgPosText(act) : '尚未載入影像';
-  $('imgOut').innerHTML = S.img.length ? S.img.map((im, i) => `<div class="row" style="margin:3px 0"><button class="btn imgjgw" data-i="${i}">下載 ${esc(im.name.replace(/\.\w+$/, ''))}.jgw</button><span class="small muted">${Math.hypot(im.wf.c - im.wf0.c, im.wf.f - im.wf0.f) > 1e-9 ? `已平移 ${Math.hypot(im.wf.c - im.wf0.c, im.wf.f - im.wf0.f).toFixed(3)} m` : im.located ? '未平移' : '新建定位（原無定位檔）'}</span></div>`).join('') : '<span class="muted small">尚未載入影像</span>';
+  const moved = S.img.map((im, i) => [im, i]).filter(([im]) => Math.hypot(im.wf.c - im.wf0.c, im.wf.f - im.wf0.f) > 1e-9 || !im.located);
+  $('imgOut').innerHTML = moved.length ? moved.map(([im, i]) => `<div class="row" style="margin:3px 0"><button class="btn imgjgw" data-i="${i}">下載 ${esc(im.name.replace(/\.\w+$/, ''))}.jgw</button><span class="small muted">${im.located ? `已平移 ${Math.hypot(im.wf.c - im.wf0.c, im.wf.f - im.wf0.f).toFixed(3)} m` : '新建定位（原無定位檔）'}</span></div>`).join('') : '<span class="muted small">沒有平移過的影像</span>';
 }
 $('btnImgAdd').onclick = () => $('imgIn').click(); $('imgIn').onchange = e => { loadImages([...e.target.files]); e.target.value = ''; };
 $('btnImgFit').onclick = () => { const a = imgActive(); if (a) fit(imgBox(a)); };
+$('btnImgManage').onclick = () => setTab('proc');
 $('btnImgTool').onclick = () => setTool(S.tool === 'img' ? 'select' : 'img');
 $('imgActiveSel').onchange = e => { S.imgActive = +e.target.value; refresh(); };
 $('btnImgMove').onclick = () => { const a = imgActive(); if (a) moveImage(a, parseFloat($('imgDN').value) || 0, parseFloat($('imgDE').value) || 0); };
 $('btnImgReset').onclick = () => { const a = imgActive(); if (!a) return; const c0 = a.wf.c, f0 = a.wf.f; setImgPos(a, a.wf0.c, a.wf0.f); pushImgUndo(a, c0, f0, a.wf.c, a.wf.f); };
-const imgEvt = e => { const i = e.target.dataset.i; if (i == null || !S.img[i]) return; const k = e.target.dataset.k;
-  if (k === 'active') S.imgActive = +i; else if (k === 'visible') S.img[i].visible = e.target.checked; else if (k === 'opacity') S.img[i].opacity = +e.target.value; refresh(); };
-$('imgList').addEventListener('change', imgEvt); $('imgList').addEventListener('input', e => { if (e.target.dataset.k === 'opacity') imgEvt(e); });
-$('imgList').addEventListener('click', e => { if (e.target.classList.contains('imgdel')) { const i = +e.target.dataset.i; S.img[i].bmp.close && S.img[i].bmp.close(); S.img.splice(i, 1); S.imgActive = Math.min(S.imgActive, S.img.length - 1); refresh(); } });
+$('btnImgAll').onclick = () => { for (const im of S.img) { const q = ($('imgFilter').value || '').trim().toLowerCase(); if (!q || im.name.toLowerCase().includes(q)) setImgVisible(im, true); } refresh(); };
+$('btnImgNone').onclick = () => { for (const im of S.img) setImgVisible(im, false); refresh(); };
+$('imgFilter').oninput = refresh;
+$('imgList').addEventListener('input', e => { const k = e.target.dataset.k, im = S.img[e.target.dataset.i]; if (k !== 'opacity' || !im) return;   // 拖曳滑桿時不重建清單，只重畫
+  im.opacity = +e.target.value; const t = $('imgList').querySelector(`[data-pct="${e.target.dataset.i}"]`); if (t) t.textContent = Math.round(im.opacity * 100) + '%'; draw(); });
+$('imgList').addEventListener('change', e => { const im = S.img[e.target.dataset.i]; if (!im) return; const k = e.target.dataset.k;
+  if (k === 'visible') setImgVisible(im, e.target.checked); else if (k === 'active') S.imgActive = +e.target.dataset.i; else if (k === 'above') im.above = e.target.value === '1'; refresh(); });
+$('imgList').addEventListener('click', e => { const b = e.target.closest('button'); if (!b || b.dataset.i == null) return; const im = S.img[b.dataset.i]; if (!im) return;
+  if (b.dataset.k === 'up') moveImgLayer(im, 'up'); else if (b.dataset.k === 'down') moveImgLayer(im, 'down'); else if (b.dataset.k === 'fit') fit(imgBox(im)); else if (b.dataset.k === 'del') removeImage(im); });
 $('imgOut').addEventListener('click', e => { if (!e.target.classList.contains('imgjgw')) return; const im = S.img[+e.target.dataset.i]; download(im.name.replace(/\.\w+$/, '') + '.jgw', Core.worldFileText(im.wf), 'text/plain'); });
 
 // ── 分頁：輸入／處理／輸出 ───────────────────────────────────────────────────
@@ -1080,6 +1120,7 @@ async function renderPrint(canvas, o, dpr) {
   const plan = printPlan(o); if (!plan) throw new Error('沒有可列印的內容，請先載入圖資或匯入現況點');
   const { pw, ph, frame } = plan;
   if (o.basemap) await waitTiles(tileList(plan.view, pw, ph));
+  await Promise.all(S.img.filter(im => im.visible).map(ensureBitmap));
   const keep = { ctx, W, H, DPR, view: S.view, sel: S.sel, hover: S.hover, align: S.align, draft: S.draft, box: S.box, tool: S.tool, printing: S.printing, provider: S.basemap.provider };
   try {
     canvas.width = Math.round(pw * dpr); canvas.height = Math.round(ph * dpr);
@@ -1268,15 +1309,16 @@ const api = {
   // 效能診斷：連續繪製 n 次的平均毫秒
   benchRender: ({ n = 10 } = {}) => { const t0 = performance.now(); for (let i = 0; i < n; i++) render(); ctx.getImageData(0, 0, 1, 1); return { ms_per_frame: (performance.now() - t0) / n }; },
   // ── 影像疊圖：addImage 以 base64 影像＋定位檔文字載入；setImage 可用 dy/dx 相對平移，或 y/x 指定左上像元中心 ──
-  listImages: () => S.img.map(im => ({ name: im.name, width: im.w, height: im.h, located: im.located, visible: im.visible, opacity: im.opacity, active: im === imgActive(), origin: { y: im.wf.f, x: im.wf.c }, shift_m: Math.hypot(im.wf.c - im.wf0.c, im.wf.f - im.wf0.f), bounds: imgBox(im) })),
+  listImages: () => S.img.map((im, i) => ({ name: im.name, width: im.w, height: im.h, located: im.located, visible: im.visible, opacity: im.opacity, above_vectors: !!im.above, layer: i, active: im === imgActive(), origin: { y: im.wf.f, x: im.wf.c }, shift_m: Math.hypot(im.wf.c - im.wf0.c, im.wf.f - im.wf0.f), bounds: imgBox(im) })),
+  // 載入多張時預設不顯示；單張預設顯示。layer 數字越大越上層
   addImage: ({ name, base64, wld, wld_name }) => loadImages([toFile({ name, base64 }), ...(wld ? [toFile({ name: wld_name || name.replace(/\.\w+$/, '') + '.jgw', text: wld })] : [])]),
-  setImage: ({ name, visible, opacity, dy, dx, y, x }) => {
+  setImage: ({ name, visible, opacity, above_vectors, layer_move, dy, dx, y, x }) => {   // layer_move: up/down/top/bottom
     const im = S.img.find(q => q.name.toLowerCase() === String(name).toLowerCase()); if (!im) throw new Error('找不到影像 ' + name);
-    if (visible != null) im.visible = !!visible; if (opacity != null) im.opacity = Math.min(1, Math.max(0.05, opacity));
+    if (visible != null) setImgVisible(im, !!visible); if (opacity != null) im.opacity = Math.min(1, Math.max(0.05, opacity)); if (above_vectors != null) im.above = !!above_vectors; if (layer_move) moveImgLayer(im, layer_move);
     if (dy != null || dx != null || y != null || x != null) { const c0 = im.wf.c, f0 = im.wf.f; setImgPos(im, x != null ? x : c0 + (dx || 0), y != null ? y : f0 + (dy || 0)); pushImgUndo(im, c0, f0, im.wf.c, im.wf.f); }
     refresh(); return api.listImages();
   },
-  removeImage: ({ name }) => { const i = S.img.findIndex(q => q.name.toLowerCase() === String(name).toLowerCase()); if (i < 0) throw new Error('找不到影像 ' + name); S.img.splice(i, 1); S.imgActive = Math.min(S.imgActive, S.img.length - 1); refresh(); return api.listImages(); },
+  removeImage: ({ name }) => { const im = S.img.find(q => q.name.toLowerCase() === String(name).toLowerCase()); if (!im) throw new Error('找不到影像 ' + name); removeImage(im); return api.listImages(); },
   exportWorldFile: ({ name }) => { const im = S.img.find(q => q.name.toLowerCase() === String(name).toLowerCase()); if (!im) throw new Error('找不到影像 ' + name); return Core.worldFileText(im.wf); },
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
   exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
