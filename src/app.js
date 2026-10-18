@@ -446,7 +446,7 @@ function panel() {
   $('btnExpD14').disabled = !ds || !S.dbf.pts || !Core.movedPoints(ds).length;
   $('btnExpJson').disabled = !ds && !S.survey.points.size;
   $('drop').style.display = (ds || S.survey.points.size || S.nb.length) ? 'none' : 'flex';
-  lineList(); nbPanel();
+  lineList(); nbPanel(); outPanel();
   const srcs = [...new Set([...S.controls.values()].map(p => p.src))];
   $('ctlInfo').textContent = S.controls.size ? `已知點 ${S.controls.size} 個（${srcs.join('、')}）` : '尚未匯入控制點 — 匯入 MAC 前需先匯入 CTL／CT2（或載入含 D20 的案件）';
   $('btnCtlClear').disabled = !S.controls.size;
@@ -710,6 +710,37 @@ addEventListener('drop', async e => {
   e.shiftKey ? loadNeighbors(files) : loadFiles(files);
 });
 
+// ── 分頁：輸入／處理／輸出 ───────────────────────────────────────────────────
+function setTab(k) {
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === k));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === 'pane-' + k));
+  try { localStorage.setItem('cw.tab', k); } catch (e) { /* ignore */ }
+}
+document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => setTab(b.dataset.tab); });
+try { const k = localStorage.getItem('cw.tab'); if (k && document.getElementById('pane-' + k)) setTab(k); } catch (e) { /* ignore */ }
+$('btnGoOut').onclick = () => setTab('out');
+// 輸出分頁的摘要：說明目前有什麼可輸出、為何輸出鈕是灰的
+function outPanel() {
+  const ds = S.ds, moved = ds ? Core.movedPoints(ds).length : 0, changed = ds ? ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0;
+  $('btnExpMoved').disabled = !moved; $('btnGoOut').hidden = !moved;
+  let h = '', hint = '';
+  if (!ds) h = '<span class="muted">尚未載入主要測區。</span>';
+  else {
+    h = `已移動 <b>${moved}</b> 個界址點，面積變動 <b>${changed}</b> 宗地號。`;
+    if (!moved) {
+      const j = S.seam && S.seam.join;
+      hint = '目前沒有異動點，所以輸出鈕是灰色。先在「處理」移動點，或按「自動接合」。';
+      if (j) {
+        const un = j.unresolved, beyond = un.filter(u => u.reason === 'beyond_snap').length, conf = un.filter(u => u.reason === 'conflict').length;
+        hint = '上次自動接合沒有移動任何點：' + [j.skipped.length ? `未勾選「以鄰段為準」的鄰段：${j.skipped.join('、')}` : '', beyond ? `${beyond} 點超出吸附上限（可到「處理」調高「吸附」）` : '', conf ? `${conf} 點與別點搶同一鄰段點` : ''].filter(Boolean).join('；') + '。';
+      }
+    } else if (S.dbf.pts) hint = '「輸出 D14」：取代案件資料夾內原 D14 後，在 NECEXE 重開並重算面積（尚未實際匯入 NECEXE 驗證）。D13／D11 不變。';
+    else hint = '主要測區不是由 D14 載入（COA／BNP），無法輸出 D14；請用「異動點位 CSV」或「輸出 JSON」。';
+  }
+  $('outSummary').innerHTML = h; $('outHint').textContent = hint;
+}
+$('btnExpMoved').onclick = () => download(`${(S.ds.name || 'main').replace(/\.\w+$/, '')}-moved-points.csv`, '\ufeff' + Core.movedPointsCsv(S.ds, S.seam && S.seam.join), 'text/csv;charset=utf-8');
+
 // ── 鄰段：同時載入相鄰地段、以不同顏色區分，並檢查／接合段界 ───────────────────
 const NB_COLORS = ['#e8590c', '#1c7ed6', '#9c36b5', '#2f9e44', '#c2255c', '#b08900', '#0c8599', '#6741d9'];
 const SEAM_COLOR = { coincide: '#1a7f37', overlap: '#d1242f', gap: '#f08c00', missing_in_main: '#9c36b5', unmatched: '#9c36b5' };
@@ -748,18 +779,44 @@ async function loadNeighbors(files) {
   msg(added.length ? `已加入鄰段：${added.join('、')}` + (skipped.length ? `；略過 ${skipped.join('、')}` : '') : '沒有可加入的鄰段' + (skipped.length ? `：${skipped.join('、')}` : '（需要 D14+D13 或 COA+BNP）'));
   return r;
 }
+// 鄰段繪圖快取：邊／宗地外框／圓弧預先建成 Path2D（以鄰段左下角為原點的公尺坐標），依空間分塊，只畫畫面內的塊；
+// 縮小到看不清內部線時只畫外框。每一幀不再逐邊呼叫 moveTo/lineTo，也不再重算重心與範圍。
+function buildNbCache(n) {
+  const d = n.ds, b = Core.bounds(d), ox = b.x0, oy = b.y0, cs = Math.max(b.x1 - b.x0, b.y1 - b.y0, 1) / 8, tiles = new Map();
+  const tile = (x, y) => { const k = Math.floor((x - ox) / cs) + ',' + Math.floor((y - oy) / cs); let t = tiles.get(k); if (!t) tiles.set(k, t = { edges: new Path2D(), fill: new Path2D(), x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }); return t; };
+  const grow = (t, x, y) => { if (x < t.x0) t.x0 = x; if (x > t.x1) t.x1 = x; if (y < t.y0) t.y0 = y; if (y > t.y1) t.y1 = y; };
+  let len = 0, ne = 0;
+  for (const e of d.edges.values()) {
+    if (e.arcPart) continue; const a = d.points.get(e.a), q = d.points.get(e.b), t = tile((a.x + q.x) / 2, (a.y + q.y) / 2);
+    t.edges.moveTo(a.x - ox, a.y - oy); t.edges.lineTo(q.x - ox, q.y - oy); grow(t, a.x - ox, a.y - oy); grow(t, q.x - ox, q.y - oy); len += Math.hypot(a.x - q.x, a.y - q.y); ne++;
+  }
+  for (const ar of d.arcs ? d.arcs.values() : []) {
+    const pl = Core.arcPolyline(d.points.get(ar.a), d.points.get(ar.b), d.points.get(ar.c), 16), bp = d.points.get(ar.b), t = tile(bp.x, bp.y);
+    pl.forEach((p, i) => { i ? t.edges.lineTo(p.x - ox, p.y - oy) : t.edges.moveTo(p.x - ox, p.y - oy); grow(t, p.x - ox, p.y - oy); });
+  }
+  const labels = [];
+  for (const p of d.parcels) {
+    const c = Core.centroidOf(d.points, p.ids), t = tile(c.x, c.y); labels.push({ x: c.x - ox, y: c.y - oy, t: p.label });
+    p.ids.forEach((id, i) => { const q = d.points.get(id); i ? t.fill.lineTo(q.x - ox, q.y - oy) : t.fill.moveTo(q.x - ox, q.y - oy); grow(t, q.x - ox, q.y - oy); }); t.fill.closePath();
+  }
+  const outline = new Path2D(); for (const s of n.seg.segs) { outline.moveTo(s.ax - ox, s.ay - oy); outline.lineTo(s.bx - ox, s.by - oy); }
+  const bv = []; for (const id of n.seg.vids) { const p = d.points.get(id); if (p) bv.push(p.x - ox, p.y - oy); }
+  return { ox, oy, tiles: [...tiles.values()], labels, outline, bv, avgEdge: ne ? len / ne : 1, cx: (b.x1 - b.x0) / 2, cy: (b.y1 - b.y0) / 2, w: b.x1 - ox, h: b.y1 - oy };
+}
 function drawNeighbor(n) {
-  const d = n.ds, c = n.color, sc = S.view.s;
-  ctx.fillStyle = c + '22'; ctx.beginPath();
-  for (const p of d.parcels) p.ids.forEach((id, i) => { const q = d.points.get(id); i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)); }), ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = c; ctx.lineWidth = 1.2; ctx.beginPath();
-  for (const e of d.edges.values()) { if (e.arcPart) continue; const a = d.points.get(e.a), b = d.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
-  ctx.stroke(); strokeArcs(d, c, 1.2);
-  if (sc > 3) { ctx.fillStyle = c; const r = sc > 8 ? 2.5 : 1.8; for (const id of n.seg.vids) { const p = d.points.get(id); ctx.fillRect(toSx(p.x) - r, toSy(p.y) - r, r * 2, r * 2); } }
+  const c = n.cache || (n.cache = buildNbCache(n)), sc = S.view.s, col = n.color;
+  const vx0 = toWx(0) - c.ox, vx1 = toWx(W) - c.ox, vy0 = toWy(H) - c.oy, vy1 = toWy(0) - c.oy;
+  if (vx1 < 0 || vy1 < 0 || vx0 > c.w || vy0 > c.h) return;                     // 整個鄰段都在畫面外
+  const detail = c.avgEdge * sc >= 3;                                            // 平均邊長不到 3 px：內部線看不清，只畫外框
+  ctx.save(); ctx.setTransform(DPR * sc, 0, 0, -DPR * sc, DPR * toSx(c.ox), DPR * toSy(c.oy));
+  ctx.fillStyle = col + '22'; ctx.strokeStyle = col; ctx.lineWidth = 1.2 / sc;
+  for (const t of c.tiles) { if (t.x1 < vx0 || t.x0 > vx1 || t.y1 < vy0 || t.y0 > vy1) continue; ctx.fill(t.fill); if (detail) ctx.stroke(t.edges); }
+  if (!detail) { ctx.lineWidth = 1.5 / sc; ctx.stroke(c.outline); }
+  ctx.restore();
+  if (sc > 3) { ctx.fillStyle = col; const r = sc > 8 ? 2.5 : 1.8; for (let i = 0; i < c.bv.length; i += 2) { if (c.bv[i] < vx0 || c.bv[i] > vx1 || c.bv[i + 1] < vy0 || c.bv[i + 1] > vy1) continue; ctx.fillRect(toSx(c.ox + c.bv[i]) - r, toSy(c.oy + c.bv[i + 1]) - r, r * 2, r * 2); } }
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  if (sc > 1.2) { ctx.font = `${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.fillStyle = c; for (const p of d.parcels) { const q = Core.centroidOf(d.points, p.ids), sx = toSx(q.x), sy = toSy(q.y); if (sx > 0 && sy > 0 && sx < W && sy < H) ctx.fillText(p.label, sx, sy); } }
-  const b = Core.bounds(d); ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = c; ctx.fillText(n.name, toSx((b.x0 + b.x1) / 2), toSy((b.y0 + b.y1) / 2));
+  if (sc > 2 && $('chkLabel').checked) { ctx.font = `${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.fillStyle = col; let k = 0; for (const l of c.labels) { if (l.x < vx0 || l.x > vx1 || l.y < vy0 || l.y > vy1) continue; ctx.fillText(l.t, toSx(c.ox + l.x), toSy(c.oy + l.y)); if (++k > 800) break; } }
+  ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = col; ctx.fillText(n.name, toSx(c.ox + c.cx), toSy(c.oy + c.cy));
 }
 function drawSeam() {
   const ds = S.ds; if (!ds || !S.seam) return;
@@ -786,8 +843,9 @@ function joinSeam(o = {}) {
   for (const m of j.moves) if (!first.has(m.id)) first.set(m.id, m.from);
   const before = [...first].map(([id, f]) => [id, f.y, f.x]), after = [...first.keys()].map(id => { const p = S.ds.points.get(id); return [id, p.y, p.x]; });
   commit(before, after, '鄰段接合');
-  S.seam = { ...j.after, join: { before: j.before.totals, moves: j.moves, unresolved: j.unresolved } }; S.seamStale = false; refresh();
-  msg(`鄰段接合：移動 ${first.size} 點；仍有 ${j.after.totals.overlap + j.after.totals.gap} 點重疊／脫開（未處理 ${j.unresolved.length}）`);
+  const skipped = S.nb.filter(n => !n.authoritative).map(n => n.name);
+  S.seam = { ...j.after, join: { before: j.before.totals, moves: j.moves, unresolved: j.unresolved, skipped } }; S.seamStale = false; refresh();
+  msg(first.size ? `鄰段接合：移動 ${first.size} 點；仍有 ${j.after.totals.overlap + j.after.totals.gap} 點重疊／脫開（未處理 ${j.unresolved.length}）。到「輸出」分頁輸出 D14` : `鄰段接合：沒有移動任何點（${skipped.length ? '有鄰段未勾選「以鄰段為準」；' : ''}未處理 ${j.unresolved.length}）`);
   return { before: j.before.totals, after: j.after.totals, moves: j.moves, unresolved: j.unresolved, report: S.seam };
 }
 function nbPanel() {
@@ -801,7 +859,7 @@ function nbPanel() {
   if (!s) { $('seamSum').textContent = S.ds && S.nb.length ? '按「檢查接合」逐點檢查主區段界點與鄰段段界是否重合、重疊或脫開' : ''; $('seamTbl').innerHTML = ''; return; }
   const t = s.totals;
   $('seamSum').innerHTML = `檢查 ${t.checked} 點：<span style="color:${SEAM_COLOR.coincide}">重合 ${t.coincide}</span>／<span style="color:${SEAM_COLOR.overlap}">重疊 ${t.overlap}</span>／<span style="color:${SEAM_COLOR.gap}">脫開 ${t.gap}</span>；鄰段點主區缺 ${t.neighbor_missing_in_main}` +
-    (S.seamStale ? ' <b class="neg">（點位已變動，請重新檢查）</b>' : '') + (s.join ? `<br>上次接合：移動 ${new Set(s.join.moves.map(m => m.id)).size} 點，未處理 ${s.join.unresolved.length}` : '');
+    (S.seamStale ? ' <b class="neg">（點位已變動，請重新檢查）</b>' : '') + (s.join ? `<br>上次接合：移動 ${new Set(s.join.moves.map(m => m.id)).size} 點，未處理 ${s.join.unresolved.length}（超出吸附上限 ${s.join.unresolved.filter(u => u.reason === 'beyond_snap').length}、搶同一鄰段點 ${s.join.unresolved.filter(u => u.reason === 'conflict').length}）` + (s.join.skipped.length ? `；未勾「以鄰段為準」：${esc(s.join.skipped.join('、'))}` : '') : '');
   const showOk = $('seamShowOk').checked, rows = [];
   for (const n of s.neighbors) {
     for (const r of n.points) if (showOk || r.status !== 'coincide') rows.push({ n: n.name, t: 'p', id: r.id, st: r.status, v: r.gap_m, y: r.y, x: r.x, k: r.kind });
@@ -863,7 +921,7 @@ function impPreview() {
   $('impPrev').textContent = t;
 }
 function openImport(text = '', fname = '', kind = null) { if (kind) $('impKind').value = kind; $('impText').value = text; $('impName').textContent = fname; impPreview(); $('impDlg').showModal(); }
-$('btnImp').onclick = $('btnImp2').onclick = () => openImport();
+$('btnImp').onclick = () => openImport();
 $('impFile').onchange = async e => { const f = e.target.files[0]; if (f) { $('impText').value = await readText(f); $('impName').textContent = f.name; impPreview(); } e.target.value = ''; };
 ['impKind', 'impText', 'xyOrder', 'angFmt', 'stY', 'stX'].forEach(id => $(id).addEventListener('input', impPreview));
 $('impGo').onclick = e => {
@@ -1059,6 +1117,7 @@ if (autoUpdOn() && /^(https?|file):$/.test(location.protocol)) setTimeout(() => 
 
 // ── AI / MCP 預留介面 ─────────────────────────────────────────────────────
 const findPar = q => S.ds.parcels.find(p => p.label === String(q) || p.oldLabel === String(q));
+const toFile = f => new File([f.base64 ? Uint8Array.from(atob(f.base64), c => c.charCodeAt(0)) : new TextEncoder().encode(f.text || '')], f.name);
 const api = {
   getState: () => ({ loaded: !!S.ds, source: S.ds && S.ds.source, points: S.ds ? S.ds.points.size : 0, parcels: S.ds ? S.ds.parcels.length : 0,
     moved_points: S.ds ? Core.movedPoints(S.ds).length : 0, control_points: S.controls.size, survey_points: S.survey.points.size, reference_lines: S.survey.lines.length,
@@ -1099,13 +1158,19 @@ const api = {
   // ── 鄰段接合（MCP）：listNeighbors → addNeighbor → joinSeam（自動接合並回傳報告）／checkSeam（只檢查）→ getSeamReport ──
   listNeighbors: () => S.nb.map(n => ({ name: n.name, source: n.ds.source, parcels: n.ds.parcels.length, points: n.ds.points.size, boundary_points: n.seg.vids.size, visible: n.visible, authoritative: n.authoritative, color: n.color })),
   // files: [{name:'KC1120.D14', base64:'…'} | {name:'KC1120.BNP', text:'…'}]，需 D14+D13（建議 D11、D12）或 COA+BNP
-  addNeighbor: ({ files = [] } = {}) => loadNeighbors(files.map(f => new File([f.base64 ? Uint8Array.from(atob(f.base64), c => c.charCodeAt(0)) : new TextEncoder().encode(f.text || '')], f.name))),
+  addNeighbor: ({ files = [] } = {}) => loadNeighbors(files.map(toFile)),
   removeNeighbor: ({ name }) => { const i = S.nb.findIndex(n => n.name.toLowerCase() === String(name).toLowerCase()); if (i < 0) throw new Error('找不到鄰段 ' + name); S.nb.splice(i, 1); S.seam = null; refresh(); return api.listNeighbors(); },
   setNeighbor: ({ name, visible, authoritative }) => { const n = S.nb.find(n => n.name.toLowerCase() === String(name).toLowerCase()); if (!n) throw new Error('找不到鄰段 ' + name); if (visible != null) n.visible = !!visible; if (authoritative != null) n.authoritative = !!authoritative; refresh(); return api.listNeighbors(); },
   // 參數：tol 重合容差、search 搜尋距離、snap 吸附上限（公尺）；省略用畫面上的設定
   checkSeam: o => runSeam(o || {}),
   joinSeam: o => joinSeam(o || {}),
   getSeamReport: ({ format = 'json' } = {}) => { if (!S.seam) throw new Error('尚未檢查接合'); return format === 'text' ? Core.seamReportText(S.seam) : format === 'csv' ? Core.seamReportCsv(S.seam) : S.seam; },
+  // 載入／輸出案件（AI 不能用檔案選擇器）：files 同 addNeighbor；exportD14 回傳 {name, base64, moved}
+  loadCase: async ({ files = [] } = {}) => ({ ok: await loadFiles(files.map(toFile)), ...api.getState() }),
+  exportD14: () => { if (!S.dbf.pts) throw new Error('主要測區不是由 D14 載入'); const r = Core.exportD14(S.dbf.pts, S.ds); let bin = ''; for (let i = 0; i < r.bytes.length; i += 8192) bin += String.fromCharCode.apply(null, r.bytes.subarray(i, i + 8192)); return { name: S.names.d14 || 'out.D14', base64: btoa(bin), moved: Core.movedPoints(S.ds).length }; },
+  exportMovedCsv: () => Core.movedPointsCsv(S.ds, S.seam && S.seam.join),
+  // 效能診斷：連續繪製 n 次的平均毫秒
+  benchRender: ({ n = 10 } = {}) => { const t0 = performance.now(); for (let i = 0; i < n; i++) render(); ctx.getImageData(0, 0, 1, 1); return { ms_per_frame: (performance.now() - t0) / n }; },
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
   exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
 };

@@ -28,6 +28,10 @@ main{display:grid;grid-template-columns:1fr 440px;min-height:0}
 #drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);pointer-events:none}
 #drop b{color:var(--ink);font-size:18px;display:block;margin-bottom:6px}
 aside{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:auto}
+#tabs{display:flex;position:sticky;top:0;z-index:2;background:var(--panel);border-bottom:1px solid var(--line)}
+#tabs button{flex:1;border:0;border-bottom:3px solid transparent;background:none;color:var(--muted);padding:9px 4px;font:inherit;font-weight:600;cursor:pointer}
+#tabs button.on{color:var(--accent);border-bottom-color:var(--accent)} #tabs button:hover{color:var(--ink)}
+.pane{display:none}.pane.on{display:block}
 section{padding:10px 12px;border-bottom:1px solid var(--line)}
 section h2{font-size:13px;margin:0 0 6px;color:var(--muted);font-weight:600;letter-spacing:.04em}
 .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -86,17 +90,12 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <div id="app">
 <header>
   <h1>地籍圖調整工作台</h1>
-  <button class="btn primary" id="btnOpen">開啟檔案</button>
-  <button class="btn" id="btnFolder">開啟資料夾</button>
-  <button class="btn" id="btnImp">匯入現況點</button>
   <input type="file" id="fileIn" multiple hidden>
   <input type="file" id="dirIn" webkitdirectory hidden>
   <input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden>
-  <span class="sep"></span>
   <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button></div>
   <div class="seg" id="filters" title="可複選：決定能選取哪些要素 (1/2/3)">
     <button data-f="pt" class="on">點</button><button data-f="edge" class="on">線</button><button data-f="par" class="on">面</button></div>
-  <span class="sep"></span>
   <button class="btn" id="btnUndo" disabled>復原</button><button class="btn" id="btnRedo" disabled>重做</button>
   <button class="btn" id="btnReset" disabled>還原全部</button>
   <span class="sep"></span>
@@ -109,10 +108,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <select id="bmSel" title="底圖（需連網，適用 TWD97）"><option value="none">底圖：無</option><option value="osm">OpenStreetMap</option><option value="emap">NLSC 電子地圖</option><option value="photo">NLSC 航照</option></select>
   <input type="range" id="bmOp" min="0.2" max="1" step="0.05" value="0.9" title="底圖不透明度" style="width:64px">
   <select id="bmCm" title="TWD97 中央經線"><option value="121">121°E 本島</option><option value="119">119°E 澎金馬</option></select>
-  <button class="btn" id="btnPrint" title="列印 (Ctrl+P)">列印</button>
-  <span class="sep"></span>
-  <button class="btn" id="btnExpD14" disabled>輸出 D14</button>
-  <button class="btn" id="btnExpJson" disabled>輸出 JSON</button>
+  <span style="flex:1"></span>
   <button class="btn" id="btnHelp">說明</button>
   <button class="btn" id="btnVer" title="版本歷程與更新">版本</button>
 </header>
@@ -120,7 +116,27 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div id="stage"><canvas id="cv"></canvas><div id="tip"></div><div id="hint" style="display:none;position:absolute;left:10px;top:10px;right:10px;z-index:3;background:var(--panel);border:1px solid var(--accent);border-radius:6px;padding:6px 10px;font-size:13px"></div>
     <div id="drop"><div><b>把案件資料夾或檔案拖進來</b>支援 D11 / D13 / D14（可加 D2B / D2C 舊圖）<br>或 COA / BNP / PAR</div></div></div>
   <aside>
-    <section><h2>選取</h2><div id="selInfo" class="small muted">尚未選取</div>
+    <nav id="tabs"><button data-tab="in" class="on">① 輸入</button><button data-tab="proc">② 處理</button><button data-tab="out">③ 輸出</button></nav>
+    <div class="pane on" id="pane-in">
+    <section><h2>主要測區（要重測的地段）</h2>
+      <div class="row"><button class="btn primary" id="btnOpen">開啟檔案</button><button class="btn" id="btnFolder">開啟資料夾</button></div>
+      <div class="small muted" style="margin-top:6px">D14＋D13（建議加 D11／D12，可附 D2C＋D2D 舊圖）或 COA＋BNP。也可直接把資料夾拖進畫面。</div>
+      <div id="layerInfo" class="small muted" style="margin-top:6px">—</div></section>
+    <section><h2>鄰段（相鄰地段，可多個）</h2>
+      <div class="row small"><button class="btn" id="btnNbAdd">加入鄰段</button><button class="btn" id="btnNbDir">加入鄰段資料夾</button><button class="btn" id="btnNbFit">縮放全部</button></div>
+      <div id="nbList" class="small" style="margin:6px 0"></div>
+      <div class="small muted">選含多個案件資料夾的上層資料夾可一次全開；每段不同顏色。</div></section>
+    <section><h2>控制點與補點（已知點）</h2>
+      <div id="ctlInfo" class="small muted"></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" id="btnCtlFit">縮放</button><button class="btn" id="btnCtlClear">清除</button>
+        <span class="muted">匯入：開啟檔案／拖入 CTL、CT2、CEN、L02 或含 D20 的資料夾</span></div></section>
+    <section><h2>現況點</h2>
+      <div class="row small"><button class="btn" id="btnImp">匯入現況點</button><span class="muted">座標檔、極座標觀測或 MAC 手簿檔</span></div>
+      <div id="svInfo" class="small muted" style="margin:6px 0"></div>
+</section>
+    </div>
+    <div class="pane" id="pane-proc">
+    <section><h2>選取與移動</h2><div id="selInfo" class="small muted">尚未選取</div>
       <div class="row" style="margin-top:8px">
         <label>北 ΔN(m) <input type="number" id="dN" step="0.01" value="0"></label>
         <label>東 ΔE(m) <input type="number" id="dE" step="0.01" value="0"></label>
@@ -134,22 +150,17 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div class="row small" style="margin-top:6px"><span id="pivotInfo" class="muted"></span><button class="btn" id="btnPivotReset">重設樞紐</button></div>
       <div class="row small" style="margin-top:6px"><button class="btn" id="btnAlign" title="依序點新圖點A→目標A′→新圖點B→目標B′，自動算旋轉與平移">兩點對位</button>
         <span class="muted">對象：已選取的要素；未選取則為整張新圖。「移圖」工具下 Shift+拖曳可旋轉。</span></div></section>
-    <section><h2>控制點與補點（已知點）</h2>
-      <div id="ctlInfo" class="small muted"></div>
-      <div class="row small" style="margin-top:6px"><button class="btn" id="btnCtlFit">縮放</button><button class="btn" id="btnCtlClear">清除</button>
-        <span class="muted">匯入：開啟檔案／拖入 CTL、CT2、CEN、L02 或含 D20 的資料夾</span></div></section>
     <section><h2>鄰段接合</h2>
-      <div class="row small"><button class="btn" id="btnNbAdd">加入鄰段</button><button class="btn" id="btnNbDir">加入鄰段資料夾</button><button class="btn" id="btnNbFit">縮放全部</button></div>
-      <div id="nbList" class="small" style="margin:6px 0"></div>
+      <div class="small muted" style="margin-bottom:6px">先在「輸入」加入鄰段。已重測的鄰段勾選「以鄰段為準」，主區段界點會吸附過去。</div>
+
       <div class="row small"><span class="muted">重合容差</span><input type="number" id="seamTol" value="0.01" step="0.005" min="0" style="width:62px"><span class="muted">搜尋</span><input type="number" id="seamSearch" value="3" step="0.5" min="0" style="width:52px"><span class="muted">吸附</span><input type="number" id="seamSnap" value="1" step="0.1" min="0" style="width:52px"><span class="muted">m</span></div>
-      <div class="row small" style="margin-top:6px"><button class="btn" id="btnSeamChk">檢查接合</button><button class="btn" id="btnSeamJoin" title="把脫開／重疊的主區段界點吸附到鄰段界址點（可復原）">自動接合</button><button class="btn" id="btnSeamCsv">報告 CSV</button><button class="btn" id="btnSeamJson">報告 JSON</button></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" id="btnSeamChk">檢查接合</button><button class="btn" id="btnSeamJoin" title="把脫開／重疊的主區段界點吸附到鄰段界址點（可復原）">自動接合</button><button class="btn" id="btnGoOut" hidden title="到「輸出」分頁輸出 D14">前往輸出 →</button></div>
       <div class="row small" style="margin-top:6px"><label class="chk"><input type="checkbox" id="chkSeam" checked>圖上標記</label><label class="chk"><input type="checkbox" id="seamShowOk">列出重合點</label></div>
       <div id="seamSum" class="small muted" style="margin:6px 0"></div>
       <div id="seamWrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>鄰段</th><th>點號</th><th>狀態</th><th>偏差 m</th></tr></thead><tbody id="seamTbl"></tbody></table></div>
       <div class="small muted" style="margin-top:4px">偏差：脫開為＋、重疊為−。以鄰段為準：主區點吸附到鄰段界址點。</div></section>
-    <section><h2>現況點與參考線</h2>
-      <div class="row small"><button class="btn" id="btnImp2">匯入現況點</button><button class="btn" id="btnSvFit">縮放至現況點</button><button class="btn" id="btnSvClear">清除</button></div>
-      <div id="svInfo" class="small muted" style="margin:6px 0"></div>
+    <section><h2>現況點參考線</h2>
+      <div class="row small"><button class="btn" id="btnSvFit">縮放至現況點</button><button class="btn" id="btnSvClear">清除</button></div>
       <table><thead><tr><th>參考線</th><th>點</th><th>長 m</th><th>面積 m²</th><th></th><th></th></tr></thead><tbody id="lineList"></tbody></table>
       <div class="small muted" style="margin-top:4px">「連線」工具 (L)：依序點現況點；Enter 完成；點回第一點閉合。</div></section>
     <section><h2>面積較差</h2>
@@ -160,17 +171,30 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
         <input type="text" id="find" placeholder="跳至地號 (例 137-1)"></div>
       <div id="tblwrap"><table><thead><tr><th>地號</th><th>登記</th><th>調整前</th><th>現面積</th><th>Δ調整</th><th>Δ登記</th></tr></thead><tbody id="tbody"></tbody></table></div>
       <div id="sumInfo" class="small muted" style="margin-top:6px"></div></section>
-    <section><h2>圖層資訊</h2><div id="layerInfo" class="small muted">—</div></section>
+    </div>
+    <div class="pane" id="pane-out">
+    <section><h2>調整成果</h2>
+      <div id="outSummary" class="small" style="margin-bottom:8px"></div>
+      <div class="row"><button class="btn primary" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div>
+      <div id="outHint" class="small muted" style="margin-top:6px"></div></section>
+    <section><h2>鄰段接合報告</h2>
+      <div class="row"><button class="btn" id="btnSeamCsv">報告 CSV</button><button class="btn" id="btnSeamJson">報告 JSON</button></div>
+      <div class="small muted" style="margin-top:6px">逐點檢查結果（重合／重疊／脫開）與自動接合的移動紀錄。</div></section>
+    <section><h2>成果圖</h2>
+      <div class="row"><button class="btn" id="btnPrint" title="列印 (Ctrl+P)">列印成果圖</button></div>
+      <div class="small muted" style="margin-top:6px">A4／A3、比例尺、可另存 PDF 或輸出 PNG。</div></section>
+    </div>
   </aside>
 </main>
 <footer><span id="stCoord">—</span><span id="stScale">—</span><span id="stMsg"></span></footer>
 </div>
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
-<p><b>載入</b>：把案件資料夾拖進視窗，或按「開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
+<p><b>版面</b>：右側分三個分頁——<b>① 輸入</b>（主要測區、鄰段、控制點、現況點）、<b>② 處理</b>（選取移動、變換、鄰段接合、參考線、面積較差）、<b>③ 輸出</b>（D14、異動點位 CSV、JSON、接合報告、列印）。上方工具列放繪圖工具與顯示選項。</p>
+<p><b>載入</b>：把案件資料夾拖進視窗，或在「輸入」分頁按「開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
 <p><b>鄰段接合</b>：先開主要測區，再按「加入鄰段」（或「加入鄰段資料夾」，可選含多個案件資料夾的上層資料夾；也可 Shift＋拖入）。每個鄰段以不同顏色顯示。「檢查接合」逐點檢查主區段界點與鄰段段界：<b>重合</b>（落在鄰段界址點／界線上）、<b>重疊</b>（跑進鄰段宗地內）、<b>脫開</b>（離鄰段段界有縫）。鄰段已重測時勾選「以鄰段為準」，按「自動接合」把主區點吸附到鄰段界址點（可復原）；報告可輸出 CSV／JSON。AI 可用 <code>CadastralAPI.joinSeam()</code>。</p>
 <p><b>選取</b>：上方「點／線／面」可複選，決定點擊與框選能選到什麼。<kbd>Shift</kbd> 點擊加選／取消；在空白處拖曳框選。</p>
 <p><b>移動</b>：拖曳已選取的要素，或用方向鍵微調、或輸入 ΔN/ΔE。共用的界址點會讓相鄰地號一起變動，面積即時更新。選「線」會移動線的兩端點，選「面」會移動整宗地所有界址點。</p>
-<p><b>底圖與列印</b>：工具列「底圖」可選 OpenStreetMap、國土測繪中心電子地圖或正射影像（需連網；只適用 TWD97，TWD67 會偏移約 800 m；澎湖金門馬祖請改選 119°E）。「列印」(<kbd>Ctrl+P</kbd>) 可選 A4/A3、橫直式、指定比例尺（200～5000）與範圍，附標題欄、圖例、比例尺條與指北；列印時選「另存為 PDF」即可輸出 PDF。</p>
+<p><b>底圖與列印</b>：上方工具列「底圖」可選 OpenStreetMap、國土測繪中心電子地圖或正射影像（需連網；只適用 TWD97，TWD67 會偏移約 800 m；澎湖金門馬祖請改選 119°E）。「列印」(<kbd>Ctrl+P</kbd>) 可選 A4/A3、橫直式、指定比例尺（200～5000）與範圍，附標題欄、圖例、比例尺條與指北；列印時選「另存為 PDF」即可輸出 PDF。</p>
 <p><b>MAC 手簿檔</b>：MAC 是相對觀測，必須先匯入控制點（<code>CTL</code>）與補點（<code>CT2</code>，或 D20／L02）。再於「匯入現況點」選「MAC」，程式依「測站 後視」逐段化算，新測站（如 QC1）可供後續段落使用，並顯示後視距離檢核差。缺少已知點時會明確列出缺哪些點。</p>
 <p><b>現況點與參考線</b>：「匯入現況點」可貼上或選檔，支援「點號,N,E」座標檔，或「測站 角度 距離」（填測站坐標與後視方位角後自動化算）。匯入後用「連線」工具 (<kbd>L</kbd>) 依序點選現況點連成參考線，點回第一點可閉合並顯示面積；每條參考線可改名、刪除。</p>
 <p><b>旋轉與對位</b>：在「移圖」或已選取要素時，可輸入角度按「↺／↻」旋轉（樞紐預設為移動對象中心，Alt+點擊自訂）；「兩點對位」依序點新圖 A、目標 A′、新圖 B、目標 B′，自動算出旋轉與平移（不縮放，並回報兩對點距離比供檢查）。</p>

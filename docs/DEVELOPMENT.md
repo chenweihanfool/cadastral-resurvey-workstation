@@ -45,6 +45,7 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 - 工具：`select`（點線面複選／框選／拖曳）、`pan`、`layer`（整張新圖平移；Shift+拖曳旋轉）、`line`（連線）。兩點對位為獨立狀態機（`S.align`）。
 - 列印：`renderPrint` 暫時換掉全域 `ctx/W/H/DPR/S.view` 並設 `S.printing=true`（改用印刷色盤、清空選取），再呼叫同一個 `render()`；標題欄、圖例、比例尺條、指北另畫。
 - 底圖：XYZ 圖磚，每塊用 3 個角點算仿射貼到 TM2 方格（容許子午線收斂角）。
+- 版面：右側三分頁（輸入／處理／輸出，`#tabs`、`.pane`）；DOM id 不隨搬移而變，JS 以 id 取元素。鄰段繪圖用 `buildNbCache` 預建分塊 Path2D（見 v0.6.0），新增大量資料的繪圖請沿用這個做法，不要每幀逐邊 moveTo/lineTo。
 - `window.CadastralAPI`：`getState/select/move/transform/alignTwoPoints/importControls/importMac/importSurveyPoints/importPolar/addLine/listLines/setBasemap/getView/checkUpdate/exportSession…`；網址 `?bridge=ws://…` 啟用 WebSocket 轉接（收 `{id,method,params}`，回 `{id,result|error}`）。
 
 ## 4. 資料格式結論（皆以真實案件驗證）
@@ -70,6 +71,9 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 **鄰段接合（v0.5.0）**：`S.nb` 為鄰段清單（唯讀資料集＋顏色／顯示／以鄰段為準）。「段界邊」＝只屬於一個宗地、且該宗地不是地中地內圈的邊；圓弧段界取樣成折線。`Core.seamCheck` 對主區每個段界點：離鄰段段界超過搜尋距離者不檢查；落在鄰段界址點容差內＝重合（點上）、在鄰段界線容差內＝重合（線上）、在鄰段宗地內＝重疊、否則脫開。`seamJoin` 對「以鄰段為準」的鄰段，把脫開／重疊點吸附到吸附上限內最近的鄰段界址點，否則吸附到界線垂足；多點搶同一鄰段點只讓最近者過去。AI 介面：`checkSeam`／`joinSeam`／`getSeamReport` 等。**驗證**：合成測試；以 KC1119 切成東西兩段、主區接縫點隨機偏移約 0.85 m 模擬——93 個接縫點偵測 重疊 44／脫開 47（偏移後），自動接合後全數重合。**尚未用真實相鄰地段驗證**；鄰段的 D14 點號與主區是否共用編號尚無資料，目前完全以坐標比對。限制：只比對主區「點」，鄰段有點而主區無點只報告（`missing_in_main`），D14 就地修補不能新增點。
 
 **TWD97↔經緯度**：GRS80，k0=0.9999，FE=250000；中央經線 121°（本島）／119°（澎金馬）。已用子午線弧長數值積分獨立檢驗。**TWD67 與 TWD97 約差 800 m，底圖僅適用 TWD97。**
+
+### AI／MCP 現況（誠實版）
+目前**只有頁面端**：`window.CadastralAPI`（含鄰段、載入 `loadCase`、輸出 `exportD14`）與 `?bridge=ws://…` 的 WebSocket 客戶端（頁面主動連出去，收 `{id,method,params}`、回 `{id,result|error}`，支援非同步）。**還沒有 MCP server**（ROADMAP #15）：需要一支本機程式同時當 MCP server（給 Claude Desktop／Claude Code 呼叫）與 WebSocket server（給頁面連），把工具呼叫轉成 `api[method](params)`，並由它讀本機資料夾、以 base64 餵給 `loadCase`／`addNeighbor`。在那之前，AI 若能控制瀏覽器（如 Claude in Chrome），可在頁面直接執行 `CadastralAPI.*`，但仍需使用者用檔案選擇器載入檔案。
 
 ## 5. 驗證狀態（誠實清單）
 

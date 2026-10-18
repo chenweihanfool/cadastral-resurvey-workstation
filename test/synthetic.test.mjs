@@ -140,6 +140,7 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.equal(j.moves.length, 2); assert.equal(j.after.totals.coincide, 2); assert.equal(j.after.totals.gap + j.after.totals.overlap, 0);
   near(main.points.get(11).x, X + 10, 1e-9); near(main.points.get(14).x, X + 10, 1e-9); near(main.points.get(14).y, Y + 10, 1e-9);
   assert.equal(Core.seamJoin(main, [{ name: 'NB', ds: nb, authoritative: false }], {}).moves.length, 0, '非「以鄰段為準」不吸附');
+  { const csv = Core.movedPointsCsv(main, j).split('\n'); assert.equal(csv.length, 3, '兩個異動點＋標題'); assert.ok(csv[1].includes('吸附到鄰段界址點') && csv[1].includes('NB')); assert.equal(Core.movedPointsCsv(nb).split('\n').length, 1, '沒有異動點只有標題'); }
   assert.ok(Core.seamReportText(j.after).includes('重合 2') && Core.seamReportCsv(j.after).split('\n').length >= 3);
   // 吸附上限以外：只報告、不移動
   const far = ds([[11, 0, 11.5], [12, 0, 20], [13, 10, 20], [14, 10, 11.5]], [ring(2, 1, 0, [11, 12, 13, 14])]), jf = Core.seamJoin(far, [{ name: 'NB', ds: nb }], { snap: 1 });
