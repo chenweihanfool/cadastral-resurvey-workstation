@@ -115,6 +115,7 @@ const Core = (() => {
       let l = holeMap.get(ok); if (!l) holeMap.set(ok, l = []); l.push(ik);
     }
     for (const [k, g] of groups) {
+      if (!g.sec && !g.m && !g.c) continue;   // 地號全為 0＝無宗地身分的線串（如 D2B 舊圖數化），不是界址環；線改由 D2D 讀（datasetFromLines）
       if (g.ids.length < 3 || g.ids.some(id => !ds.points.has(id))) continue;
       const a = attr.get(k);
       const fmt = (m, c) => (c ? `${m}-${c}` : `${m}`);
@@ -126,6 +127,26 @@ const Core = (() => {
       });
     }
     return finalize(ds);
+  }
+
+  // 從點表＋界址線表建立「只有線、沒有宗地」的資料集（D2C＋D2D 舊圖數化）。
+  // 每筆線 LIN_TOP→LIN_BOT；LIN_MID 非 0 時為圓弧中點。lin 為 parseDbf 結果。
+  function datasetFromLines({ pts, lin, name = 'D', source = 'D檔線' }) {
+    const ds = newDataset(name, source); ds.arcs = new Map();
+    pts.rows.forEach((r, i) => {
+      if (r._deleted || r.COT_REF !== 0 || r.COT_NUMBER == null || !r.COT_Y || !r.COT_X) return;
+      ds.points.set(r.COT_NUMBER, { id: r.COT_NUMBER, y: r.COT_Y, x: r.COT_X, y0: r.COT_Y, x0: r.COT_X, row: i });
+    });
+    for (const r of lin.rows) {
+      if (r._deleted) continue;
+      const a = r.LIN_TOP, c = r.LIN_BOT, m = r.LIN_MID;
+      if (!a || !c || a === c || !ds.points.has(a) || !ds.points.has(c)) continue;
+      const k = a < c ? a + '-' + c : c + '-' + a;
+      const e = ds.edges.get(k) || { key: k, a: Math.min(a, c), b: Math.max(a, c), parcels: [] };
+      ds.edges.set(k, e);
+      if (m && ds.points.has(m)) { e.arcPart = true; ds.arcs.set(a + '|' + m + '|' + c, { a, b: m, c }); }
+    }
+    return ds;
   }
 
   // ── KC 文字檔 (COA/BNP/PAR) ──────────────────────────────────────────────
@@ -497,7 +518,7 @@ const Core = (() => {
     };
   }
 
-  return { parseDbf, patchDbfNumber, datasetFromD, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
+  return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats };

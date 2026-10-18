@@ -3,6 +3,14 @@
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.4.1', date: '2026-10-18', type: 'patch',
+    title: '修正讀取含舊圖數化（D2C／D2B／D2D）的案件時舊圖線段亂掉',
+    changes: [
+      '舊圖數化的 D2B 地號欄位全為 0（沒有宗地身分），先前被誤當成一個超大界址環，把全圖的點連成密密麻麻的亂線；現在這類資料不再當宗地',
+      '舊圖參考改讀 D2D 界址線表（起點→終點，LIN_MID 為圓弧中點），畫出正確的舊圖線段；載入資料夾時 D2D 會自動納入',
+    ],
+  },
+  {
     version: 'v0.4.0', date: '2026-10-18', type: 'minor',
     title: '新增版本歷程時間軸、檢查更新與一鍵更新；每個新版本自動發行 Release HTML',
     changes: [
