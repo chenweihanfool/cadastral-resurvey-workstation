@@ -44,6 +44,37 @@ tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-ch
 footer{display:flex;gap:16px;padding:4px 12px;background:var(--panel);border-top:1px solid var(--line);font-size:12px;color:var(--muted);flex-wrap:wrap}
 dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);max-width:640px}
 dialog::backdrop{background:#0006}
+/* 版本歷程時間軸 */
+dialog.verdlg{width:min(96vw,1400px);height:88vh;max-width:none;padding:0;overflow:hidden}
+dialog.verdlg[open]{display:flex;flex-direction:column}
+.vhead{padding:14px 20px 12px;border-bottom:1px solid var(--line)}
+.vhead h3{margin:0 0 8px;font-size:17px}
+.vbody{flex:1;overflow-y:auto;padding:12px 20px 20px}
+.updbanner{margin:0 0 10px;padding:8px 12px;border:1px solid var(--accent);border-radius:8px;background:color-mix(in srgb,var(--accent) 10%,transparent);font-size:13px}
+.updbanner a{color:var(--accent)}
+.updbanner .notes{margin-top:4px;color:var(--muted);font-size:12px;white-space:pre-wrap;max-height:5.5em;overflow:hidden}
+.tl{list-style:none;margin:0;padding:0}
+.tl > li{display:grid;grid-template-columns:132px 28px minmax(0,1fr)}
+.tl .ver{padding:10px 8px 0 0;text-align:right}
+.tl .ver b{display:block;font:700 14px ui-monospace,Consolas,monospace}
+.tl .ver span{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tl .axis{position:relative;display:flex;justify-content:center}
+.tl .axis::before{content:"";position:absolute;left:50%;width:1px;background:var(--line);top:0;bottom:0}
+.tl > li:first-child .axis::before{top:15px}.tl > li:last-child .axis::before{bottom:calc(100% - 15px)}
+.tl > li:only-child .axis::before{display:none}
+.tl .dot{position:relative;margin-top:15px;width:10px;height:10px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px color-mix(in srgb,currentColor 20%,transparent)}
+.tl .t-major{color:#8b5cf6}.tl .t-minor{color:var(--accent)}.tl .t-patch{color:var(--muted)}
+.tl .item{padding-bottom:6px;min-width:0;color:var(--ink)}
+.tl .head{width:100%;display:flex;align-items:center;gap:8px;border:0;background:none;color:var(--ink);font:inherit;text-align:left;padding:8px 10px;border-radius:8px;cursor:pointer}
+.tl .head:hover,.tl .open .head{background:var(--bg)}
+.tl .badge{flex:none;font-size:10px;padding:1px 6px;border-radius:4px;color:inherit;background:color-mix(in srgb,currentColor 14%,transparent)}
+.tl .ttl{flex:1;min-width:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl .open .ttl{white-space:normal;font-weight:600}
+.tl .chev{flex:none;color:var(--muted);transition:transform .15s}.tl .open .chev{transform:rotate(180deg)}
+.tl ul{margin:4px 0 8px 12px;padding:0 0 0 16px;border-left:1px solid var(--line);list-style:none}
+.tl ul li{position:relative;margin:6px 0;font-size:13px;line-height:1.55;color:var(--muted)}
+.tl ul li::before{content:"";position:absolute;left:-19px;top:9px;width:6px;height:6px;border-radius:50%;background:var(--line)}
+@media (max-width:700px){.tl > li{grid-template-columns:64px 18px minmax(0,1fr)}.tl .ver b{font-size:12px}}
 #printArea{display:none}
 @media print{body.printing>#app,body.printing dialog{display:none!important}body.printing{background:#fff}body.printing #printArea{display:block}body.printing #printArea canvas{display:block}}
 kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;font-size:12px}
@@ -82,6 +113,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <button class="btn" id="btnExpD14" disabled>輸出 D14</button>
   <button class="btn" id="btnExpJson" disabled>輸出 JSON</button>
   <button class="btn" id="btnHelp">說明</button>
+  <button class="btn" id="btnVer" title="版本歷程與更新">版本</button>
 </header>
 <main>
   <div id="stage"><canvas id="cv"></canvas><div id="tip"></div><div id="hint" style="display:none;position:absolute;left:10px;top:10px;right:10px;z-index:3;background:var(--panel);border:1px solid var(--accent);border-radius:6px;padding:6px 10px;font-size:13px"></div>
@@ -137,6 +169,22 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <p><b>輸出</b>：「輸出 D14」只改動被移動點的坐標，其餘位元組與原檔完全相同；覆蓋進案件資料夾前請先備份。D11 的面積欄位不改，請在 NECEXE 內用「重算面積」更新。「輸出 JSON」含移動點與面積變化，方便 AI／其他程式讀取。</p>
 <p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（getState / select / move / undo / exportSession），網址加 <code>?bridge=ws://127.0.0.1:埠號</code> 可接 WebSocket 橋接（預留給 MCP）。</p>
 <form method="dialog"><button class="btn primary">關閉</button></form></dialog>
+<dialog id="verDlg" class="verdlg">
+  <div class="vhead">
+    <h3>版本歷程 <span id="verCount" class="muted small" style="font-weight:400"></span></h3>
+    <div id="updBanner" class="updbanner" hidden></div>
+    <div class="row">
+      <input type="text" id="verQ" placeholder="搜尋版本、標題或內容…" style="width:240px">
+      <div class="seg" id="verTypes"><button data-t="all" class="on">全部</button><button data-t="major">重大</button><button data-t="minor">新功能</button><button data-t="patch">修正</button></div>
+      <button class="btn" id="verAll">全部展開</button>
+      <span style="flex:1"></span>
+      <label class="chk small"><input type="checkbox" id="chkAutoUpd">啟動時檢查更新</label>
+      <button class="btn" id="btnCheckUpd">檢查更新</button>
+      <button class="btn primary" id="verClose">關閉</button>
+    </div>
+  </div>
+  <div class="vbody"><ol class="tl" id="verList"></ol></div>
+</dialog>
 <dialog id="prtDlg" style="max-width:860px;width:96vw"><h3 style="margin-top:0">列印成果圖</h3>
   <div class="row small">
     <label>紙張 <select id="prtPaper"><option>A4</option><option>A3</option></select></label>
@@ -604,6 +652,12 @@ const Core = (() => {
     return { length: len, area };
   }
 
+  // ── 版本號比較：'v1.2.3' / '1.2.3'；a>b 回傳正數 ───────────────────────────
+  function compareVersions(a, b) {
+    const p = v => String(v).replace(/^v/i, '').split('-')[0].split('.').map(n => parseInt(n, 10) || 0);
+    const x = p(a), y = p(b); for (let i = 0; i < Math.max(x.length, y.length, 3); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return d; } return 0;
+  }
+
   // ── 坐標轉換：TWD97 TM2（EPSG:3826/3825）↔ WGS84 經緯度（GRS80，k0=0.9999，FE=250000）──
   // 中央經線：本島 121°（3826），澎湖金門馬祖 119°（3825）。TWD67 與 TWD97 約差 800 m，不可混用。
   const GRS = { a: 6378137, f: 1 / 298.257222101 };
@@ -660,10 +714,74 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
-    xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon,
+    xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
+
+</script>
+<script>
+/* changelog.js — 版本歷程的唯一資料來源（新到舊）。
+ * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
+ * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
+const CHANGELOG = [
+  {
+    version: 'v0.4.0', date: '2026-10-18', type: 'minor',
+    title: '新增版本歷程時間軸、檢查更新與一鍵更新；每個新版本自動發行 Release HTML',
+    changes: [
+      '工具列新增版本按鈕，開啟「版本歷程」時間軸：左欄版本與日期、中間軸線與節點（顏色區分重大／新功能／修正）、右欄一行標題，點開看完整內容；可搜尋、依類型篩選、全部展開／收合',
+      '啟動時（可關閉）向 GitHub 查詢最新 Release；有新版本時版本按鈕出現提示，歷程視窗頂端顯示「立即更新」',
+      '一鍵更新：Chrome／Edge 可選取目前開啟的檔案直接覆寫為新版（更新前請先輸出 D14／JSON）；其他瀏覽器改為下載新版 HTML',
+      'GitHub 自動化：每次修改以 Pull Request 提交，CI 通過後合併；合併後若版本號有新增，自動建立 Release 並附上 HTML',
+    ],
+  },
+  {
+    version: 'v0.3.0', date: '2026-10-18', type: 'minor',
+    title: 'MAC 手簿檔與控制點匯入、OSM／國土測繪中心底圖、A4/A3 指定比例尺列印',
+    changes: [
+      '已知點庫：匯入 CTL（控制點）、CT2（補點）、CEN、L02 或案件的 D20；同名點覆蓋時會提示坐標是否不同',
+      'MAC 手簿檔：MAC 是相對觀測，必須先有控制點／補點才能匯入；依「測站 後視」逐段化算（水平角 ddd.mmss，距離視為平距），新測站可供後續段落使用，顯示後視距離檢核差，缺少已知點時列出缺哪些點',
+      '底圖：OpenStreetMap、國土測繪中心通用版電子地圖與正射影像（TWD97，中央經線 121°／119°），可調不透明度；狀態列顯示經緯度',
+      '列印：A4／A3、橫直式、比例尺 1:200～1:5000 或自動、範圍（畫面／全圖／選取或有變動），附標題欄、圖例、比例尺條、指北；可另存 PDF 或輸出 PNG',
+      '修正：來回旋轉後不再殘留 1e-10 m 的「已移動」點（容差 1e-6 m）',
+    ],
+  },
+  {
+    version: 'v0.2.0', date: '2026-10-18', type: 'minor',
+    title: '整張圖旋轉與兩點對位、現況點匯入與手動參考線；支援圓弧與地中地面積（KC1119 全數吻合）',
+    changes: [
+      '移圖工具可旋轉（Shift+拖曳或輸入角度，可用度分秒，樞紐可自訂）；兩點對位依序點新圖 A、目標 A′、新圖 B、目標 B′，自動算旋轉與平移並回報兩對點距離比',
+      '現況點：CSV／TXT 座標檔（座標順序自動判斷）、測站角度距離；以「連線」工具手動連成參考線，閉合時顯示面積與周長',
+      '面積計算支援圓弧（MIDARC 弧中點，弓形面積）與地中地（D12，外圈減內圈），以 1018 宗的 KC1119 案件驗證與 NECEXE 的 D11 吻合',
+      '預留 AI 介面 window.CadastralAPI 與 WebSocket 橋接（?bridge=ws://…）',
+    ],
+  },
+  {
+    version: 'v0.1.2', date: '2026-10-18', type: 'patch',
+    title: '新增「移圖」：整張重測後的圖一起平移，對照舊圖',
+    changes: [
+      '切到「移圖」工具後在圖上拖曳、方向鍵或輸入 ΔN/ΔE，整張新圖平移，舊圖不動；平移不改變面積並可復原',
+      '面積改為相對第一個頂點計算，避免大坐標浮點誤差讓每宗地號被誤判為「有變動」',
+    ],
+  },
+  {
+    version: 'v0.1.1', date: '2026-10-18', type: 'patch',
+    title: '面積較差直接顯示在圖上',
+    changes: [
+      '有變動或已選取的地號下方標示 ± 面積，超過警示值為紅色；可切換「對調整前」或「對登記面積」',
+    ],
+  },
+  {
+    version: 'v0.1.0', date: '2026-10-18', type: 'major',
+    title: '首版：單一 HTML 讀取 NECEXE 的 D 檔，點線面多選調整，面積即時更新，輸出 D14',
+    changes: [
+      '讀取 D14＋D13（＋D11），或 COA＋BNP（＋PAR）；同資料夾的 D2C＋D2B 當舊圖疊示',
+      '點、線、面可複選（Shift 加選、框選）；拖曳、方向鍵、數值移動；共用界址點讓相鄰地號一起變動',
+      '面積與較差即時顯示（COT_REF=0 為採用坐標）；復原／重做；輸出 D14（只改被移動點，其餘位元組與原檔相同）與調整紀錄 JSON',
+    ],
+  },
+];
+if (typeof module !== 'undefined') module.exports = CHANGELOG;
 
 </script>
 <script>
@@ -673,6 +791,8 @@ if (typeof module !== 'undefined') module.exports = Core;
 const $ = id => document.getElementById(id);
 const cv = $('cv'); let ctx = cv.getContext('2d');
 const NL = String.fromCharCode(10);
+const APP_VERSION = CHANGELOG[0].version;
+const REPO = 'chenweihanfool/cadastral-resurvey-workstation';
 
 const S = {
   ds: null, ref: null, dbf: { pts: null }, names: {},
@@ -1540,6 +1660,62 @@ $('prtPng').onclick = async e => {
 };
 addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') { e.preventDefault(); openPrint(); } });
 
+// ── 版本歷程（時間軸）與更新 ───────────────────────────────────────────────────
+const TYPE_META = { major: '重大', minor: '新功能', patch: '修正' };
+const verState = { open: new Set(), type: 'all', q: '' };
+const verFilter = () => { const q = verState.q.trim().toLowerCase(); return CHANGELOG.filter(e => (verState.type === 'all' || e.type === verState.type) && (!q || (e.version + e.title + e.changes.join('')).toLowerCase().includes(q))); };
+function renderTimeline() {
+  const es = verFilter();
+  $('verCount').textContent = `共 ${CHANGELOG.length} 版，目前 ${APP_VERSION}`;
+  const all = es.length && es.every(e => verState.open.has(e.version)); $('verAll').textContent = all ? '全部收合' : '全部展開';
+  $('verList').innerHTML = es.length ? es.map(e => {
+    const open = verState.open.has(e.version);
+    return `<li class="t-${e.type}${open ? ' open' : ''}" data-v="${esc(e.version)}"><div class="ver"><b>${esc(e.version)}</b><span>${esc(e.date)}</span></div>` +
+      `<div class="axis"><span class="dot"></span></div><div class="item"><button class="head" aria-expanded="${open}"><span class="badge">${TYPE_META[e.type]}</span><span class="ttl">${esc(e.title)}</span><span class="chev">▾</span></button>` +
+      (open ? `<ul>${e.changes.map(c => `<li>${esc(c)}</li>`).join('')}</ul>` : '') + `</div></li>`;
+  }).join('') : '<li style="display:block;text-align:center;padding:48px;color:var(--muted)">沒有符合的更新紀錄</li>';
+}
+function renderUpdate() {
+  const u = S.update, b = $('btnVer'); b.textContent = APP_VERSION + (u ? ' ↑' : ''); b.classList.toggle('primary', !!u); b.title = u ? `有新版本 ${u.tag}` : '版本歷程與更新';
+  const ban = $('updBanner'); ban.hidden = !u; if (!u) return;
+  ban.innerHTML = `<b>有新版本 ${esc(u.tag)}</b>${u.name ? '：' + esc(u.name) : ''}　<button class="btn primary" id="btnApplyUpd">立即更新</button> <a href="${esc(u.url)}" target="_blank" rel="noopener">發行頁面</a>` +
+    (u.body ? `<div class="notes">${esc(u.body.split('---')[0].split(NL).map(l => l.replace(/^#+\s*/, '')).join(NL).trim())}</div>` : '') + `<div class="muted small" style="margin-top:4px">更新會以新版覆寫你選取的檔案（Chrome／Edge）或下載新檔；請先輸出 D14／JSON，重新開啟後才生效。</div>`;
+  $('btnApplyUpd').onclick = () => applyUpdate();
+}
+async function checkUpdate({ silent = false, currentVersion = APP_VERSION } = {}) {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json(), newer = Core.compareVersions(j.tag_name, currentVersion) > 0;
+    S.update = newer ? { tag: j.tag_name, name: j.name, url: j.html_url, body: j.body || '', published: j.published_at } : null; renderUpdate();
+    if (!silent) msg(newer ? `有新版本 ${j.tag_name}（目前 ${currentVersion}）` : `目前已是最新版（${currentVersion}）`);
+    return { current: currentVersion, latest: j.tag_name, update_available: newer };
+  } catch (e) { if (!silent) msg('無法檢查更新：' + (e.message || e) + '（需連網）'); return { error: String(e.message || e) }; }
+}
+async function applyUpdate() {
+  const u = S.update; if (!u) return;
+  if (!confirm(`更新到 ${u.tag}？` + NL + '將以新版覆寫你選取的檔案；尚未輸出的調整請先輸出 D14／JSON。')) return;
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${REPO}/${u.tag}/product/index.html`); if (!res.ok) throw new Error('下載失敗 HTTP ' + res.status);
+    const html = await res.text(); if (!html.includes(u.tag) || !html.includes('<title>地籍圖')) throw new Error('下載內容驗證失敗');
+    if (window.showSaveFilePicker) {
+      const h = await showSaveFilePicker({ suggestedName: decodeURIComponent(location.pathname.split('/').pop() || '') || 'index.html', types: [{ description: 'HTML 檔', accept: { 'text/html': ['.html'] } }] });
+      const w = await h.createWritable(); await w.write(html); await w.close(); msg(`已寫入 ${h.name}：請重新開啟該檔（或按 Ctrl+R）以使用 ${u.tag}`);
+    } else { download(`cadastral-resurvey-workstation-${u.tag}.html`, html, 'text/html'); msg('已下載新版，請用新檔取代舊檔'); }
+  } catch (e) { if (e && e.name === 'AbortError') return; msg('更新失敗：' + (e.message || e)); }
+}
+const autoUpdOn = () => { try { return localStorage.getItem('cw.autoUpdate') !== '0'; } catch (e) { return true; } };
+$('btnVer').onclick = () => { $('chkAutoUpd').checked = autoUpdOn(); renderTimeline(); renderUpdate(); $('verDlg').showModal(); };
+$('verClose').onclick = e => { e.preventDefault(); $('verDlg').close(); };
+$('verQ').oninput = () => { verState.q = $('verQ').value; renderTimeline(); };
+$('verTypes').onclick = e => { const t = e.target.dataset && e.target.dataset.t; if (!t) return; verState.type = t; document.querySelectorAll('#verTypes button').forEach(b => b.classList.toggle('on', b.dataset.t === t)); renderTimeline(); };
+$('verAll').onclick = () => { const es = verFilter(), all = es.every(e => verState.open.has(e.version)); es.forEach(e => (all ? verState.open.delete(e.version) : verState.open.add(e.version))); renderTimeline(); };
+$('verList').onclick = e => { const li = e.target.closest('li[data-v]'); if (!li || !e.target.closest('.head')) return; const v = li.dataset.v; verState.open.has(v) ? verState.open.delete(v) : verState.open.add(v); renderTimeline(); };
+$('chkAutoUpd').onchange = () => { try { localStorage.setItem('cw.autoUpdate', $('chkAutoUpd').checked ? '1' : '0'); } catch (e) { /* ignore */ } };
+$('btnCheckUpd').onclick = () => checkUpdate();
+renderUpdate();
+if (autoUpdOn() && /^(https?|file):$/.test(location.protocol)) setTimeout(() => checkUpdate({ silent: true }), 2500);
+
 // ── AI / MCP 預留介面 ─────────────────────────────────────────────────────
 const findPar = q => S.ds.parcels.find(p => p.label === String(q) || p.oldLabel === String(q));
 const api = {
@@ -1548,6 +1724,8 @@ const api = {
     selection: { points: [...S.sel.pt], edges: [...S.sel.edge], parcels: S.ds ? [...S.sel.par].map(i => S.ds.parcels[i].label) : [] } }),
   setBasemap: ({ provider = 'none', opacity, cm } = {}) => { if (provider !== 'none' && !PROVIDERS[provider]) throw new Error('provider 需為 none/osm/emap/photo'); S.basemap.provider = provider; if (opacity != null) S.basemap.opacity = opacity; if (cm != null) S.basemap.cm = cm; $('bmSel').value = provider; saveBasemap(); draw(); return { ...S.basemap }; },
   toLatLon: ({ y, x }) => Core.tm2ToLatLon(y, x, S.basemap.cm),
+  getVersion: () => ({ version: APP_VERSION, changelog: CHANGELOG, update: S.update }),
+  checkUpdate: o => checkUpdate(o || {}),
   getView: () => ({ cx: S.view.cx, cy: S.view.cy, px_per_m: S.view.s, width: W, height: H, note: 'screen_x=(E-cx)*px_per_m+width/2, screen_y=height/2-(N-cy)*px_per_m' }),
   listParcels: () => S.ds.parcels.map(p => ({ label: p.label, old_label: p.oldLabel, area: p.area, area_before: p.areaOrig, area_ref: p.areaRef, area_registered: p.areaReg, points: p.ids })),
   select: ({ points = [], edges = [], parcels = [], add = false } = {}) => {

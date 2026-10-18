@@ -4,6 +4,8 @@
 const $ = id => document.getElementById(id);
 const cv = $('cv'); let ctx = cv.getContext('2d');
 const NL = String.fromCharCode(10);
+const APP_VERSION = CHANGELOG[0].version;
+const REPO = 'chenweihanfool/cadastral-resurvey-workstation';
 
 const S = {
   ds: null, ref: null, dbf: { pts: null }, names: {},
@@ -871,6 +873,62 @@ $('prtPng').onclick = async e => {
 };
 addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') { e.preventDefault(); openPrint(); } });
 
+// ── 版本歷程（時間軸）與更新 ───────────────────────────────────────────────────
+const TYPE_META = { major: '重大', minor: '新功能', patch: '修正' };
+const verState = { open: new Set(), type: 'all', q: '' };
+const verFilter = () => { const q = verState.q.trim().toLowerCase(); return CHANGELOG.filter(e => (verState.type === 'all' || e.type === verState.type) && (!q || (e.version + e.title + e.changes.join('')).toLowerCase().includes(q))); };
+function renderTimeline() {
+  const es = verFilter();
+  $('verCount').textContent = `共 ${CHANGELOG.length} 版，目前 ${APP_VERSION}`;
+  const all = es.length && es.every(e => verState.open.has(e.version)); $('verAll').textContent = all ? '全部收合' : '全部展開';
+  $('verList').innerHTML = es.length ? es.map(e => {
+    const open = verState.open.has(e.version);
+    return `<li class="t-${e.type}${open ? ' open' : ''}" data-v="${esc(e.version)}"><div class="ver"><b>${esc(e.version)}</b><span>${esc(e.date)}</span></div>` +
+      `<div class="axis"><span class="dot"></span></div><div class="item"><button class="head" aria-expanded="${open}"><span class="badge">${TYPE_META[e.type]}</span><span class="ttl">${esc(e.title)}</span><span class="chev">▾</span></button>` +
+      (open ? `<ul>${e.changes.map(c => `<li>${esc(c)}</li>`).join('')}</ul>` : '') + `</div></li>`;
+  }).join('') : '<li style="display:block;text-align:center;padding:48px;color:var(--muted)">沒有符合的更新紀錄</li>';
+}
+function renderUpdate() {
+  const u = S.update, b = $('btnVer'); b.textContent = APP_VERSION + (u ? ' ↑' : ''); b.classList.toggle('primary', !!u); b.title = u ? `有新版本 ${u.tag}` : '版本歷程與更新';
+  const ban = $('updBanner'); ban.hidden = !u; if (!u) return;
+  ban.innerHTML = `<b>有新版本 ${esc(u.tag)}</b>${u.name ? '：' + esc(u.name) : ''}　<button class="btn primary" id="btnApplyUpd">立即更新</button> <a href="${esc(u.url)}" target="_blank" rel="noopener">發行頁面</a>` +
+    (u.body ? `<div class="notes">${esc(u.body.split('---')[0].split(NL).map(l => l.replace(/^#+\s*/, '')).join(NL).trim())}</div>` : '') + `<div class="muted small" style="margin-top:4px">更新會以新版覆寫你選取的檔案（Chrome／Edge）或下載新檔；請先輸出 D14／JSON，重新開啟後才生效。</div>`;
+  $('btnApplyUpd').onclick = () => applyUpdate();
+}
+async function checkUpdate({ silent = false, currentVersion = APP_VERSION } = {}) {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json(), newer = Core.compareVersions(j.tag_name, currentVersion) > 0;
+    S.update = newer ? { tag: j.tag_name, name: j.name, url: j.html_url, body: j.body || '', published: j.published_at } : null; renderUpdate();
+    if (!silent) msg(newer ? `有新版本 ${j.tag_name}（目前 ${currentVersion}）` : `目前已是最新版（${currentVersion}）`);
+    return { current: currentVersion, latest: j.tag_name, update_available: newer };
+  } catch (e) { if (!silent) msg('無法檢查更新：' + (e.message || e) + '（需連網）'); return { error: String(e.message || e) }; }
+}
+async function applyUpdate() {
+  const u = S.update; if (!u) return;
+  if (!confirm(`更新到 ${u.tag}？` + NL + '將以新版覆寫你選取的檔案；尚未輸出的調整請先輸出 D14／JSON。')) return;
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${REPO}/${u.tag}/product/index.html`); if (!res.ok) throw new Error('下載失敗 HTTP ' + res.status);
+    const html = await res.text(); if (!html.includes(u.tag) || !html.includes('<title>地籍圖')) throw new Error('下載內容驗證失敗');
+    if (window.showSaveFilePicker) {
+      const h = await showSaveFilePicker({ suggestedName: decodeURIComponent(location.pathname.split('/').pop() || '') || 'index.html', types: [{ description: 'HTML 檔', accept: { 'text/html': ['.html'] } }] });
+      const w = await h.createWritable(); await w.write(html); await w.close(); msg(`已寫入 ${h.name}：請重新開啟該檔（或按 Ctrl+R）以使用 ${u.tag}`);
+    } else { download(`cadastral-resurvey-workstation-${u.tag}.html`, html, 'text/html'); msg('已下載新版，請用新檔取代舊檔'); }
+  } catch (e) { if (e && e.name === 'AbortError') return; msg('更新失敗：' + (e.message || e)); }
+}
+const autoUpdOn = () => { try { return localStorage.getItem('cw.autoUpdate') !== '0'; } catch (e) { return true; } };
+$('btnVer').onclick = () => { $('chkAutoUpd').checked = autoUpdOn(); renderTimeline(); renderUpdate(); $('verDlg').showModal(); };
+$('verClose').onclick = e => { e.preventDefault(); $('verDlg').close(); };
+$('verQ').oninput = () => { verState.q = $('verQ').value; renderTimeline(); };
+$('verTypes').onclick = e => { const t = e.target.dataset && e.target.dataset.t; if (!t) return; verState.type = t; document.querySelectorAll('#verTypes button').forEach(b => b.classList.toggle('on', b.dataset.t === t)); renderTimeline(); };
+$('verAll').onclick = () => { const es = verFilter(), all = es.every(e => verState.open.has(e.version)); es.forEach(e => (all ? verState.open.delete(e.version) : verState.open.add(e.version))); renderTimeline(); };
+$('verList').onclick = e => { const li = e.target.closest('li[data-v]'); if (!li || !e.target.closest('.head')) return; const v = li.dataset.v; verState.open.has(v) ? verState.open.delete(v) : verState.open.add(v); renderTimeline(); };
+$('chkAutoUpd').onchange = () => { try { localStorage.setItem('cw.autoUpdate', $('chkAutoUpd').checked ? '1' : '0'); } catch (e) { /* ignore */ } };
+$('btnCheckUpd').onclick = () => checkUpdate();
+renderUpdate();
+if (autoUpdOn() && /^(https?|file):$/.test(location.protocol)) setTimeout(() => checkUpdate({ silent: true }), 2500);
+
 // ── AI / MCP 預留介面 ─────────────────────────────────────────────────────
 const findPar = q => S.ds.parcels.find(p => p.label === String(q) || p.oldLabel === String(q));
 const api = {
@@ -879,6 +937,8 @@ const api = {
     selection: { points: [...S.sel.pt], edges: [...S.sel.edge], parcels: S.ds ? [...S.sel.par].map(i => S.ds.parcels[i].label) : [] } }),
   setBasemap: ({ provider = 'none', opacity, cm } = {}) => { if (provider !== 'none' && !PROVIDERS[provider]) throw new Error('provider 需為 none/osm/emap/photo'); S.basemap.provider = provider; if (opacity != null) S.basemap.opacity = opacity; if (cm != null) S.basemap.cm = cm; $('bmSel').value = provider; saveBasemap(); draw(); return { ...S.basemap }; },
   toLatLon: ({ y, x }) => Core.tm2ToLatLon(y, x, S.basemap.cm),
+  getVersion: () => ({ version: APP_VERSION, changelog: CHANGELOG, update: S.update }),
+  checkUpdate: o => checkUpdate(o || {}),
   getView: () => ({ cx: S.view.cx, cy: S.view.cy, px_per_m: S.view.s, width: W, height: H, note: 'screen_x=(E-cx)*px_per_m+width/2, screen_y=height/2-(N-cy)*px_per_m' }),
   listParcels: () => S.ds.parcels.map(p => ({ label: p.label, old_label: p.oldLabel, area: p.area, area_before: p.areaOrig, area_ref: p.areaRef, area_registered: p.areaReg, points: p.ids })),
   select: ({ points = [], edges = [], parcels = [], add = false } = {}) => {
