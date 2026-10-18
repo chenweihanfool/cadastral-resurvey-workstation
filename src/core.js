@@ -639,6 +639,17 @@ const Core = (() => {
     return rows.map(r => r.join(',')).join('\n');
   }
 
+  // 異動點位表（CSV）：原坐標→新坐標、位移、相關地號；join 為 seamJoin 的結果時附上接合原因
+  function movedPointsCsv(ds, join = null) {
+    const why = new Map(); for (const m of join ? join.moves : []) why.set(m.id, m);
+    const rows = [['點號', '原縱坐標y', '原橫坐標x', '新縱坐標y', '新橫坐標x', 'Δy北', 'Δx東', '位移m', '相關地號', '原因', '鄰段', '鄰段點號']];
+    for (const p of movedPoints(ds)) {
+      const m = why.get(p.id), lab = (ds.pointParcels.get(p.id) || []).map(i => ds.parcels[i].label).join('、');
+      rows.push([p.id, p.y0.toFixed(3), p.x0.toFixed(3), p.y.toFixed(3), p.x.toFixed(3), (p.y - p.y0).toFixed(3), (p.x - p.x0).toFixed(3), Math.hypot(p.y - p.y0, p.x - p.x0).toFixed(3), lab,
+        m ? (m.type === 'vertex' ? '鄰段接合：吸附到鄰段界址點' : '鄰段接合：吸附到鄰段界線') : '手動調整', m ? m.neighbor : '', m && m.neighbor_point != null ? m.neighbor_point : '']);
+    }
+    return rows.map(r => r.map(v => (/[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v)).join(',')).join('\n');
+  }
   // ── 輸出 ────────────────────────────────────────────────────────────────
   // 回傳新的 D14 位元組：只改動 REF=0 且被移動的點的 COT_Y/COT_X。
   function exportD14(pts, ds) {
@@ -668,6 +679,6 @@ const Core = (() => {
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
-    newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv };
+    newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
