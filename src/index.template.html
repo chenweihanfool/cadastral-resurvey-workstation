@@ -146,12 +146,13 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div class="row small" style="margin-bottom:6px">
         <label class="chk"><input type="radio" name="scope" value="changed" checked>有變動</label>
         <label class="chk"><input type="radio" name="scope" value="selected">已選取</label>
+        <label class="chk"><input type="radio" name="scope" value="all">全部</label>
         <span class="muted">警示 &gt;</span><input type="number" id="tol" value="1" step="0.1" style="width:60px"><span class="muted">m²</span>
         <select id="deltaMode" title="圖上面積較差的基準"><option value="adj">圖上：對調整前</option><option value="reg">圖上：對登記面積</option></select>
         <input type="text" id="find" placeholder="跳至地號 (例 137-1)"></div>
       <div id="tblwrap"><table><thead><tr><th>地號</th><th>登記</th><th>調整前</th><th>現面積</th><th>Δ調整</th><th>Δ登記</th></tr></thead><tbody id="tbody"></tbody></table></div>
       <div id="sumInfo" class="small muted" style="margin-top:6px"></div>
-      <div class="row small" style="margin-top:6px"><button class="btn" data-act="style">較差顯示設定…</button></div></div></details>
+      <div class="row small" style="margin-top:6px"><label class="chk" title="圖上的較差標註與正負塗色對所有宗地顯示（否則只顯示有變動或已選取的）"><input type="checkbox" id="chkDeltaAll"><b>全圖顯示較差</b></label><button class="btn" data-act="style">較差顯示／塗色設定…</button></div></div></details>
   </aside>
 </main>
 <footer><span id="stCoord">—</span><span id="stScale">—</span><span id="stMsg"></span></footer>
@@ -255,6 +256,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="small muted" style="margin:2px 0 6px 22px">一點與前後鄰點成三角形，該點到對邊的高低於門檻即視為多餘；含此點的每一宗地都成立才刪（轉角、T 字路口、圓弧不動）。門檻＝三角形<b>最長邊</b>×比例，長線容許較大偏差。</div>
   <div class="row small" style="margin-left:22px"><label>比例 <input type="number" id="clRatio" value="1" step="0.1" min="0" style="width:64px"> ‰</label><label>絕對上限 <input type="number" id="clCap" value="0.05" step="0.01" min="0" style="width:64px"> m <span class="muted">（0＝不設）</span></label></div>
   <div class="small muted" style="margin:4px 0 0 22px">例：長邊 50 m、1‰ → 高 ≤ 5 cm（再受絕對上限 5 cm 限制）。</div></section>
+<section>
+  <label class="chk"><input type="checkbox" id="clSeam" checked><b>鄰段接縫保護與補點</b></label>
+  <div class="small muted" style="margin:2px 0 0 22px">鄰段在接縫上有界址點的位置，測區也必須有點：該處的點即使在直線上也<b>不刪</b>（半徑＝接合設定的吸附上限）；鄰段有點、測區界線上沒有時<b>補一個點</b>（落在界線上，面積不變）。需先載入鄰段。</div></section>
 <section><div id="clSum" class="small">—</div>
   <label class="chk small" style="margin-top:6px"><input type="checkbox" id="clShow" checked>在圖上標示將被刪除的點</label>
   <div class="row" style="margin-top:8px"><button class="btn primary" id="btnClean">清理</button><span class="small muted">可復原（Ctrl+Z）</span></div></section></div></dialog>
