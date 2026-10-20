@@ -408,6 +408,10 @@ const Core = (() => {
   function collinearCheck(ds, id, opt) {
     const pps = ds.pointParcels.get(id); if (!pps || !pps.length) return null;
     const ratio = opt.ratio, cap = opt.maxAbs > 0 ? opt.maxAbs : Infinity; let worst = 0, Lw = 0;
+    // 三叉點：各環看到的前後鄰點不是同一組（接出去的界址線多於 2 條）→ 各環各自走不同的弦會留下縫，不可刪（真實案件 KC0336 的 5236）
+    const nbr = new Set();
+    for (const pi of pps) { const p = ds.parcels[pi], n = p.ids.length; for (let i = 0; i < n; i++) if (p.ids[i] === id) { nbr.add(p.ids[(i + n - 1) % n]); nbr.add(p.ids[(i + 1) % n]); } }
+    if (nbr.size > 2) return null;
     for (const pi of pps) {
       const p = ds.parcels[pi], n = p.ids.length; if (n < 4) return null;
       let hit = false;
@@ -913,6 +917,7 @@ const Core = (() => {
     if (!shared && o1 * o2 < 0 && o3 * o4 < 0 && Math.min(Math.abs(o1), Math.abs(o2), Math.abs(o3), Math.abs(o4)) > eps) return 'cross';
     return null;
   }
+  const freeRegions = ds => outlineLoops(ds, ds.parcels.filter(p => !(p.containers && p.containers.length)).map(p => p.idx)).filter(l => l.area < -1e-6);
   function ringConflicts(ds) {
     const edges = [...ds.edges.values()].filter(e => !e.arcPart), cell = 10, grid = new Map(), cc = v => Math.floor(v / cell), out = { cross: [], overlap: [] }, seen = new Set();
     edges.forEach((e, n) => {
@@ -935,18 +940,28 @@ const Core = (() => {
       const p = ds.parcels[i]; let ids = p.ids; if (signedArea(ids, ds.points) < 0) ids = ids.slice().reverse();
       for (let k = 0; k < ids.length; k++) { const a = ids[k], b = ids[(k + 1) % ids.length]; if (a !== b) half.set(a + '>' + b, [a, b]); }
     }
-    const next = new Map();
-    for (const [a, b] of half.values()) if (!half.has(b + '>' + a)) { let l = next.get(a); if (!l) next.set(a, l = []); l.push(b); }
-    const loops = [];
-    for (const [start] of next) {
-      while (next.get(start) && next.get(start).length) {
-        const ids = [start]; let cur = start;
+    // 邊界有向邊（宗地在左側）。外圍＝順著邊界追蹤；自由閉合區（空隙）＝把邊反向、追蹤空隙那一側的面。
+    // 在有多條出邊的點（面只在一點相接），選「最左轉」的出邊，才會各自貼著各自的面、拆成獨立的環
+    const bnd = [...half.values()].filter(([a, b]) => !half.has(b + '>' + a)), P = id => ds.points.get(id);
+    const trace = edges => {
+      const out = new Map(), res = [];
+      for (const [a, b] of edges) { let l = out.get(a); if (!l) out.set(a, l = []); l.push({ b, used: false }); }
+      for (const [a0, list] of out) for (const e0 of list) {
+        if (e0.used) continue; e0.used = true;
+        const ids = [a0]; let cur = e0, from = a0;
         for (let guard = 0; guard < 1e6; guard++) {
-          const l = next.get(cur); if (!l || !l.length) break; const nx = l.shift(); if (nx === start) break; ids.push(nx); cur = nx;
+          const to = cur.b; if (to === a0) break; ids.push(to);
+          const cand = (out.get(to) || []).filter(e => !e.used); if (!cand.length) break;
+          const ux = P(to).x - P(from).x, uy = P(to).y - P(from).y; let best = null, ba = -Infinity;
+          for (const e of cand) { const vx = P(e.b).x - P(to).x, vy = P(e.b).y - P(to).y, ang = Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy); if (ang > ba) { ba = ang; best = e; } }
+          best.used = true; from = to; cur = best;
         }
-        if (ids.length >= 3) loops.push({ ids, area: signedArea(ids, ds.points) });
+        if (ids.length >= 3) res.push({ ids, area: signedArea(ids, ds.points) });
       }
-    }
+      return res;
+    };
+    const loops = trace(bnd).filter(l => l.area > 0);
+    for (const l of trace(bnd.map(([a, b]) => [b, a])).filter(l => l.area > 0)) loops.push({ ids: l.ids.slice().reverse(), area: -l.area });
     return loops.sort((x, y) => y.area - x.area);
   }
   const pad = (v, n) => String(v).padStart(n, ' ');
@@ -971,8 +986,8 @@ const Core = (() => {
     for (const [kind, word] of [['cross', '交錯'], ['overlap', '重疊']]) for (const [e1, e2] of cf[kind]) L.push(`${pl(e1)} 與 ${pl(e2)} ${word}`);
     L.push(refs.length ? `各筆宗地登記新面積總和 = ${refs.reduce((s, p) => s + p.areaRef, 0).toFixed(2)} ㎡` : '各筆宗地登記新面積總和 = （無 D11 新面積）');
     L.push(bar);
-    const outer = outlineLoops(ds, ds.parcels.filter(p => !(p.containers && p.containers.length)).map(p => p.idx)).filter(l => l.area > 0);
-    for (const l of outer) { L.push(`段外圍面積 = ${l.area.toFixed(2)} ㎡`); L.push(...idLines(l.ids)); }
+    const allLoops = outlineLoops(ds, ds.parcels.filter(p => !(p.containers && p.containers.length)).map(p => p.idx)).filter(l => Math.abs(l.area) > 1e-6).sort((x, y) => Math.abs(y.area) - Math.abs(x.area));
+    for (const l of allLoops) { L.push(`${l.area > 0 ? '段外圍面積' : '自由閉合區面積'} = ${Math.abs(l.area).toFixed(2)} ㎡`); L.push(...idLines(l.ids)); }   // 自由閉合區＝宗地之間沒被任何宗地涵蓋的封閉空隙
     for (const p of ds.parcels) {
       if (!p.holes || !p.holes.length) continue;
       L.push(bar); L.push(`-- 父地 ${parLabelFull(p)} 的地中地外圍檢核 --`);
@@ -1075,7 +1090,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, outlineLoops, errReport, ringConflicts, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();
