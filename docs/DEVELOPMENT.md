@@ -45,7 +45,7 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 - 工具：`select`（點線面複選／框選／拖曳）、`pan`、`layer`（整張新圖平移；Shift+拖曳旋轉）、`line`（連線）。兩點對位為獨立狀態機（`S.align`）。
 - 列印：`renderPrint` 暫時換掉全域 `ctx/W/H/DPR/S.view` 並設 `S.printing=true`（改用印刷色盤、清空選取），再呼叫同一個 `render()`；標題欄、圖例、比例尺條、指北另畫。
 - 底圖：XYZ 圖磚，每塊用 3 個角點算仿射貼到 TM2 方格（容許子午線收斂角）。
-- 版面：右側三分頁（輸入／處理／輸出，`#tabs`、`.pane`）；DOM id 不隨搬移而變，JS 以 id 取元素。鄰段繪圖用 `buildNbCache` 預建分塊 Path2D（見 v0.6.0），新增大量資料的繪圖請沿用這個做法，不要每幀逐邊 moveTo/lineTo。
+- 版面（v0.9.0 起）：上方功能列表（`#menubar`，選單項目用 `data-act`，對應 `ACTS`）＋工具列；細項設定都在非強制回應的浮動面板 `dialog.fp`（`openPanel(id)` 一次開一個）；右側欄只有「選取資訊」「面積較差」兩個 `<details class="acc">`。DOM id 不隨搬移而變，JS 以 id 取元素。鄰段繪圖用 `buildNbCache` 預建分塊 Path2D（見 v0.6.0），新增大量資料的繪圖請沿用這個做法，不要每幀逐邊 moveTo/lineTo。
 - `window.CadastralAPI`：`getState/select/move/transform/alignTwoPoints/importControls/importMac/importSurveyPoints/importPolar/addLine/listLines/setBasemap/getView/checkUpdate/exportSession…`；網址 `?bridge=ws://…` 啟用 WebSocket 轉接（收 `{id,method,params}`，回 `{id,result|error}`）。
 
 ## 4. 資料格式結論（皆以真實案件驗證）
@@ -73,6 +73,10 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 **TWD97↔經緯度**：GRS80，k0=0.9999，FE=250000；中央經線 121°（本島）／119°（澎金馬）。已用子午線弧長數值積分獨立檢驗。**TWD67 與 TWD97 約差 800 m，底圖僅適用 TWD97。**
 
 **影像疊圖（v0.7.0）**：`S.img` 存 `createImageBitmap(file,{imageOrientation:'none'})`（不套 EXIF 旋轉，讓像元順序與定位檔一致）與 world file。World file：`X=A·col+B·row+C、Y=D·col+E·row+F`，(C,F) 是左上像元**中心**，畫圖時需往左上退半個像元（`drawImages` 的 `ox,oy`）。平移只改 C、F。v0.8.0：影像先登記（`Core.imageSize` 讀 JPEG SOF／PNG IHDR 取尺寸）、預設隱藏、第一次顯示才 `createImageBitmap`、隱藏即 `close()`；`S.img` 陣列順序＝上下層（後面在上），`above` 決定畫在向量圖之下（`drawImages(false)`）或之上（`drawImages(true)`）。限制：只支援瀏覽器能解碼的 JPG／PNG（TIFF 不行）；尚未實作影像縮放／旋轉對位與兩點對位（可沿用 `Core.twoPointFit`）；超大影像（上萬像素）未做影像金字塔。**驗證**：合成測試（角點、往返、旋轉範圍）＋瀏覽器端到端（拖曳位移＝像素／比例、方向鍵、復原、輸出 JGW）；尚未用真實舊圖掃描檔驗證。
+
+**界址點編修（v0.9.0）**：`Core.insertPoint`（在邊 a–b 加點，插入所有以該邊為界的宗地環；弧上拒絕）、`addFreePoint`、`removePoints`（從所有含該點的環移除；環 <3 點、弧端／弧中點拒絕）、`cleanupPoints`（未使用點＋直線多餘點）。每次編修回傳 delta（各宗地環前後、新增／移除的點物件），`applyDelta(ds, delta, 'undo'|'redo')` 復原；`buildTopology`／`buildArcs` 重建邊與點所屬宗地而不重設 `areaOrig`。`ds.orig` 保存載入時的點與環，`resetAll` 靠它還原結構。**直線多餘點**：B 與前後鄰點 A、C，h＝B 到線段 AC 距離，h ≤ min(比例×三角形最長邊, 絕對上限)，且含 B 的每個環都成立才刪（逐點以目前鄰點重判）。**輸出**：`exportD14` 把新增點附加到檔尾（REF=0，其餘欄位空白）並更新筆數與 0x1A，已刪除的點不移除記錄；`exportD13` 依 `parcel.rows`（D13 列索引）改寫 COORD／MIDARC，不夠放就附加、多出的列標刪除。**兩者尚未用 NECEXE 驗證**（NTX 索引未更新；D13 是否另有點數類欄位不明）。
+
+**.ERR 偵錯報表（v0.9.0）**：`Core.errReport` 仿 NECEXE `KC6336.ERR`（Big5、CRLF；app 端用 `TextDecoder('big5')` 反推對照表做 Big5 編碼，`big5Bytes`）。已實作：界址點號空號（>50）、面積總和、段外圍（`outlineLoops`：各環轉逆時針取有向邊、抵消共邊後接環）、地中地外圍、D11 有而 D13 無環的地號、新地號重覆、確定／參考點數、經界線數；調查情形、界址查註、坐標來源因不知欄位而略過並註明。「已用經界線」以 `ds.edges.size` 計，與 NECEXE 的定義是否一致未驗證；段外圍以弦計弧線。
 
 ### AI／MCP 現況（誠實版）
 目前**只有頁面端**：`window.CadastralAPI`（含鄰段、載入 `loadCase`、輸出 `exportD14`）與 `?bridge=ws://…` 的 WebSocket 客戶端（頁面主動連出去，收 `{id,method,params}`、回 `{id,result|error}`，支援非同步）。**還沒有 MCP server**（ROADMAP #15）：需要一支本機程式同時當 MCP server（給 Claude Desktop／Claude Code 呼叫）與 WebSocket server（給頁面連），把工具呼叫轉成 `api[method](params)`，並由它讀本機資料夾、以 base64 餵給 `loadCase`／`addNeighbor`。在那之前，AI 若能控制瀏覽器（如 Claude in Chrome），可在頁面直接執行 `CadastralAPI.*`，但仍需使用者用檔案選擇器載入檔案。

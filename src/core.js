@@ -51,7 +51,8 @@ const Core = (() => {
     return { name, source, points: new Map(), parcels: [], edges: new Map(), pointParcels: new Map(), meta: {} };
   }
 
-  function finalize(ds) {
+  // 邊與「點所屬宗地」：由各宗地的環推得。編修界址點後可重複呼叫（不會重設面積基準）
+  function buildTopology(ds) {
     ds.edges = new Map(); ds.pointParcels = new Map();
     ds.parcels.forEach((p, idx) => {
       p.idx = idx;
@@ -67,16 +68,9 @@ const Core = (() => {
         if (!pp.includes(idx)) pp.push(idx);
       }
     });
-    // 地中地：外圈地號面積 = 外圈 − 內圈（holeKeys 為內圈地號鍵）
-    const byKey = new Map(ds.parcels.map(p => [p.key, p]));
-    for (const p of ds.parcels) {
-      p.holes = []; p.containers = p.containers || [];
-    }
-    for (const p of ds.parcels) for (const hk of p.holeKeys || []) {
-      const h = byKey.get(hk); if (h && h !== p) { p.holes.push(h.idx); h.containers.push(p.idx); }
-    }
-    for (const p of ds.parcels) { p.areaOrig = parcelArea(ds, p); p.area = p.areaOrig; }
-    // 圓弧：mid[i] 為弧中點，前後頂點為弧端；弦邊標記 arcPart，繪圖時改畫弧
+  }
+  // 圓弧：mid[i] 為弧中點，前後頂點為弧端；弦邊標記 arcPart，繪圖時改畫弧
+  function buildArcs(ds) {
     ds.arcs = new Map();
     for (const p of ds.parcels) if (p.mid) {
       const n = p.ids.length;
@@ -86,6 +80,21 @@ const Core = (() => {
         for (const [u, v] of [[a, b], [b, c]]) { const e = ds.edges.get(u < v ? u + '-' + v : v + '-' + u); if (e) e.arcPart = true; }
       });
     }
+  }
+  function finalize(ds) {
+    buildTopology(ds);
+    // 地中地：外圈地號面積 = 外圈 − 內圈（holeKeys 為內圈地號鍵）
+    const byKey = new Map(ds.parcels.map(p => [p.key, p]));
+    for (const p of ds.parcels) {
+      p.holes = []; p.containers = p.containers || [];
+    }
+    for (const p of ds.parcels) for (const hk of p.holeKeys || []) {
+      const h = byKey.get(hk); if (h && h !== p) { p.holes.push(h.idx); h.containers.push(p.idx); }
+    }
+    for (const p of ds.parcels) { p.areaOrig = parcelArea(ds, p); p.area = p.areaOrig; }
+    buildArcs(ds);
+    // 載入時的原貌：「還原全部」用（點位、各宗地的環）
+    if (!ds.orig) ds.orig = { points: [...ds.points.values()].map(q => ({ ...q })), rings: ds.parcels.map(p => ({ ids: p.ids.slice(), mid: p.mid ? p.mid.slice() : null })) };
     return ds;
   }
 
@@ -99,33 +108,40 @@ const Core = (() => {
     const attr = new Map();
     if (par) for (const r of par.rows) if (!r._deleted) attr.set(`${r.SECTION_O}|${r.PAR_O_M}|${r.PAR_O_C}`, r);
     const groups = new Map();
-    for (const r of bnd.rows) {
-      if (r._deleted) continue;
+    bnd.rows.forEach((r, ri) => {
+      if (r._deleted) return;
       const k = `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}`;
-      let g = groups.get(k); if (!g) groups.set(k, g = { sec: r.O_SECTION, m: r.O_PARCEL, c: r.O_PARCEL_E, ids: [], mid: [], arcs: false });
+      let g = groups.get(k); if (!g) groups.set(k, g = { sec: r.O_SECTION, m: r.O_PARCEL, c: r.O_PARCEL_E, ids: [], mid: [], arcs: false, rows: [] });
+      g.rows.push(ri);
       for (let i = 1; i <= 8; i++) {
         const id = r['COORD_' + i];
         if (id) { g.ids.push(id); g.mid.push(!!r['MIDARC_' + i]); if (r['MIDARC_' + i]) g.arcs = true; }
       }
-    }
+    });
     const holeMap = new Map();   // 外圈鍵 → [內圈鍵]
     if (d12) for (const r of d12.rows) {
       if (r._deleted) continue;
       const ok = `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}`, ik = `${r.I_SECTION}|${r.I_PARCEL}|${r.I_PARCEL_E}`;
       let l = holeMap.get(ok); if (!l) holeMap.set(ok, l = []); l.push(ik);
     }
+    const fmtN = r => `${r.PAR_N_M}-${r.PAR_N_C || 0}-${r.SECTION_N}`;
+    ds.meta.noRing = []; ds.meta.badRing = []; ds.meta.dupAttr = [];
     for (const [k, g] of groups) {
       if (!g.sec && !g.m && !g.c) continue;   // 地號全為 0＝無宗地身分的線串（如 D2B 舊圖數化），不是界址環；線改由 D2D 讀（datasetFromLines）
-      if (g.ids.length < 3 || g.ids.some(id => !ds.points.has(id))) continue;
+      if (g.ids.length < 3 || g.ids.some(id => !ds.points.has(id))) {
+        const ar = attr.get(k); ds.meta.badRing.push({ label: ar ? fmtN(ar) : `${g.m}-${g.c || 0}-${g.sec}`, count: g.ids.length, missing: g.ids.filter(id => !ds.points.has(id)) }); continue;
+      }
       const a = attr.get(k);
       const fmt = (m, c) => (c ? `${m}-${c}` : `${m}`);
       ds.parcels.push({
         key: k, section: g.sec, label: a ? fmt(a.PAR_N_M, a.PAR_N_C) : fmt(g.m, g.c), oldLabel: fmt(g.m, g.c),
-        ids: g.ids, mid: g.mid, hasArc: g.arcs, holeKeys: holeMap.get(k),
+        ids: g.ids, mid: g.mid, hasArc: g.arcs, holeKeys: holeMap.get(k), rows: g.rows, ids0: g.ids.slice(), mid0: g.mid.slice(),
         areaRef: a ? Math.round(a.AREA_NEW * 1e10) / 1e6 : null,      // AREA_NEW 公頃 → m²
         areaReg: a ? Math.round(a.AREA_OLD * 1e10) / 1e6 : null,      // AREA_OLD 登記面積 m²
       });
     }
+    // D11 有、但 D13 沒有界址環的地號（NECEXE 報表「無地號界址」）
+    if (par) { const built = new Set(ds.parcels.map(p => p.key)); for (const [k, r] of attr) if (!built.has(k) && !ds.meta.badRing.some(b => b.label === fmtN(r)) && r.PAR_N_M > 0) ds.meta.noRing.push({ label: fmtN(r) }); }
     return finalize(ds);
   }
 
@@ -293,11 +309,146 @@ const Core = (() => {
   }
   function setPoint(ds, id, y, x) { const p = ds.points.get(id); return movePoints(ds, [id], y - p.y, x - p.x); }
   function resetAll(ds) {
+    const o = ds.orig, st = o && structSummary(ds);
+    if (o && (st.added || st.removed || st.rings)) {
+      ds.points = new Map(o.points.map(q => [q.id, { ...q }]));
+      ds.parcels.forEach((p, i) => { p.ids = o.rings[i].ids.slice(); if (o.rings[i].mid) p.mid = o.rings[i].mid.slice(); });
+      buildTopology(ds); buildArcs(ds);
+    }
     for (const p of ds.points.values()) { p.y = p.y0; p.x = p.x0; }
     for (const pc of ds.parcels) pc.area = pc.areaOrig;
   }
   const isMoved = p => Math.abs(p.y - p.y0) > 1e-6 || Math.abs(p.x - p.x0) > 1e-6;   // 容差 1e-6 m，忽略來回旋轉的浮點殘差
   function movedPoints(ds) { return [...ds.points.values()].filter(isMoved); }
+
+  // ── 界址點編修（新增／刪除）：維持宗地完整 ─────────────────────────────────
+  // 原則：點的增減一律同步到「所有」含該點的宗地環（共用界址點不會只改一邊）；圓弧相關的點不動；
+  // 刪除後環不得少於 3 點。每次編修回傳 delta，供復原／重做（applyDelta）。
+  const newDelta = () => ({ parcels: new Map(), added: [], removed: [] });
+  function touchParcel(d, p) { if (!d.parcels.has(p.idx)) d.parcels.set(p.idx, { ids0: p.ids.slice(), mid0: p.mid ? p.mid.slice() : null }); }
+  function closeDelta(ds, d) {
+    for (const [i, t] of d.parcels) { const p = ds.parcels[i]; t.ids1 = p.ids.slice(); t.mid1 = p.mid ? p.mid.slice() : null; }
+    buildTopology(ds); buildArcs(ds); recalc(ds, new Set(d.parcels.keys())); return d;
+  }
+  function applyDelta(ds, d, dir) {
+    const undo = dir === 'undo';
+    for (const [i, t] of d.parcels) { const p = ds.parcels[i]; p.ids = (undo ? t.ids0 : t.ids1).slice(); const m = undo ? t.mid0 : t.mid1; if (m) p.mid = m.slice(); }
+    for (const p of d.added) undo ? ds.points.delete(p.id) : ds.points.set(p.id, p);
+    for (const p of d.removed) undo ? ds.points.set(p.id, p) : ds.points.delete(p.id);
+    buildTopology(ds); buildArcs(ds); recalc(ds, new Set(d.parcels.keys()));
+  }
+  const nextPointId = ds => { let m = 0; for (const id of ds.points.keys()) if (id > m) m = id; return m + 1; };
+  const segKey = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+  // 在界址線 a–b 上新增點：預設取 (y,x) 在線上的垂足（面積不變）；opt.project=false 則放在指定位置。所有以此線為界的宗地都會插入新點。
+  function insertPoint(ds, a, b, y, x, opt = {}) {
+    const e = ds.edges.get(segKey(a, b)); if (!e) throw new Error(`找不到界址線 ${a}–${b}`);
+    if (e.arcPart) throw new Error('圓弧上的線段暫不支援加點');
+    const A = ds.points.get(e.a), B = ds.points.get(e.b);
+    let py = y, px = x;
+    if (opt.project !== false) {
+      const dx = B.x - A.x, dy = B.y - A.y, l2 = dx * dx + dy * dy; if (!l2) throw new Error('線長為 0');
+      const t = Math.max(0.001, Math.min(0.999, ((x - A.x) * dx + (y - A.y) * dy) / l2)); py = A.y + t * dy; px = A.x + t * dx;
+    }
+    const id = opt.id != null ? opt.id : nextPointId(ds); if (ds.points.has(id)) throw new Error(`點號 ${id} 已存在`);
+    const np = { id, y: py, x: px, y0: py, x0: px, row: null, added: true }, d = newDelta();
+    for (const pi of e.parcels) {
+      const p = ds.parcels[pi], n = p.ids.length; let done = false;
+      for (let i = 0; i < n && !done; i++) {
+        const u = p.ids[i], v = p.ids[(i + 1) % n];
+        if ((u === e.a && v === e.b) || (u === e.b && v === e.a)) { touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); done = true; }
+      }
+    }
+    ds.points.set(id, np); d.added.push(np);
+    return { id, delta: closeDelta(ds, d) };
+  }
+  // 孤立點（不屬於任何宗地）：新增點位
+  function addFreePoint(ds, y, x, id) {
+    id = id != null ? id : nextPointId(ds); if (ds.points.has(id)) throw new Error(`點號 ${id} 已存在`);
+    const np = { id, y, x, y0: y, x0: x, row: null, added: true }, d = newDelta(); ds.points.set(id, np); d.added.push(np); return { id, delta: closeDelta(ds, d) };
+  }
+  // 能否從所有環移除此點？回傳 null＝可以，否則為原因
+  function removeBlocker(ds, id) {
+    for (const pi of ds.pointParcels.get(id) || []) {
+      const p = ds.parcels[pi], n = p.ids.length; let occ = 0;
+      for (let i = 0; i < n; i++) if (p.ids[i] === id) { occ++; if (p.mid && (p.mid[i] || p.mid[(i + n - 1) % n] || p.mid[(i + 1) % n])) return '圓弧上的點'; }
+      if (n - occ < 3) return `宗地 ${p.label} 只剩 ${n - occ} 點`;
+    }
+    return null;
+  }
+  // 刪除多個點（內部用：不重建拓撲）。回傳 {done, skipped:[{id,reason}]}
+  function removeInto(ds, ids, d) {
+    const done = [], skipped = [];
+    for (const id of ids) {
+      const pt = ds.points.get(id); if (!pt) continue;
+      const why = removeBlocker(ds, id); if (why) { skipped.push({ id, reason: why }); continue; }
+      for (const pi of ds.pointParcels.get(id) || []) {
+        const p = ds.parcels[pi]; touchParcel(d, p);
+        for (let i = p.ids.length - 1; i >= 0; i--) if (p.ids[i] === id) { p.ids.splice(i, 1); if (p.mid) p.mid.splice(i, 1); }
+      }
+      ds.points.delete(id); d.removed.push(pt); done.push(id);
+    }
+    return { done, skipped };
+  }
+  function removePoints(ds, ids) {
+    const d = newDelta(), r = removeInto(ds, ids, d); closeDelta(ds, d); return { ...r, delta: d };
+  }
+  const usedIds = ds => { const s = new Set(); for (const p of ds.parcels) for (const id of p.ids) s.add(id); return s; };
+  // 沒有任何宗地使用的界址點（沒有宗地時不判斷，避免整批誤刪）
+  function unusedPoints(ds) {
+    if (!ds.parcels.length) return []; const u = usedIds(ds); return [...ds.points.keys()].filter(id => !u.has(id));
+  }
+  // 直線上的多餘點：點 B 與前後鄰點 A、C 組成三角形，B 到 AC 的高 h ≤ 門檻 → 多餘。
+  // 門檻＝ratio × 三角形最長邊（相對值，長線容許較大偏差），可再用 maxAbs（公尺）封頂。含此點的「每一個」環都必須是直線通過才算，
+  // 所以轉角點、T 字路口的點不會被刪。回傳 {h, L} 或 null。
+  const COLLINEAR_DEFAULT = { ratio: 0.001, maxAbs: 0.05 };
+  function collinearCheck(ds, id, opt) {
+    const pps = ds.pointParcels.get(id); if (!pps || !pps.length) return null;
+    const ratio = opt.ratio, cap = opt.maxAbs > 0 ? opt.maxAbs : Infinity; let worst = 0, Lw = 0;
+    for (const pi of pps) {
+      const p = ds.parcels[pi], n = p.ids.length; if (n < 4) return null;
+      let hit = false;
+      for (let i = 0; i < n; i++) {
+        if (p.ids[i] !== id) continue; hit = true;
+        const ia = (i + n - 1) % n, ic = (i + 1) % n;
+        if (p.mid && (p.mid[i] || p.mid[ia] || p.mid[ic])) return null;
+        const A = ds.points.get(p.ids[ia]), B = ds.points.get(id), C = ds.points.get(p.ids[ic]); if (!A || !C || p.ids[ia] === p.ids[ic]) return null;
+        const ab = Math.hypot(B.x - A.x, B.y - A.y), bc = Math.hypot(C.x - B.x, C.y - B.y), ac = Math.hypot(C.x - A.x, C.y - A.y), L = Math.max(ab, bc, ac);
+        if (!L) return null;
+        const h = distToSeg(B.x, B.y, A.x, A.y, C.x, C.y);
+        if (h > Math.min(ratio * L, cap)) return null;
+        if (h > worst) { worst = h; Lw = L; }
+      }
+      if (!hit) return null;
+    }
+    return { h: worst, L: Lw };
+  }
+  function collinearCandidates(ds, opt = {}) {
+    const o = { ...COLLINEAR_DEFAULT, ...opt }, out = [];
+    for (const id of ds.pointParcels.keys()) { const r = collinearCheck(ds, id, o); if (r) out.push({ id, ...r }); }
+    return out.sort((a, b) => a.h - b.h);
+  }
+  // 一鍵清理：① 沒有宗地使用的點 ② 直線上的多餘點。逐點以「目前」的鄰點重新判斷（連續多點共線時不會累積漂移）。
+  // 回傳 {unused, collinear, skipped, delta}；呼叫端自行決定是否保留（預覽時用 applyDelta(…,'undo') 還原）。
+  function cleanupPoints(ds, opt = {}) {
+    const o = { unused: true, collinear: true, ...COLLINEAR_DEFAULT, ...opt }, d = newDelta(), res = { unused: [], collinear: [], skipped: [] };
+    if (o.unused) { const r = removeInto(ds, unusedPoints(ds), d); res.unused = r.done; res.skipped.push(...r.skipped); }
+    if (o.collinear) {
+      for (const c of collinearCandidates(ds, o)) {
+        if (!collinearCheck(ds, c.id, o)) continue;
+        const r = removeInto(ds, [c.id], d); res.collinear.push(...r.done); res.skipped.push(...r.skipped);
+      }
+    }
+    closeDelta(ds, d); res.delta = d; return res;
+  }
+  // 結構是否有異動（新增／刪除點、環改變）
+  function structSummary(ds) {
+    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0 };
+    const was = new Set(o.points.map(p => p.id)); let added = 0, removed = 0, rings = 0;
+    for (const id of ds.points.keys()) if (!was.has(id)) added++;
+    for (const id of was) if (!ds.points.has(id)) removed++;
+    ds.parcels.forEach((p, i) => { const r = o.rings[i]; if (!r || r.ids.length !== p.ids.length || r.ids.some((v, k) => v !== p.ids[k])) rings++; });
+    return { added, removed, rings };
+  }
 
   // ── 變換（平移＋旋轉）─────────────────────────────────────────────────────
   // T = { dy, dx, angle (弧度，逆時針為正，北向上俯視), pivot: {y, x} }：先繞 pivot 旋轉，再平移 (dy,dx)
@@ -687,15 +838,131 @@ const Core = (() => {
     return null;
   }
 
+  // ── 宗地關係偵錯報表（仿 NECEXE 的 .ERR）─────────────────────────────────────
+  // 各宗地輪廓的外圍環：取每個環（轉成逆時針）的有向邊，抵消掉有反向邊的（內部共邊），剩下的接成環。
+  // 回傳 [{ids, area}]，area 有號（外圍為正、內部空洞為負），由大到小。弧線以弦計。
+  function outlineLoops(ds, idxs) {
+    const half = new Map();
+    for (const i of idxs) {
+      const p = ds.parcels[i]; let ids = p.ids; if (signedArea(ids, ds.points) < 0) ids = ids.slice().reverse();
+      for (let k = 0; k < ids.length; k++) { const a = ids[k], b = ids[(k + 1) % ids.length]; if (a !== b) half.set(a + '>' + b, [a, b]); }
+    }
+    const next = new Map();
+    for (const [a, b] of half.values()) if (!half.has(b + '>' + a)) { let l = next.get(a); if (!l) next.set(a, l = []); l.push(b); }
+    const loops = [];
+    for (const [start] of next) {
+      while (next.get(start) && next.get(start).length) {
+        const ids = [start]; let cur = start;
+        for (let guard = 0; guard < 1e6; guard++) {
+          const l = next.get(cur); if (!l || !l.length) break; const nx = l.shift(); if (nx === start) break; ids.push(nx); cur = nx;
+        }
+        if (ids.length >= 3) loops.push({ ids, area: signedArea(ids, ds.points) });
+      }
+    }
+    return loops.sort((x, y) => y.area - x.area);
+  }
+  const pad = (v, n) => String(v).padStart(n, ' ');
+  const idLines = ids => { const o = []; for (let i = 0; i < ids.length; i += 10) o.push(ids.slice(i, i + 10).map(v => pad(v, 7) + ' ').join('')); return o; };
+  const parLabelFull = p => { const l = String(p.label); return `${l.includes('-') ? l : l + '-0'}-${p.section}`; };
+  // opt: {name, date(Date), pts:{confirmed, refs}}；回傳文字（換行 \n）。NECEXE 讀取調查情形、界址查註、坐標來源等欄位的區塊，本程式未讀取，會明確註明略過。
+  function errReport(ds, opt = {}) {
+    const L = [], bar = '-'.repeat(80), eq = t => `${'='.repeat(25)} ${t} ${'='.repeat(25)}`, d = opt.date || new Date(), name = opt.name || ds.name || '';
+    L.push(`${'='.repeat(30)} 重測成果檢核 ${name} (${d.getFullYear() - 1911}.${pad(d.getMonth() + 1, 2)}.${pad(d.getDate(), 2)}) ${'='.repeat(30)}`);
+    // 界址點號檢核
+    const idsAll = [...ds.points.keys()].sort((a, b) => a - b); L.push(' 界址點號檢核 (列出空號超出 50 點者)');
+    for (let i = 0; i + 1 < idsAll.length; i++) if (idsAll[i + 1] - idsAll[i] - 1 > 50) L.push(` 界址點號 ${idsAll[i] + 1} - ${idsAll[i + 1] - 1} 為空號`);
+    const maxId = idsAll.length ? idsAll[idsAll.length - 1] : 0; L.push(` 最大界址點號 ${maxId} `); if (maxId > 7500) L.push(' 超出 7500 點上限');
+    L.push('='.repeat(30));
+    // 面積
+    L.push(bar);
+    const sumNew = ds.parcels.reduce((s, p) => s + p.area, 0), refs = ds.parcels.filter(p => p.areaRef != null);
+    L.push(`各筆宗地實際新面積總和 = ${sumNew.toFixed(2)} ㎡`);
+    L.push(refs.length ? `各筆宗地登記新面積總和 = ${refs.reduce((s, p) => s + p.areaRef, 0).toFixed(2)} ㎡` : '各筆宗地登記新面積總和 = （無 D11 新面積）');
+    L.push(bar);
+    const outer = outlineLoops(ds, ds.parcels.filter(p => !(p.containers && p.containers.length)).map(p => p.idx)).filter(l => l.area > 0);
+    for (const l of outer) { L.push(`段外圍面積 = ${l.area.toFixed(2)} ㎡`); L.push(...idLines(l.ids)); }
+    for (const p of ds.parcels) {
+      if (!p.holes || !p.holes.length) continue;
+      L.push(bar); L.push(`-- 父地 ${parLabelFull(p)} 的地中地外圍檢核 --`);
+      for (const l of outlineLoops(ds, p.holes).filter(x => x.area > 0)) { L.push(`  地中地外圍面積 = ${l.area.toFixed(2)} ㎡`); L.push(...idLines(l.ids)); }
+    }
+    L.push('');
+    // 逐項檢核
+    L.push(eq('調查情形欄與經界線糾紛設定檢核')); L.push('（本工作站未讀取調查情形欄位，略過；請在 NECEXE 執行此項檢核）');
+    L.push(eq('宗地資料與地號界址'));
+    for (const r of ds.meta.noRing || []) L.push(`宗地地號 ${r.label} 無地號界址`);
+    for (const r of ds.meta.badRing || []) L.push(`宗地地號 ${r.label} 界址環不完整（${r.count} 點${r.missing.length ? `，點檔缺 ${r.missing.slice(0, 5).join('、')}${r.missing.length > 5 ? '…' : ''}` : '，不足 3 點'}）`);
+    L.push(eq('新地號重覆檢核'));
+    const cnt = new Map(); for (const p of ds.parcels) cnt.set(parLabelFull(p), (cnt.get(parLabelFull(p)) || 0) + 1); for (const r of ds.meta.noRing || []) cnt.set(r.label, (cnt.get(r.label) || 0) + 1);
+    for (const [k, v] of cnt) if (v > 1) L.push(`新地號 ${k} 重覆 ${v} 筆`);
+    L.push(eq('界址點重覆觀測統計'));
+    const pc = opt.pts ? opt.pts.confirmed : ds.points.size, pr = opt.pts ? opt.pts.refs : 0;
+    L.push(`  確定點計 ${pc} 點 , 參考點計 ${pr} 點 , 合計 ${pc + pr} 點`); L.push('  （坐標來源欄位本工作站未解讀，略過）');
+    L.push(eq('宗地資料檢核')); L.push('（地目、查註欄位本工作站未讀取，略過；請在 NECEXE 執行此項檢核）');
+    L.push(eq('查註資料統計')); L.push(`已用經界線共  ${ds.edges.size}  線段`);
+    // 補充檢核
+    L.push(eq('本工作站補充檢核'));
+    const un = unusedPoints(ds); L.push(`未被任何宗地使用的界址點 ${un.length} 個` + (un.length ? '：' + un.slice(0, 20).join('、') + (un.length > 20 ? '…' : '') : ''));
+    const col = collinearCandidates(ds); L.push(`直線上疑似多餘的點 ${col.length} 個（三角形高不超過最長邊的千分之 ${COLLINEAR_DEFAULT.ratio * 1000}，且不超過 ${COLLINEAR_DEFAULT.maxAbs} m）`);
+    const big = ds.parcels.filter(p => p.areaRef != null && Math.abs(p.area - p.areaRef) > 0.2);
+    L.push(`實際面積與 D11 新面積相差超過 0.20 ㎡ 者 ${big.length} 宗`); for (const p of big.slice(0, 200)) L.push(`  ${pad(parLabelFull(p), 14)} 實際 ${p.area.toFixed(2)}  登記 ${p.areaRef.toFixed(2)}  差 ${(p.area - p.areaRef >= 0 ? '+' : '') + (p.area - p.areaRef).toFixed(2)}`);
+    const dupIn = ds.parcels.filter(p => new Set(p.ids).size !== p.ids.length); L.push(`界址環內有重複點號的宗地 ${dupIn.length} 宗` + (dupIn.length ? '：' + dupIn.slice(0, 10).map(parLabelFull).join('、') : ''));
+    L.push(eq(`${name} (END)`)); L.push('');
+    return L.join('\n');
+  }
+
   // ── 輸出 ────────────────────────────────────────────────────────────────
-  // 回傳新的 D14 位元組：只改動 REF=0 且被移動的點的 COT_Y/COT_X。
+  // 在 DBF 尾端附加整筆記錄（recs＝每筆 rl 位元組），更新筆數與結尾 0x1A。
+  function appendRecords(u8, dbf, recs) {
+    if (!recs.length) return u8;
+    const end = dbf.hl + dbf.n * dbf.rl, out = new Uint8Array(end + recs.length * dbf.rl + 1);
+    out.set(u8.subarray(0, end)); recs.forEach((r, i) => out.set(r, end + i * dbf.rl)); out[out.length - 1] = 0x1a;
+    new DataView(out.buffer).setUint32(4, dbf.n + recs.length, true); return out;
+  }
+  const blankRecord = dbf => { const r = new Uint8Array(dbf.rl).fill(0x20); return r; };
+  // 回傳新的 D14 位元組：被移動點只改 COT_Y/COT_X（其餘位元組不動）；新增的點附加在檔尾（REF=0）。
+  // 刪除的點不從檔案移除（保留孤立記錄，避免索引不一致），數量見 orphans。
   function exportD14(pts, ds) {
-    const out = new Uint8Array(pts.u8); let n = 0;
+    let out = new Uint8Array(pts.u8), n = 0;
     for (const p of movedPoints(ds)) {
-      if (p.row == null) continue;
+      if (p.row == null || p.added) continue;
       patchDbfNumber(out, pts, p.row, 'COT_Y', p.y); patchDbfNumber(out, pts, p.row, 'COT_X', p.x); n++;
     }
-    return { bytes: out, changed: n };
+    const add = [...ds.points.values()].filter(p => p.row == null && p.added);
+    if (add.length) {
+      const recs = add.map(() => blankRecord(pts)); out = appendRecords(out, pts, recs);
+      add.forEach((p, i) => { const f = { ...pts, u8: out };
+        patchDbfNumber(out, f, pts.n + i, 'COT_NUMBER', p.id); patchDbfNumber(out, f, pts.n + i, 'COT_REF', 0);
+        patchDbfNumber(out, f, pts.n + i, 'COT_Y', p.y); patchDbfNumber(out, f, pts.n + i, 'COT_X', p.x); });
+    }
+    const orphans = structSummary(ds).removed;
+    return { bytes: out, changed: n, added: add.length, orphans };
+  }
+  // D13（界址串）：環有增減點的宗地，依序改寫其記錄的 COORD_1..8／MIDARC_n；不夠放就在檔尾附加（沿用該宗地最後一筆當樣板），多出的整筆空記錄標為刪除。
+  // 尚未用 NECEXE 驗證匯入。
+  function exportD13(bnd, ds) {
+    let out = new Uint8Array(bnd.u8), patched = 0, appended = 0; const recs = [], setRec = (u8, base, k, id, mid) => {
+      const fc = bnd.fields.find(f => f.name === 'COORD_' + k), fm = bnd.fields.find(f => f.name === 'MIDARC_' + k);
+      const s = String(id).padStart(fc.len, ' '); for (let i = 0; i < fc.len; i++) u8[base + fc.off + i] = s.charCodeAt(i);
+      if (fm) { const t = (mid ? 'T' : 'F').padEnd(fm.len, ' '); for (let i = 0; i < fm.len; i++) u8[base + fm.off + i] = t.charCodeAt(i); }
+    };
+    // 先決定附加記錄的位置，再回頭寫入
+    const jobs = [];
+    for (const p of ds.parcels) {
+      if (!p.rows || !p.ids0) continue;
+      const same = p.ids.length === p.ids0.length && p.ids.every((v, i) => v === p.ids0[i]); if (same) continue;
+      const need = Math.ceil(p.ids.length / 8), have = p.rows.length, rowsUse = p.rows.slice(0, Math.min(need, have));
+      const extra = Math.max(0, need - have), tmpl = bnd.u8.slice(bnd.hl + p.rows[have - 1] * bnd.rl, bnd.hl + (p.rows[have - 1] + 1) * bnd.rl);
+      jobs.push({ p, rowsUse, extra, tmpl, blank: p.rows.slice(need) });
+    }
+    for (const j of jobs) {
+      const n = j.p.ids.length;
+      j.rowsUse.forEach((ri, r) => { const base = bnd.hl + ri * bnd.rl; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(out, base, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } patched++; });
+      for (const ri of j.blank) { out[bnd.hl + ri * bnd.rl] = 0x2a; patched++; }
+      for (let e = 0; e < j.extra; e++) { const rec = new Uint8Array(j.tmpl), r = j.rowsUse.length + e; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(rec, 0, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } rec[0] = 0x20; recs.push(rec); appended++; }
+    }
+    out = appendRecords(out, bnd, recs);
+    return { bytes: out, rewritten: patched, appended, parcels: jobs.length };
   }
   // 供 AI/外部程式讀取的中繼資料（JSON，自帶欄位說明）
   function exportSession(ds, extra = {}, sv = null) {
@@ -703,6 +970,7 @@ const Core = (() => {
       format: 'cadastral-workbench/session@1',
       description: '地籍圖調整工作階段。y=縱坐標(北), x=橫坐標(東), 單位公尺, TWD97。area 單位 m²。',
       crs: 'EPSG:3826', source: ds.source,
+      structure: (() => { const st = structSummary(ds), was = new Set((ds.orig ? ds.orig.points : []).map(q => q.id)); return { ...st, points_added: [...ds.points.values()].filter(q => q.added).map(q => ({ id: q.id, y: q.y, x: q.x })), points_removed: [...was].filter(id => !ds.points.has(id)) }; })(),
       points_moved: movedPoints(ds).map(p => ({ id: p.id, from: { y: p.y0, x: p.x0 }, to: { y: p.y, x: p.x }, shift_m: Math.hypot(p.y - p.y0, p.x - p.x0) })),
       parcels_changed: ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > CHG).map(p => ({
         label: p.label, old_label: p.oldLabel, key: p.key, area_before: p.areaOrig, area_after: p.area,
@@ -714,7 +982,8 @@ const Core = (() => {
   }
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
+    buildTopology, applyDelta, insertPoint, addFreePoint, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, outlineLoops, errReport, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();

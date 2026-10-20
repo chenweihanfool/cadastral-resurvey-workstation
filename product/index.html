@@ -12,7 +12,7 @@
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.45 "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
 #app{display:grid;grid-template-rows:auto 1fr auto;height:100%}
-header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+header{position:relative;z-index:10;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
 header h1{font-size:15px;margin:0 8px 0 0;white-space:nowrap}
 .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit}
 .btn:hover{border-color:var(--accent)} .btn:disabled{opacity:.45;cursor:default}
@@ -21,22 +21,22 @@ header h1{font-size:15px;margin:0 8px 0 0;white-space:nowrap}
 .seg button{border:0;background:var(--panel);color:var(--ink);padding:5px 10px;cursor:pointer;font:inherit;border-right:1px solid var(--line)}
 .seg button:last-child{border-right:0}.seg button.on{background:var(--accent);color:var(--accent-ink)}
 .sep{width:1px;height:22px;background:var(--line);margin:0 2px}
-main{display:grid;grid-template-columns:1fr 440px;min-height:0}
+main{display:grid;grid-template-columns:1fr 360px;min-height:0}main.nosb{grid-template-columns:1fr}main.nosb aside{display:none}
 #stage{position:relative;min-width:0;min-height:0;background:var(--canvas)}
 #cv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
 #tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;display:none;white-space:pre;z-index:3;box-shadow:0 2px 8px #0003}
 #drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);pointer-events:none}
 #drop b{color:var(--ink);font-size:18px;display:block;margin-bottom:6px}
 aside{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:auto}
-#tabs{display:flex;position:sticky;top:0;z-index:2;background:var(--panel);border-bottom:1px solid var(--line)}
-#tabs button{flex:1;border:0;border-bottom:3px solid transparent;background:none;color:var(--muted);padding:9px 4px;font:inherit;font-weight:600;cursor:pointer}
-#tabs button.on{color:var(--accent);border-bottom-color:var(--accent)} #tabs button:hover{color:var(--ink)}
-.pane{display:none}.pane.on{display:block}
+.acc{border-bottom:1px solid var(--line)}.acc>summary{cursor:pointer;padding:9px 12px;font-weight:600;font-size:13px;color:var(--muted);letter-spacing:.04em;list-style:none;user-select:none}
+.acc>summary::-webkit-details-marker{display:none}.acc>summary::before{content:"▸";display:inline-block;width:1em;transition:transform .12s}.acc[open]>summary::before{transform:rotate(90deg)}
+.acc>summary:hover{color:var(--ink)}.accbody{padding:0 12px 10px}
 section{padding:10px 12px;border-bottom:1px solid var(--line)}
 section h2{font-size:13px;margin:0 0 6px;color:var(--muted);font-weight:600;letter-spacing:.04em}
 .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 input[type=number],input[type=text]{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;padding:4px 6px;font:inherit;width:90px}
 input[type=text]{width:130px}
+select{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;padding:4px 6px;font:inherit}
 label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
 table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
 th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -81,8 +81,23 @@ dialog.verdlg[open]{display:flex;flex-direction:column}
 @media (max-width:700px){.tl > li{grid-template-columns:64px 18px minmax(0,1fr)}.tl .ver b{font-size:12px}}
 #printArea{display:none}
 @media print{body.printing>#app,body.printing dialog{display:none!important}body.printing{background:#fff}body.printing #printArea{display:block}body.printing #printArea canvas{display:block}}
+/* 功能列表 */
+#menubar{display:flex;gap:2px}.menu{position:relative}
+.mbtn{border:0;background:none;color:var(--ink);padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit}.mbtn:hover,.menu.open .mbtn{background:var(--bg)}
+.mlist{display:none;position:absolute;top:100%;left:0;min-width:230px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px #0003;padding:4px;z-index:30}
+.menu.open .mlist{display:block}
+.mlist button{display:flex;justify-content:space-between;gap:16px;width:100%;border:0;background:none;color:var(--ink);padding:6px 10px;text-align:left;font:inherit;cursor:pointer;border-radius:4px;white-space:nowrap}
+.mlist button:hover:not(:disabled){background:var(--bg);color:var(--accent)}.mlist button:disabled{opacity:.4;cursor:default}
+.mlist small{color:var(--muted);font-size:11px}.mlist hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+/* 浮動面板（非強制回應，開著也能操作圖面） */
+dialog.fp{position:fixed;inset:auto 12px auto auto;top:52px;margin:0;width:min(470px,96vw);max-height:calc(100vh - 110px);padding:0;box-shadow:0 8px 28px #0004;overflow:hidden}
+dialog.fp[open]{display:flex;flex-direction:column;z-index:15}
+.fphead{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel)}.fpbody{overflow:auto}
+.srow{display:grid;grid-template-columns:20px 118px 1fr;gap:6px 10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}.srow .sctl{justify-content:flex-end;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px}
+.srow input[type=color]{width:30px;height:22px;padding:0;border:1px solid var(--line);border-radius:4px;background:none;cursor:pointer}.srow input[type=number]{width:56px}
+.srow .sx{border:0;background:none;color:var(--muted);cursor:pointer;padding:0 2px}.srow .sx:hover{color:var(--bad)}
 kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;font-size:12px}
-@media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:minmax(280px,1fr) auto}#stage{min-height:280px}aside{max-height:45vh;border-left:0;border-top:1px solid var(--line)}}
+@media (max-width:900px){main,main.nosb{grid-template-columns:1fr;grid-template-rows:minmax(280px,1fr) auto}#stage{min-height:280px}aside{max-height:45vh;border-left:0;border-top:1px solid var(--line)}}
 </style>
 </head>
 <body>
@@ -93,32 +108,55 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <input type="file" id="fileIn" multiple hidden>
   <input type="file" id="dirIn" webkitdirectory hidden>
   <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden>
-  <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button><button data-tool="img" title="平移疊合的影像（JPG／JGW）對位 (I)">移影像</button></div>
+  <nav id="menubar">
+    <div class="menu"><button class="mbtn">檔案</button><div class="mlist">
+      <button data-act="open">開啟檔案…</button><button data-act="folder">開啟資料夾…</button><hr>
+      <button data-act="data">資料來源與匯入…<small>鄰段、影像、控制點</small></button><button data-act="imp">匯入現況點…</button><hr>
+      <button data-act="out">輸出成果…<small>D14／D13／CSV</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
+    <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
+      <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
+      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><hr>
+      <button data-act="move">移動／旋轉／對位…</button></div></div>
+    <div class="menu"><button class="mbtn">檢視</button><div class="mlist">
+      <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
+      <button data-act="sidebar">顯示／隱藏右側欄</button></div></div>
+    <div class="menu"><button class="mbtn">處理</button><div class="mlist">
+      <button data-act="seam">鄰段接合…</button><button data-act="ref">現況點參考線…</button></div></div>
+    <div class="menu"><button class="mbtn">說明</button><div class="mlist">
+      <button data-act="help">操作說明</button><button data-act="ver">版本歷程與更新</button></div></div>
+  </nav>
+  <span class="sep"></span>
+  <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="addpt" title="在界址線上加界址點 (A)">加點</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button><button data-tool="img" title="平移疊合的影像（JPG／JGW）對位 (I)">移影像</button></div>
   <div class="seg" id="filters" title="可複選：決定能選取哪些要素 (1/2/3)">
     <button data-f="pt" class="on">點</button><button data-f="edge" class="on">線</button><button data-f="par" class="on">面</button></div>
   <button class="btn" id="btnUndo" disabled>復原</button><button class="btn" id="btnRedo" disabled>重做</button>
-  <button class="btn" id="btnReset" disabled>還原全部</button>
-  <span class="sep"></span>
-  <label class="chk"><input type="checkbox" id="chkRef" checked>舊圖</label>
-  <label class="chk"><input type="checkbox" id="chkLabel" checked>標註</label>
-  <label class="chk" title="在圖上直接標示面積較差"><input type="checkbox" id="chkDelta" checked>圖上較差</label>
-  <select id="deltaMode" title="較差基準"><option value="adj">對調整前</option><option value="reg">對登記面積</option></select>
   <button class="btn" id="btnFit">全圖</button>
-  <span class="sep"></span>
-  <select id="bmSel" title="底圖（需連網，適用 TWD97）"><option value="none">底圖：無</option><option value="osm">OpenStreetMap</option><option value="emap">NLSC 電子地圖</option><option value="photo">NLSC 航照</option></select>
-  <input type="range" id="bmOp" min="0.2" max="1" step="0.05" value="0.9" title="底圖不透明度" style="width:64px">
-  <select id="bmCm" title="TWD97 中央經線"><option value="121">121°E 本島</option><option value="119">119°E 澎金馬</option></select>
   <span style="flex:1"></span>
-  <button class="btn" id="btnHelp">說明</button>
-  <button class="btn" id="btnVer" title="版本歷程與更新">版本</button>
+  <button class="btn" id="btnSide" title="顯示／隱藏右側欄">側欄</button>
 </header>
 <main>
   <div id="stage"><canvas id="cv"></canvas><div id="tip"></div><div id="hint" style="display:none;position:absolute;left:10px;top:10px;right:10px;z-index:3;background:var(--panel);border:1px solid var(--accent);border-radius:6px;padding:6px 10px;font-size:13px"></div>
     <div id="drop"><div><b>把案件資料夾或檔案拖進來</b>支援 D11 / D13 / D14（可加 D2B / D2C 舊圖）<br>或 COA / BNP / PAR</div></div></div>
   <aside>
-    <nav id="tabs"><button data-tab="in" class="on">① 輸入</button><button data-tab="proc">② 處理</button><button data-tab="out">③ 輸出</button></nav>
-    <div class="pane on" id="pane-in">
-    <section><h2>主要測區（要重測的地段）</h2>
+    <details class="acc" open><summary>選取資訊</summary>
+      <div class="accbody"><div id="selInfo" class="small muted">尚未選取</div>
+      <div class="row small" style="margin-top:6px"><button class="btn" data-act="move" title="輸入位移、旋轉、兩點對位">移動／旋轉…</button><button class="btn" data-act="pts">界址點編修…</button></div></div></details>
+    <details class="acc" open><summary>面積較差</summary>
+      <div class="accbody">
+      <div class="row small" style="margin-bottom:6px">
+        <label class="chk"><input type="radio" name="scope" value="changed" checked>有變動</label>
+        <label class="chk"><input type="radio" name="scope" value="selected">已選取</label>
+        <span class="muted">警示 &gt;</span><input type="number" id="tol" value="1" step="0.1" style="width:60px"><span class="muted">m²</span>
+        <select id="deltaMode" title="圖上面積較差的基準"><option value="adj">圖上：對調整前</option><option value="reg">圖上：對登記面積</option></select>
+        <input type="text" id="find" placeholder="跳至地號 (例 137-1)"></div>
+      <div id="tblwrap"><table><thead><tr><th>地號</th><th>登記</th><th>調整前</th><th>現面積</th><th>Δ調整</th><th>Δ登記</th></tr></thead><tbody id="tbody"></tbody></table></div>
+      <div id="sumInfo" class="small muted" style="margin-top:6px"></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" data-act="style">較差顯示設定…</button></div></div></details>
+  </aside>
+</main>
+<footer><span id="stCoord">—</span><span id="stScale">—</span><span id="stMsg"></span></footer>
+</div>
+<dialog class="fp" id="dlgData"><div class="fphead"><b>資料來源與匯入</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>主要測區（要重測的地段）</h2>
       <div class="row"><button class="btn primary" id="btnOpen">開啟檔案</button><button class="btn" id="btnFolder">開啟資料夾</button></div>
       <div class="small muted" style="margin-top:6px">D14＋D13（建議加 D11／D12，可附 D2C＋D2D 舊圖）或 COA＋BNP。也可直接把資料夾拖進畫面。</div>
       <div id="layerInfo" class="small muted" style="margin-top:6px">—</div></section>
@@ -129,7 +167,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <section><h2>影像（JPG／PNG＋JGW 定位檔）</h2>
       <div class="row small"><button class="btn" id="btnImgAdd">載入影像</button><button class="btn" id="btnImgFit">縮放至作用中影像</button><button class="btn" id="btnImgManage">影像圖層設定 →</button></div>
       <div id="imgSummary" class="small" style="margin:6px 0">尚未載入影像</div>
-      <div class="small muted">可一次選資料夾內所有 JPG（與同名 JGW）：全部先登記、預設不顯示，到「處理」分頁逐張決定顯示、透明度、上下層。只選一張時直接顯示。沒有 JGW 時放畫面中央，用「移影像」平移對位。</div></section>
+      <div class="small muted">可一次選資料夾內所有 JPG（與同名 JGW）：全部先登記、預設不顯示，到「檢視→影像圖層」逐張決定顯示、透明度、上下層。只選一張時直接顯示。沒有 JGW 時放畫面中央，用「移影像」平移對位。</div></section>
     <section><h2>控制點與補點（已知點）</h2>
       <div id="ctlInfo" class="small muted"></div>
       <div class="row small" style="margin-top:6px"><button class="btn" id="btnCtlFit">縮放</button><button class="btn" id="btnCtlClear">清除</button>
@@ -138,10 +176,8 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div class="row small"><button class="btn" id="btnImp">匯入現況點</button><span class="muted">座標檔、極座標觀測或 MAC 手簿檔</span></div>
       <div id="svInfo" class="small muted" style="margin:6px 0"></div>
 </section>
-    </div>
-    <div class="pane" id="pane-proc">
-    <section><h2>選取與移動</h2><div id="selInfo" class="small muted">尚未選取</div>
-      <div class="row" style="margin-top:8px">
+    </div></dialog>
+<dialog class="fp" id="dlgMove"><div class="fphead"><b>移動／旋轉／對位</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>選取與移動</h2><div class="row" style="margin-top:8px">
         <label>北 ΔN(m) <input type="number" id="dN" step="0.01" value="0"></label>
         <label>東 ΔE(m) <input type="number" id="dE" step="0.01" value="0"></label>
         <button class="btn" id="btnMove">移動</button></div>
@@ -154,7 +190,8 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div class="row small" style="margin-top:6px"><span id="pivotInfo" class="muted"></span><button class="btn" id="btnPivotReset">重設樞紐</button></div>
       <div class="row small" style="margin-top:6px"><button class="btn" id="btnAlign" title="依序點新圖點A→目標A′→新圖點B→目標B′，自動算旋轉與平移">兩點對位</button>
         <span class="muted">對象：已選取的要素；未選取則為整張新圖。「移圖」工具下 Shift+拖曳可旋轉。</span></div></section>
-    <section><h2>影像圖層</h2>
+    </div></dialog>
+<dialog class="fp" id="dlgImg"><div class="fphead"><b>影像圖層</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>影像圖層</h2>
       <div class="row small"><input type="text" id="imgFilter" placeholder="篩選檔名" style="width:110px"><button class="btn" id="btnImgAll" title="顯示（符合篩選的）全部影像">全部顯示</button><button class="btn" id="btnImgNone">全部隱藏</button></div>
       <div id="imgList" class="small" style="margin:6px 0"></div>
       <div class="small muted">清單由上而下＝上層到下層（▲▼ 調整）。「向量之下」畫在底圖與向量圖之間，「向量之上」蓋在向量圖上。隱藏的影像不佔記憶體。</div></section>
@@ -163,34 +200,29 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="imgPos" class="small" style="margin:6px 0">尚未載入影像</div>
       <div class="row small"><label>北 ΔN(m) <input type="number" id="imgDN" step="0.01" value="0"></label><label>東 ΔE(m) <input type="number" id="imgDE" step="0.01" value="0"></label><button class="btn" id="btnImgMove">移動</button><button class="btn" id="btnImgReset">還原定位</button></div>
       <div class="small muted" style="margin-top:4px">拖曳影像或用方向鍵微調（步距同上）；上方即時顯示左上像元中心坐標與相對原定位的位移。</div></section>
-    <section><h2>鄰段接合</h2>
-      <div class="small muted" style="margin-bottom:6px">先在「輸入」加入鄰段。已重測的鄰段勾選「以鄰段為準」，主區段界點會吸附過去。</div>
+    </div></dialog>
+<dialog class="fp" id="dlgSeam"><div class="fphead"><b>鄰段接合</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>鄰段接合</h2>
+      <div class="small muted" style="margin-bottom:6px">先在「檔案→資料來源與匯入」加入鄰段。已重測的鄰段勾選「以鄰段為準」，主區段界點會吸附過去。</div>
 
       <div class="row small"><span class="muted">重合容差</span><input type="number" id="seamTol" value="0.01" step="0.005" min="0" style="width:62px"><span class="muted">搜尋</span><input type="number" id="seamSearch" value="3" step="0.5" min="0" style="width:52px"><span class="muted">吸附</span><input type="number" id="seamSnap" value="1" step="0.1" min="0" style="width:52px"><span class="muted">m</span></div>
-      <div class="row small" style="margin-top:6px"><button class="btn" id="btnSeamChk">檢查接合</button><button class="btn" id="btnSeamJoin" title="把脫開／重疊的主區段界點吸附到鄰段界址點（可復原）">自動接合</button><button class="btn" id="btnGoOut" hidden title="到「輸出」分頁輸出 D14">前往輸出 →</button></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" id="btnSeamChk">檢查接合</button><button class="btn" id="btnSeamJoin" title="把脫開／重疊的主區段界點吸附到鄰段界址點（可復原）">自動接合</button><button class="btn" id="btnGoOut" hidden title="開啟輸出面板">前往輸出 →</button></div>
       <div class="row small" style="margin-top:6px"><label class="chk"><input type="checkbox" id="chkSeam" checked>圖上標記</label><label class="chk"><input type="checkbox" id="seamShowOk">列出重合點</label></div>
       <div id="seamSum" class="small muted" style="margin:6px 0"></div>
       <div id="seamWrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>鄰段</th><th>點號</th><th>狀態</th><th>偏差 m</th></tr></thead><tbody id="seamTbl"></tbody></table></div>
       <div class="small muted" style="margin-top:4px">偏差：脫開為＋、重疊為−。以鄰段為準：主區點吸附到鄰段界址點。</div></section>
-    <section><h2>現況點參考線</h2>
+    </div></dialog>
+<dialog class="fp" id="dlgRef"><div class="fphead"><b>現況點參考線</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>現況點參考線</h2>
       <div class="row small"><button class="btn" id="btnSvFit">縮放至現況點</button><button class="btn" id="btnSvClear">清除</button></div>
       <table><thead><tr><th>參考線</th><th>點</th><th>長 m</th><th>面積 m²</th><th></th><th></th></tr></thead><tbody id="lineList"></tbody></table>
       <div class="small muted" style="margin-top:4px">「連線」工具 (L)：依序點現況點；Enter 完成；點回第一點閉合。</div></section>
-    <section><h2>面積較差</h2>
-      <div class="row small" style="margin-bottom:6px">
-        <label class="chk"><input type="radio" name="scope" value="changed" checked>有變動</label>
-        <label class="chk"><input type="radio" name="scope" value="selected">已選取</label>
-        <span class="muted">警示 &gt;</span><input type="number" id="tol" value="1" step="0.1" style="width:60px"><span class="muted">m²</span>
-        <input type="text" id="find" placeholder="跳至地號 (例 137-1)"></div>
-      <div id="tblwrap"><table><thead><tr><th>地號</th><th>登記</th><th>調整前</th><th>現面積</th><th>Δ調整</th><th>Δ登記</th></tr></thead><tbody id="tbody"></tbody></table></div>
-      <div id="sumInfo" class="small muted" style="margin-top:6px"></div></section>
-    </div>
-    <div class="pane" id="pane-out">
-    <section><h2>調整成果</h2>
+    </div></dialog>
+<dialog class="fp" id="dlgOut"><div class="fphead"><b>輸出成果</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>調整成果</h2>
       <div id="outSummary" class="small" style="margin-bottom:8px"></div>
-      <div class="row"><button class="btn primary" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div>
+      <div class="row"><button class="btn primary" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpD13" disabled title="新增／刪除界址點後，宗地界址串（D13）需同步輸出；尚未用 NECEXE 驗證匯入">輸出 D13</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div>
       <div id="outHint" class="small muted" style="margin-top:6px"></div></section>
-    <section><h2>鄰段接合報告</h2>
+    <section><h2>宗地關係偵錯報表（.ERR）</h2>
+      <div class="row"><button class="btn primary" id="btnErr" title="仿 NECEXE 的重測成果檢核報表，Big5 編碼、CRLF 換行">一鍵產出 .ERR</button></div>
+      <div class="small muted" style="margin-top:6px">界址點號空號、面積總和、段外圍與地中地外圍、無界址的地號、新地號重覆、點數統計，另附本工作站的補充檢核。調查情形、界址查註等本程式未讀取的欄位會註明略過。</div></section><section><h2>鄰段接合報告</h2>
       <div class="row"><button class="btn" id="btnSeamCsv">報告 CSV</button><button class="btn" id="btnSeamJson">報告 JSON</button></div>
       <div class="small muted" style="margin-top:6px">逐點檢查結果（重合／重疊／脫開）與自動接合的移動紀錄。</div></section>
     <section><h2>影像定位檔（JGW）</h2>
@@ -199,16 +231,44 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <section><h2>成果圖</h2>
       <div class="row"><button class="btn" id="btnPrint" title="列印 (Ctrl+P)">列印成果圖</button></div>
       <div class="small muted" style="margin-top:6px">A4／A3、比例尺、可另存 PDF 或輸出 PNG。</div></section>
-    </div>
-  </aside>
-</main>
-<footer><span id="stCoord">—</span><span id="stScale">—</span><span id="stMsg"></span></footer>
-</div>
+    </div></dialog>
+<dialog class="fp" id="dlgBase"><div class="fphead"><b>底圖</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><div class="row"><select id="bmSel" title="底圖（需連網，適用 TWD97）"><option value="none">底圖：無</option><option value="osm">OpenStreetMap</option><option value="emap">NLSC 電子地圖</option><option value="photo">NLSC 航照</option></select>
+  <label class="small">不透明度 <input type="range" id="bmOp" min="0.2" max="1" step="0.05" value="0.9" style="width:90px"></label>
+  <select id="bmCm" title="TWD97 中央經線"><option value="121">121°E 本島</option><option value="119">119°E 澎金馬</option></select></div>
+  <div class="small muted" style="margin-top:6px">底圖需連網，只適用 TWD97（TWD67 會偏移約 800 m）；澎湖金門馬祖請選 119°E。</div></section></div></dialog>
+<dialog class="fp" id="dlgPts"><div class="fphead"><b>界址點編修（新增／修改／刪除）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>選取的界址點</h2>
+  <div id="ptInfo" class="small muted">尚未選取界址點（用「選取」工具點一個點）</div>
+  <div class="row small" style="margin-top:6px"><label>北 N <input type="number" id="ptN" step="0.001" style="width:120px"></label><label>東 E <input type="number" id="ptE" step="0.001" style="width:110px"></label><button class="btn" id="btnPtSet">套用座標</button></div>
+  <div class="small muted" style="margin-top:4px">修改座標＝移動該點；共用此點的宗地一起變動、面積即時更新。</div></section>
+<section><h2>新增</h2>
+  <div class="row small"><button class="btn" id="btnPtTool" title="切到「加點」工具 (A)">加點工具</button><span class="muted">在界址線上點一下＝在該線加點（所有以此線為界的宗地都會一併插入，面積不變）；Shift＋點空白處＝孤立點</span></div>
+  <div class="row small" style="margin-top:8px"><label>北 N <input type="number" id="addN" step="0.001" style="width:120px"></label><label>東 E <input type="number" id="addE" step="0.001" style="width:110px"></label><button class="btn" id="btnPtAdd">依座標新增</button></div>
+  <div class="small muted" style="margin-top:4px">已選取一條界址線時，新點插入該線（放在你輸入的位置，面積可能改變）；否則建立不屬於任何宗地的孤立點。圓弧上的線段暫不支援加點。</div></section>
+<section><h2>刪除</h2>
+  <div class="row small"><button class="btn" id="btnPtDel">刪除所選界址點（Del）</button><button class="btn" id="btnOpenClean">一鍵清理多餘點…</button></div>
+  <div class="small muted" style="margin-top:4px">刪除會同時從所有含該點的宗地環移除；環不能少於 3 點，圓弧的弧端與中點不能刪。可復原。</div>
+  <div id="ptEditInfo" class="small" style="margin-top:6px"></div></section></div></dialog>
+<dialog class="fp" id="dlgClean"><div class="fphead"><b>一鍵清理多餘界址點</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
+  <label class="chk"><input type="checkbox" id="clUnused" checked><b>沒有宗地使用的界址點</b></label>
+  <div class="small muted" style="margin:2px 0 8px 22px">不屬於任何宗地的點（只在點檔、沒出現在任何界址串）。</div>
+  <label class="chk"><input type="checkbox" id="clCol" checked><b>直線上的多餘點</b></label>
+  <div class="small muted" style="margin:2px 0 6px 22px">一點與前後鄰點成三角形，該點到對邊的高低於門檻即視為多餘；含此點的每一宗地都成立才刪（轉角、T 字路口、圓弧不動）。門檻＝三角形<b>最長邊</b>×比例，長線容許較大偏差。</div>
+  <div class="row small" style="margin-left:22px"><label>比例 <input type="number" id="clRatio" value="1" step="0.1" min="0" style="width:64px"> ‰</label><label>絕對上限 <input type="number" id="clCap" value="0.05" step="0.01" min="0" style="width:64px"> m <span class="muted">（0＝不設）</span></label></div>
+  <div class="small muted" style="margin:4px 0 0 22px">例：長邊 50 m、1‰ → 高 ≤ 5 cm（再受絕對上限 5 cm 限制）。</div></section>
+<section><div id="clSum" class="small">—</div>
+  <label class="chk small" style="margin-top:6px"><input type="checkbox" id="clShow" checked>在圖上標示將被刪除的點</label>
+  <div class="row" style="margin-top:8px"><button class="btn primary" id="btnClean">清理</button><span class="small muted">可復原（Ctrl+Z）</span></div></section></div></dialog>
+<dialog class="fp" id="dlgStyle"><div class="fphead"><b>圖層與樣式</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><div id="styleRows"></div>
+  <div class="row small" style="margin-top:8px"><button class="btn" id="btnStyleReset">全部還原預設</button><span class="muted">設定會記在這台電腦的瀏覽器；列印成果圖同樣套用。</span></div></section></div></dialog>
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
-<p><b>版面</b>：右側分三個分頁——<b>① 輸入</b>（主要測區、鄰段、控制點、現況點）、<b>② 處理</b>（選取移動、變換、鄰段接合、參考線、面積較差）、<b>③ 輸出</b>（D14、異動點位 CSV、JSON、接合報告、列印）。上方工具列放繪圖工具與顯示選項。</p>
-<p><b>載入</b>：把案件資料夾拖進視窗，或在「輸入」分頁按「開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
+<p><b>版面</b>：上方是<b>功能列表</b>（檔案／編輯／檢視／處理／說明）與常用工具列；細項設定都在選單開出的<b>浮動面板</b>裡（開著也能操作圖面，✕ 關閉）。右側欄只留兩塊：選取資訊與面積較差表，可收折，也可在「檢視」隱藏。</p>
+<p><b>界址點編修</b>：「編輯→界址點編修」或工具列「加點」(<kbd>A</kbd>)。<b>新增</b>：在界址線上點一下，新點落在線上（垂足），所有以該線為界的宗地都一併插入、面積不變；Shift＋點空白處＝孤立點；也可輸入座標新增。<b>修改</b>：拖曳、方向鍵或輸入座標。<b>刪除</b>：選取點按 <kbd>Del</kbd>，會從所有含該點的宗地移除，環不能少於 3 點，圓弧的點不能刪。全部可復原。新增／刪除後請輸出 D14 與 D13（D13 輸出尚未用 NECEXE 驗證）。</p>
+<p><b>一鍵清理多餘點</b>：「編輯→一鍵清理多餘點」。① 沒有宗地使用的點；② 直線上的多餘點——一點與前後鄰點成三角形，到最長邊的高 ≤ 最長邊×比例（預設 1‰，並以絕對上限 5 cm 封頂）即多餘；含該點的每一宗地都成立才刪，轉角與 T 字路口不動。面板即時預覽數量與面積影響，圖上標出將被刪的點。</p>
+<p><b>圖層與樣式</b>：「檢視→圖層與樣式」可逐項開關界址線、界址點、地號、點號、面積較差、舊圖、現況點、控制點，並調整顏色與大小；面積較差可選「僅有變動」或「全部宗地」，超限與正常各自可設顏色。</p>
+<p><b>偵錯報表 .ERR</b>：「檔案→一鍵產出偵錯報表」仿 NECEXE 的重測成果檢核報表（Big5、CRLF）。</p>
+<p><b>載入</b>：把案件資料夾拖進視窗，或用「檔案→開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
 <p><b>鄰段接合</b>：先開主要測區，再按「加入鄰段」（或「加入鄰段資料夾」，可選含多個案件資料夾的上層資料夾；也可 Shift＋拖入）。每個鄰段以不同顏色顯示。「檢查接合」逐點檢查主區段界點與鄰段段界：<b>重合</b>（落在鄰段界址點／界線上）、<b>重疊</b>（跑進鄰段宗地內）、<b>脫開</b>（離鄰段段界有縫）。鄰段已重測時勾選「以鄰段為準」，按「自動接合」把主區點吸附到鄰段界址點（可復原）；報告可輸出 CSV／JSON。AI 可用 <code>CadastralAPI.joinSeam()</code>。</p>
-<p><b>影像疊圖</b>：「輸入」分頁「載入影像」選 JPG（或 PNG）與同名 JGW（PGW／WLD），可一次選整個資料夾的影像——全部先登記但預設不顯示，到「處理」分頁「影像圖層」逐張勾選顯示、調透明度、選「向量之下／之上」、用 ▲▼ 調上下層。用上方「移影像」工具 (I) 拖曳作用中影像平移對位，或用方向鍵、輸入 ΔN／ΔE；「處理」分頁即時顯示左上像元中心坐標與位移，「輸出」分頁可下載調整後的 JGW。影像畫在底圖之上、向量圖之下，可調不透明度。</p>
+<p><b>影像疊圖</b>：「檔案→資料來源與匯入」的「載入影像」選 JPG（或 PNG）與同名 JGW（PGW／WLD），可一次選整個資料夾的影像——全部先登記但預設不顯示，到「檢視→影像圖層」逐張勾選顯示、調透明度、選「向量之下／之上」、用 ▲▼ 調上下層。用上方「移影像」工具 (I) 拖曳作用中影像平移對位，或用方向鍵、輸入 ΔN／ΔE；影像圖層面板即時顯示左上像元中心坐標與位移，「輸出成果」面板可下載調整後的 JGW。影像畫在底圖之上、向量圖之下，可調不透明度。</p>
 <p><b>選取</b>：上方「點／線／面」可複選，決定點擊與框選能選到什麼。<kbd>Shift</kbd> 點擊加選／取消；在空白處拖曳框選。</p>
 <p><b>移動</b>：拖曳已選取的要素，或用方向鍵微調、或輸入 ΔN/ΔE。共用的界址點會讓相鄰地號一起變動，面積即時更新。選「線」會移動線的兩端點，選「面」會移動整宗地所有界址點。</p>
 <p><b>底圖與列印</b>：上方工具列「底圖」可選 OpenStreetMap、國土測繪中心電子地圖或正射影像（需連網；只適用 TWD97，TWD67 會偏移約 800 m；澎湖金門馬祖請改選 119°E）。「列印」(<kbd>Ctrl+P</kbd>) 可選 A4/A3、橫直式、指定比例尺（200～5000）與範圍，附標題欄、圖例、比例尺條與指北；列印時選「另存為 PDF」即可輸出 PDF。</p>
@@ -318,7 +378,8 @@ const Core = (() => {
     return { name, source, points: new Map(), parcels: [], edges: new Map(), pointParcels: new Map(), meta: {} };
   }
 
-  function finalize(ds) {
+  // 邊與「點所屬宗地」：由各宗地的環推得。編修界址點後可重複呼叫（不會重設面積基準）
+  function buildTopology(ds) {
     ds.edges = new Map(); ds.pointParcels = new Map();
     ds.parcels.forEach((p, idx) => {
       p.idx = idx;
@@ -334,16 +395,9 @@ const Core = (() => {
         if (!pp.includes(idx)) pp.push(idx);
       }
     });
-    // 地中地：外圈地號面積 = 外圈 − 內圈（holeKeys 為內圈地號鍵）
-    const byKey = new Map(ds.parcels.map(p => [p.key, p]));
-    for (const p of ds.parcels) {
-      p.holes = []; p.containers = p.containers || [];
-    }
-    for (const p of ds.parcels) for (const hk of p.holeKeys || []) {
-      const h = byKey.get(hk); if (h && h !== p) { p.holes.push(h.idx); h.containers.push(p.idx); }
-    }
-    for (const p of ds.parcels) { p.areaOrig = parcelArea(ds, p); p.area = p.areaOrig; }
-    // 圓弧：mid[i] 為弧中點，前後頂點為弧端；弦邊標記 arcPart，繪圖時改畫弧
+  }
+  // 圓弧：mid[i] 為弧中點，前後頂點為弧端；弦邊標記 arcPart，繪圖時改畫弧
+  function buildArcs(ds) {
     ds.arcs = new Map();
     for (const p of ds.parcels) if (p.mid) {
       const n = p.ids.length;
@@ -353,6 +407,21 @@ const Core = (() => {
         for (const [u, v] of [[a, b], [b, c]]) { const e = ds.edges.get(u < v ? u + '-' + v : v + '-' + u); if (e) e.arcPart = true; }
       });
     }
+  }
+  function finalize(ds) {
+    buildTopology(ds);
+    // 地中地：外圈地號面積 = 外圈 − 內圈（holeKeys 為內圈地號鍵）
+    const byKey = new Map(ds.parcels.map(p => [p.key, p]));
+    for (const p of ds.parcels) {
+      p.holes = []; p.containers = p.containers || [];
+    }
+    for (const p of ds.parcels) for (const hk of p.holeKeys || []) {
+      const h = byKey.get(hk); if (h && h !== p) { p.holes.push(h.idx); h.containers.push(p.idx); }
+    }
+    for (const p of ds.parcels) { p.areaOrig = parcelArea(ds, p); p.area = p.areaOrig; }
+    buildArcs(ds);
+    // 載入時的原貌：「還原全部」用（點位、各宗地的環）
+    if (!ds.orig) ds.orig = { points: [...ds.points.values()].map(q => ({ ...q })), rings: ds.parcels.map(p => ({ ids: p.ids.slice(), mid: p.mid ? p.mid.slice() : null })) };
     return ds;
   }
 
@@ -366,33 +435,40 @@ const Core = (() => {
     const attr = new Map();
     if (par) for (const r of par.rows) if (!r._deleted) attr.set(`${r.SECTION_O}|${r.PAR_O_M}|${r.PAR_O_C}`, r);
     const groups = new Map();
-    for (const r of bnd.rows) {
-      if (r._deleted) continue;
+    bnd.rows.forEach((r, ri) => {
+      if (r._deleted) return;
       const k = `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}`;
-      let g = groups.get(k); if (!g) groups.set(k, g = { sec: r.O_SECTION, m: r.O_PARCEL, c: r.O_PARCEL_E, ids: [], mid: [], arcs: false });
+      let g = groups.get(k); if (!g) groups.set(k, g = { sec: r.O_SECTION, m: r.O_PARCEL, c: r.O_PARCEL_E, ids: [], mid: [], arcs: false, rows: [] });
+      g.rows.push(ri);
       for (let i = 1; i <= 8; i++) {
         const id = r['COORD_' + i];
         if (id) { g.ids.push(id); g.mid.push(!!r['MIDARC_' + i]); if (r['MIDARC_' + i]) g.arcs = true; }
       }
-    }
+    });
     const holeMap = new Map();   // 外圈鍵 → [內圈鍵]
     if (d12) for (const r of d12.rows) {
       if (r._deleted) continue;
       const ok = `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}`, ik = `${r.I_SECTION}|${r.I_PARCEL}|${r.I_PARCEL_E}`;
       let l = holeMap.get(ok); if (!l) holeMap.set(ok, l = []); l.push(ik);
     }
+    const fmtN = r => `${r.PAR_N_M}-${r.PAR_N_C || 0}-${r.SECTION_N}`;
+    ds.meta.noRing = []; ds.meta.badRing = []; ds.meta.dupAttr = [];
     for (const [k, g] of groups) {
       if (!g.sec && !g.m && !g.c) continue;   // 地號全為 0＝無宗地身分的線串（如 D2B 舊圖數化），不是界址環；線改由 D2D 讀（datasetFromLines）
-      if (g.ids.length < 3 || g.ids.some(id => !ds.points.has(id))) continue;
+      if (g.ids.length < 3 || g.ids.some(id => !ds.points.has(id))) {
+        const ar = attr.get(k); ds.meta.badRing.push({ label: ar ? fmtN(ar) : `${g.m}-${g.c || 0}-${g.sec}`, count: g.ids.length, missing: g.ids.filter(id => !ds.points.has(id)) }); continue;
+      }
       const a = attr.get(k);
       const fmt = (m, c) => (c ? `${m}-${c}` : `${m}`);
       ds.parcels.push({
         key: k, section: g.sec, label: a ? fmt(a.PAR_N_M, a.PAR_N_C) : fmt(g.m, g.c), oldLabel: fmt(g.m, g.c),
-        ids: g.ids, mid: g.mid, hasArc: g.arcs, holeKeys: holeMap.get(k),
+        ids: g.ids, mid: g.mid, hasArc: g.arcs, holeKeys: holeMap.get(k), rows: g.rows, ids0: g.ids.slice(), mid0: g.mid.slice(),
         areaRef: a ? Math.round(a.AREA_NEW * 1e10) / 1e6 : null,      // AREA_NEW 公頃 → m²
         areaReg: a ? Math.round(a.AREA_OLD * 1e10) / 1e6 : null,      // AREA_OLD 登記面積 m²
       });
     }
+    // D11 有、但 D13 沒有界址環的地號（NECEXE 報表「無地號界址」）
+    if (par) { const built = new Set(ds.parcels.map(p => p.key)); for (const [k, r] of attr) if (!built.has(k) && !ds.meta.badRing.some(b => b.label === fmtN(r)) && r.PAR_N_M > 0) ds.meta.noRing.push({ label: fmtN(r) }); }
     return finalize(ds);
   }
 
@@ -560,11 +636,146 @@ const Core = (() => {
   }
   function setPoint(ds, id, y, x) { const p = ds.points.get(id); return movePoints(ds, [id], y - p.y, x - p.x); }
   function resetAll(ds) {
+    const o = ds.orig, st = o && structSummary(ds);
+    if (o && (st.added || st.removed || st.rings)) {
+      ds.points = new Map(o.points.map(q => [q.id, { ...q }]));
+      ds.parcels.forEach((p, i) => { p.ids = o.rings[i].ids.slice(); if (o.rings[i].mid) p.mid = o.rings[i].mid.slice(); });
+      buildTopology(ds); buildArcs(ds);
+    }
     for (const p of ds.points.values()) { p.y = p.y0; p.x = p.x0; }
     for (const pc of ds.parcels) pc.area = pc.areaOrig;
   }
   const isMoved = p => Math.abs(p.y - p.y0) > 1e-6 || Math.abs(p.x - p.x0) > 1e-6;   // 容差 1e-6 m，忽略來回旋轉的浮點殘差
   function movedPoints(ds) { return [...ds.points.values()].filter(isMoved); }
+
+  // ── 界址點編修（新增／刪除）：維持宗地完整 ─────────────────────────────────
+  // 原則：點的增減一律同步到「所有」含該點的宗地環（共用界址點不會只改一邊）；圓弧相關的點不動；
+  // 刪除後環不得少於 3 點。每次編修回傳 delta，供復原／重做（applyDelta）。
+  const newDelta = () => ({ parcels: new Map(), added: [], removed: [] });
+  function touchParcel(d, p) { if (!d.parcels.has(p.idx)) d.parcels.set(p.idx, { ids0: p.ids.slice(), mid0: p.mid ? p.mid.slice() : null }); }
+  function closeDelta(ds, d) {
+    for (const [i, t] of d.parcels) { const p = ds.parcels[i]; t.ids1 = p.ids.slice(); t.mid1 = p.mid ? p.mid.slice() : null; }
+    buildTopology(ds); buildArcs(ds); recalc(ds, new Set(d.parcels.keys())); return d;
+  }
+  function applyDelta(ds, d, dir) {
+    const undo = dir === 'undo';
+    for (const [i, t] of d.parcels) { const p = ds.parcels[i]; p.ids = (undo ? t.ids0 : t.ids1).slice(); const m = undo ? t.mid0 : t.mid1; if (m) p.mid = m.slice(); }
+    for (const p of d.added) undo ? ds.points.delete(p.id) : ds.points.set(p.id, p);
+    for (const p of d.removed) undo ? ds.points.set(p.id, p) : ds.points.delete(p.id);
+    buildTopology(ds); buildArcs(ds); recalc(ds, new Set(d.parcels.keys()));
+  }
+  const nextPointId = ds => { let m = 0; for (const id of ds.points.keys()) if (id > m) m = id; return m + 1; };
+  const segKey = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+  // 在界址線 a–b 上新增點：預設取 (y,x) 在線上的垂足（面積不變）；opt.project=false 則放在指定位置。所有以此線為界的宗地都會插入新點。
+  function insertPoint(ds, a, b, y, x, opt = {}) {
+    const e = ds.edges.get(segKey(a, b)); if (!e) throw new Error(`找不到界址線 ${a}–${b}`);
+    if (e.arcPart) throw new Error('圓弧上的線段暫不支援加點');
+    const A = ds.points.get(e.a), B = ds.points.get(e.b);
+    let py = y, px = x;
+    if (opt.project !== false) {
+      const dx = B.x - A.x, dy = B.y - A.y, l2 = dx * dx + dy * dy; if (!l2) throw new Error('線長為 0');
+      const t = Math.max(0.001, Math.min(0.999, ((x - A.x) * dx + (y - A.y) * dy) / l2)); py = A.y + t * dy; px = A.x + t * dx;
+    }
+    const id = opt.id != null ? opt.id : nextPointId(ds); if (ds.points.has(id)) throw new Error(`點號 ${id} 已存在`);
+    const np = { id, y: py, x: px, y0: py, x0: px, row: null, added: true }, d = newDelta();
+    for (const pi of e.parcels) {
+      const p = ds.parcels[pi], n = p.ids.length; let done = false;
+      for (let i = 0; i < n && !done; i++) {
+        const u = p.ids[i], v = p.ids[(i + 1) % n];
+        if ((u === e.a && v === e.b) || (u === e.b && v === e.a)) { touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); done = true; }
+      }
+    }
+    ds.points.set(id, np); d.added.push(np);
+    return { id, delta: closeDelta(ds, d) };
+  }
+  // 孤立點（不屬於任何宗地）：新增點位
+  function addFreePoint(ds, y, x, id) {
+    id = id != null ? id : nextPointId(ds); if (ds.points.has(id)) throw new Error(`點號 ${id} 已存在`);
+    const np = { id, y, x, y0: y, x0: x, row: null, added: true }, d = newDelta(); ds.points.set(id, np); d.added.push(np); return { id, delta: closeDelta(ds, d) };
+  }
+  // 能否從所有環移除此點？回傳 null＝可以，否則為原因
+  function removeBlocker(ds, id) {
+    for (const pi of ds.pointParcels.get(id) || []) {
+      const p = ds.parcels[pi], n = p.ids.length; let occ = 0;
+      for (let i = 0; i < n; i++) if (p.ids[i] === id) { occ++; if (p.mid && (p.mid[i] || p.mid[(i + n - 1) % n] || p.mid[(i + 1) % n])) return '圓弧上的點'; }
+      if (n - occ < 3) return `宗地 ${p.label} 只剩 ${n - occ} 點`;
+    }
+    return null;
+  }
+  // 刪除多個點（內部用：不重建拓撲）。回傳 {done, skipped:[{id,reason}]}
+  function removeInto(ds, ids, d) {
+    const done = [], skipped = [];
+    for (const id of ids) {
+      const pt = ds.points.get(id); if (!pt) continue;
+      const why = removeBlocker(ds, id); if (why) { skipped.push({ id, reason: why }); continue; }
+      for (const pi of ds.pointParcels.get(id) || []) {
+        const p = ds.parcels[pi]; touchParcel(d, p);
+        for (let i = p.ids.length - 1; i >= 0; i--) if (p.ids[i] === id) { p.ids.splice(i, 1); if (p.mid) p.mid.splice(i, 1); }
+      }
+      ds.points.delete(id); d.removed.push(pt); done.push(id);
+    }
+    return { done, skipped };
+  }
+  function removePoints(ds, ids) {
+    const d = newDelta(), r = removeInto(ds, ids, d); closeDelta(ds, d); return { ...r, delta: d };
+  }
+  const usedIds = ds => { const s = new Set(); for (const p of ds.parcels) for (const id of p.ids) s.add(id); return s; };
+  // 沒有任何宗地使用的界址點（沒有宗地時不判斷，避免整批誤刪）
+  function unusedPoints(ds) {
+    if (!ds.parcels.length) return []; const u = usedIds(ds); return [...ds.points.keys()].filter(id => !u.has(id));
+  }
+  // 直線上的多餘點：點 B 與前後鄰點 A、C 組成三角形，B 到 AC 的高 h ≤ 門檻 → 多餘。
+  // 門檻＝ratio × 三角形最長邊（相對值，長線容許較大偏差），可再用 maxAbs（公尺）封頂。含此點的「每一個」環都必須是直線通過才算，
+  // 所以轉角點、T 字路口的點不會被刪。回傳 {h, L} 或 null。
+  const COLLINEAR_DEFAULT = { ratio: 0.001, maxAbs: 0.05 };
+  function collinearCheck(ds, id, opt) {
+    const pps = ds.pointParcels.get(id); if (!pps || !pps.length) return null;
+    const ratio = opt.ratio, cap = opt.maxAbs > 0 ? opt.maxAbs : Infinity; let worst = 0, Lw = 0;
+    for (const pi of pps) {
+      const p = ds.parcels[pi], n = p.ids.length; if (n < 4) return null;
+      let hit = false;
+      for (let i = 0; i < n; i++) {
+        if (p.ids[i] !== id) continue; hit = true;
+        const ia = (i + n - 1) % n, ic = (i + 1) % n;
+        if (p.mid && (p.mid[i] || p.mid[ia] || p.mid[ic])) return null;
+        const A = ds.points.get(p.ids[ia]), B = ds.points.get(id), C = ds.points.get(p.ids[ic]); if (!A || !C || p.ids[ia] === p.ids[ic]) return null;
+        const ab = Math.hypot(B.x - A.x, B.y - A.y), bc = Math.hypot(C.x - B.x, C.y - B.y), ac = Math.hypot(C.x - A.x, C.y - A.y), L = Math.max(ab, bc, ac);
+        if (!L) return null;
+        const h = distToSeg(B.x, B.y, A.x, A.y, C.x, C.y);
+        if (h > Math.min(ratio * L, cap)) return null;
+        if (h > worst) { worst = h; Lw = L; }
+      }
+      if (!hit) return null;
+    }
+    return { h: worst, L: Lw };
+  }
+  function collinearCandidates(ds, opt = {}) {
+    const o = { ...COLLINEAR_DEFAULT, ...opt }, out = [];
+    for (const id of ds.pointParcels.keys()) { const r = collinearCheck(ds, id, o); if (r) out.push({ id, ...r }); }
+    return out.sort((a, b) => a.h - b.h);
+  }
+  // 一鍵清理：① 沒有宗地使用的點 ② 直線上的多餘點。逐點以「目前」的鄰點重新判斷（連續多點共線時不會累積漂移）。
+  // 回傳 {unused, collinear, skipped, delta}；呼叫端自行決定是否保留（預覽時用 applyDelta(…,'undo') 還原）。
+  function cleanupPoints(ds, opt = {}) {
+    const o = { unused: true, collinear: true, ...COLLINEAR_DEFAULT, ...opt }, d = newDelta(), res = { unused: [], collinear: [], skipped: [] };
+    if (o.unused) { const r = removeInto(ds, unusedPoints(ds), d); res.unused = r.done; res.skipped.push(...r.skipped); }
+    if (o.collinear) {
+      for (const c of collinearCandidates(ds, o)) {
+        if (!collinearCheck(ds, c.id, o)) continue;
+        const r = removeInto(ds, [c.id], d); res.collinear.push(...r.done); res.skipped.push(...r.skipped);
+      }
+    }
+    closeDelta(ds, d); res.delta = d; return res;
+  }
+  // 結構是否有異動（新增／刪除點、環改變）
+  function structSummary(ds) {
+    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0 };
+    const was = new Set(o.points.map(p => p.id)); let added = 0, removed = 0, rings = 0;
+    for (const id of ds.points.keys()) if (!was.has(id)) added++;
+    for (const id of was) if (!ds.points.has(id)) removed++;
+    ds.parcels.forEach((p, i) => { const r = o.rings[i]; if (!r || r.ids.length !== p.ids.length || r.ids.some((v, k) => v !== p.ids[k])) rings++; });
+    return { added, removed, rings };
+  }
 
   // ── 變換（平移＋旋轉）─────────────────────────────────────────────────────
   // T = { dy, dx, angle (弧度，逆時針為正，北向上俯視), pivot: {y, x} }：先繞 pivot 旋轉，再平移 (dy,dx)
@@ -954,15 +1165,131 @@ const Core = (() => {
     return null;
   }
 
+  // ── 宗地關係偵錯報表（仿 NECEXE 的 .ERR）─────────────────────────────────────
+  // 各宗地輪廓的外圍環：取每個環（轉成逆時針）的有向邊，抵消掉有反向邊的（內部共邊），剩下的接成環。
+  // 回傳 [{ids, area}]，area 有號（外圍為正、內部空洞為負），由大到小。弧線以弦計。
+  function outlineLoops(ds, idxs) {
+    const half = new Map();
+    for (const i of idxs) {
+      const p = ds.parcels[i]; let ids = p.ids; if (signedArea(ids, ds.points) < 0) ids = ids.slice().reverse();
+      for (let k = 0; k < ids.length; k++) { const a = ids[k], b = ids[(k + 1) % ids.length]; if (a !== b) half.set(a + '>' + b, [a, b]); }
+    }
+    const next = new Map();
+    for (const [a, b] of half.values()) if (!half.has(b + '>' + a)) { let l = next.get(a); if (!l) next.set(a, l = []); l.push(b); }
+    const loops = [];
+    for (const [start] of next) {
+      while (next.get(start) && next.get(start).length) {
+        const ids = [start]; let cur = start;
+        for (let guard = 0; guard < 1e6; guard++) {
+          const l = next.get(cur); if (!l || !l.length) break; const nx = l.shift(); if (nx === start) break; ids.push(nx); cur = nx;
+        }
+        if (ids.length >= 3) loops.push({ ids, area: signedArea(ids, ds.points) });
+      }
+    }
+    return loops.sort((x, y) => y.area - x.area);
+  }
+  const pad = (v, n) => String(v).padStart(n, ' ');
+  const idLines = ids => { const o = []; for (let i = 0; i < ids.length; i += 10) o.push(ids.slice(i, i + 10).map(v => pad(v, 7) + ' ').join('')); return o; };
+  const parLabelFull = p => { const l = String(p.label); return `${l.includes('-') ? l : l + '-0'}-${p.section}`; };
+  // opt: {name, date(Date), pts:{confirmed, refs}}；回傳文字（換行 \n）。NECEXE 讀取調查情形、界址查註、坐標來源等欄位的區塊，本程式未讀取，會明確註明略過。
+  function errReport(ds, opt = {}) {
+    const L = [], bar = '-'.repeat(80), eq = t => `${'='.repeat(25)} ${t} ${'='.repeat(25)}`, d = opt.date || new Date(), name = opt.name || ds.name || '';
+    L.push(`${'='.repeat(30)} 重測成果檢核 ${name} (${d.getFullYear() - 1911}.${pad(d.getMonth() + 1, 2)}.${pad(d.getDate(), 2)}) ${'='.repeat(30)}`);
+    // 界址點號檢核
+    const idsAll = [...ds.points.keys()].sort((a, b) => a - b); L.push(' 界址點號檢核 (列出空號超出 50 點者)');
+    for (let i = 0; i + 1 < idsAll.length; i++) if (idsAll[i + 1] - idsAll[i] - 1 > 50) L.push(` 界址點號 ${idsAll[i] + 1} - ${idsAll[i + 1] - 1} 為空號`);
+    const maxId = idsAll.length ? idsAll[idsAll.length - 1] : 0; L.push(` 最大界址點號 ${maxId} `); if (maxId > 7500) L.push(' 超出 7500 點上限');
+    L.push('='.repeat(30));
+    // 面積
+    L.push(bar);
+    const sumNew = ds.parcels.reduce((s, p) => s + p.area, 0), refs = ds.parcels.filter(p => p.areaRef != null);
+    L.push(`各筆宗地實際新面積總和 = ${sumNew.toFixed(2)} ㎡`);
+    L.push(refs.length ? `各筆宗地登記新面積總和 = ${refs.reduce((s, p) => s + p.areaRef, 0).toFixed(2)} ㎡` : '各筆宗地登記新面積總和 = （無 D11 新面積）');
+    L.push(bar);
+    const outer = outlineLoops(ds, ds.parcels.filter(p => !(p.containers && p.containers.length)).map(p => p.idx)).filter(l => l.area > 0);
+    for (const l of outer) { L.push(`段外圍面積 = ${l.area.toFixed(2)} ㎡`); L.push(...idLines(l.ids)); }
+    for (const p of ds.parcels) {
+      if (!p.holes || !p.holes.length) continue;
+      L.push(bar); L.push(`-- 父地 ${parLabelFull(p)} 的地中地外圍檢核 --`);
+      for (const l of outlineLoops(ds, p.holes).filter(x => x.area > 0)) { L.push(`  地中地外圍面積 = ${l.area.toFixed(2)} ㎡`); L.push(...idLines(l.ids)); }
+    }
+    L.push('');
+    // 逐項檢核
+    L.push(eq('調查情形欄與經界線糾紛設定檢核')); L.push('（本工作站未讀取調查情形欄位，略過；請在 NECEXE 執行此項檢核）');
+    L.push(eq('宗地資料與地號界址'));
+    for (const r of ds.meta.noRing || []) L.push(`宗地地號 ${r.label} 無地號界址`);
+    for (const r of ds.meta.badRing || []) L.push(`宗地地號 ${r.label} 界址環不完整（${r.count} 點${r.missing.length ? `，點檔缺 ${r.missing.slice(0, 5).join('、')}${r.missing.length > 5 ? '…' : ''}` : '，不足 3 點'}）`);
+    L.push(eq('新地號重覆檢核'));
+    const cnt = new Map(); for (const p of ds.parcels) cnt.set(parLabelFull(p), (cnt.get(parLabelFull(p)) || 0) + 1); for (const r of ds.meta.noRing || []) cnt.set(r.label, (cnt.get(r.label) || 0) + 1);
+    for (const [k, v] of cnt) if (v > 1) L.push(`新地號 ${k} 重覆 ${v} 筆`);
+    L.push(eq('界址點重覆觀測統計'));
+    const pc = opt.pts ? opt.pts.confirmed : ds.points.size, pr = opt.pts ? opt.pts.refs : 0;
+    L.push(`  確定點計 ${pc} 點 , 參考點計 ${pr} 點 , 合計 ${pc + pr} 點`); L.push('  （坐標來源欄位本工作站未解讀，略過）');
+    L.push(eq('宗地資料檢核')); L.push('（地目、查註欄位本工作站未讀取，略過；請在 NECEXE 執行此項檢核）');
+    L.push(eq('查註資料統計')); L.push(`已用經界線共  ${ds.edges.size}  線段`);
+    // 補充檢核
+    L.push(eq('本工作站補充檢核'));
+    const un = unusedPoints(ds); L.push(`未被任何宗地使用的界址點 ${un.length} 個` + (un.length ? '：' + un.slice(0, 20).join('、') + (un.length > 20 ? '…' : '') : ''));
+    const col = collinearCandidates(ds); L.push(`直線上疑似多餘的點 ${col.length} 個（三角形高不超過最長邊的千分之 ${COLLINEAR_DEFAULT.ratio * 1000}，且不超過 ${COLLINEAR_DEFAULT.maxAbs} m）`);
+    const big = ds.parcels.filter(p => p.areaRef != null && Math.abs(p.area - p.areaRef) > 0.2);
+    L.push(`實際面積與 D11 新面積相差超過 0.20 ㎡ 者 ${big.length} 宗`); for (const p of big.slice(0, 200)) L.push(`  ${pad(parLabelFull(p), 14)} 實際 ${p.area.toFixed(2)}  登記 ${p.areaRef.toFixed(2)}  差 ${(p.area - p.areaRef >= 0 ? '+' : '') + (p.area - p.areaRef).toFixed(2)}`);
+    const dupIn = ds.parcels.filter(p => new Set(p.ids).size !== p.ids.length); L.push(`界址環內有重複點號的宗地 ${dupIn.length} 宗` + (dupIn.length ? '：' + dupIn.slice(0, 10).map(parLabelFull).join('、') : ''));
+    L.push(eq(`${name} (END)`)); L.push('');
+    return L.join('\n');
+  }
+
   // ── 輸出 ────────────────────────────────────────────────────────────────
-  // 回傳新的 D14 位元組：只改動 REF=0 且被移動的點的 COT_Y/COT_X。
+  // 在 DBF 尾端附加整筆記錄（recs＝每筆 rl 位元組），更新筆數與結尾 0x1A。
+  function appendRecords(u8, dbf, recs) {
+    if (!recs.length) return u8;
+    const end = dbf.hl + dbf.n * dbf.rl, out = new Uint8Array(end + recs.length * dbf.rl + 1);
+    out.set(u8.subarray(0, end)); recs.forEach((r, i) => out.set(r, end + i * dbf.rl)); out[out.length - 1] = 0x1a;
+    new DataView(out.buffer).setUint32(4, dbf.n + recs.length, true); return out;
+  }
+  const blankRecord = dbf => { const r = new Uint8Array(dbf.rl).fill(0x20); return r; };
+  // 回傳新的 D14 位元組：被移動點只改 COT_Y/COT_X（其餘位元組不動）；新增的點附加在檔尾（REF=0）。
+  // 刪除的點不從檔案移除（保留孤立記錄，避免索引不一致），數量見 orphans。
   function exportD14(pts, ds) {
-    const out = new Uint8Array(pts.u8); let n = 0;
+    let out = new Uint8Array(pts.u8), n = 0;
     for (const p of movedPoints(ds)) {
-      if (p.row == null) continue;
+      if (p.row == null || p.added) continue;
       patchDbfNumber(out, pts, p.row, 'COT_Y', p.y); patchDbfNumber(out, pts, p.row, 'COT_X', p.x); n++;
     }
-    return { bytes: out, changed: n };
+    const add = [...ds.points.values()].filter(p => p.row == null && p.added);
+    if (add.length) {
+      const recs = add.map(() => blankRecord(pts)); out = appendRecords(out, pts, recs);
+      add.forEach((p, i) => { const f = { ...pts, u8: out };
+        patchDbfNumber(out, f, pts.n + i, 'COT_NUMBER', p.id); patchDbfNumber(out, f, pts.n + i, 'COT_REF', 0);
+        patchDbfNumber(out, f, pts.n + i, 'COT_Y', p.y); patchDbfNumber(out, f, pts.n + i, 'COT_X', p.x); });
+    }
+    const orphans = structSummary(ds).removed;
+    return { bytes: out, changed: n, added: add.length, orphans };
+  }
+  // D13（界址串）：環有增減點的宗地，依序改寫其記錄的 COORD_1..8／MIDARC_n；不夠放就在檔尾附加（沿用該宗地最後一筆當樣板），多出的整筆空記錄標為刪除。
+  // 尚未用 NECEXE 驗證匯入。
+  function exportD13(bnd, ds) {
+    let out = new Uint8Array(bnd.u8), patched = 0, appended = 0; const recs = [], setRec = (u8, base, k, id, mid) => {
+      const fc = bnd.fields.find(f => f.name === 'COORD_' + k), fm = bnd.fields.find(f => f.name === 'MIDARC_' + k);
+      const s = String(id).padStart(fc.len, ' '); for (let i = 0; i < fc.len; i++) u8[base + fc.off + i] = s.charCodeAt(i);
+      if (fm) { const t = (mid ? 'T' : 'F').padEnd(fm.len, ' '); for (let i = 0; i < fm.len; i++) u8[base + fm.off + i] = t.charCodeAt(i); }
+    };
+    // 先決定附加記錄的位置，再回頭寫入
+    const jobs = [];
+    for (const p of ds.parcels) {
+      if (!p.rows || !p.ids0) continue;
+      const same = p.ids.length === p.ids0.length && p.ids.every((v, i) => v === p.ids0[i]); if (same) continue;
+      const need = Math.ceil(p.ids.length / 8), have = p.rows.length, rowsUse = p.rows.slice(0, Math.min(need, have));
+      const extra = Math.max(0, need - have), tmpl = bnd.u8.slice(bnd.hl + p.rows[have - 1] * bnd.rl, bnd.hl + (p.rows[have - 1] + 1) * bnd.rl);
+      jobs.push({ p, rowsUse, extra, tmpl, blank: p.rows.slice(need) });
+    }
+    for (const j of jobs) {
+      const n = j.p.ids.length;
+      j.rowsUse.forEach((ri, r) => { const base = bnd.hl + ri * bnd.rl; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(out, base, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } patched++; });
+      for (const ri of j.blank) { out[bnd.hl + ri * bnd.rl] = 0x2a; patched++; }
+      for (let e = 0; e < j.extra; e++) { const rec = new Uint8Array(j.tmpl), r = j.rowsUse.length + e; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(rec, 0, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } rec[0] = 0x20; recs.push(rec); appended++; }
+    }
+    out = appendRecords(out, bnd, recs);
+    return { bytes: out, rewritten: patched, appended, parcels: jobs.length };
   }
   // 供 AI/外部程式讀取的中繼資料（JSON，自帶欄位說明）
   function exportSession(ds, extra = {}, sv = null) {
@@ -970,6 +1297,7 @@ const Core = (() => {
       format: 'cadastral-workbench/session@1',
       description: '地籍圖調整工作階段。y=縱坐標(北), x=橫坐標(東), 單位公尺, TWD97。area 單位 m²。',
       crs: 'EPSG:3826', source: ds.source,
+      structure: (() => { const st = structSummary(ds), was = new Set((ds.orig ? ds.orig.points : []).map(q => q.id)); return { ...st, points_added: [...ds.points.values()].filter(q => q.added).map(q => ({ id: q.id, y: q.y, x: q.x })), points_removed: [...was].filter(id => !ds.points.has(id)) }; })(),
       points_moved: movedPoints(ds).map(p => ({ id: p.id, from: { y: p.y0, x: p.x0 }, to: { y: p.y, x: p.x }, shift_m: Math.hypot(p.y - p.y0, p.x - p.x0) })),
       parcels_changed: ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > CHG).map(p => ({
         label: p.label, old_label: p.oldLabel, key: p.key, area_before: p.areaOrig, area_after: p.area,
@@ -981,7 +1309,8 @@ const Core = (() => {
   }
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportSession, finalize,
+    buildTopology, applyDelta, insertPoint, addFreePoint, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, outlineLoops, errReport, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();
@@ -993,6 +1322,19 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.9.0', date: '2026-10-20', type: 'minor',
+    title: '界址點新增／刪除（維持宗地完整）、一鍵清理多餘點、圖層與樣式面板、宗地關係偵錯報表 .ERR；介面改為功能列表＋浮動面板',
+    changes: [
+      '界址點編修：新增「加點」工具（快捷鍵 A）——在界址線上點一下，新點落在線上（垂足），所有以該線為界的宗地環一併插入，面積不變；Shift＋點空白處＝孤立點；也可在「界址點編修」面板輸入座標新增、修改座標。刪除選取的點（Del）會同時從所有含該點的宗地移除，環不能少於 3 點、圓弧的弧端與中點不能刪。全部可復原／重做，「還原全部」會一併還原增刪',
+      '一鍵清理多餘點：①沒有任何宗地使用的點 ②直線上的多餘點——一點與前後鄰點成三角形，到最長邊的高 ≤ 最長邊 × 比例（預設 1‰，並可設絕對上限，預設 5 cm）即視為多餘；含此點的每一宗地都成立才刪，所以轉角、T 字路口、圓弧不會被動到。面板即時預覽數量與面積影響，圖上標出將被刪的點；逐點以目前鄰點重新判斷，連續多點共線不會累積漂移',
+      '輸出：新增的界址點附加在 D14 檔尾（REF=0），宗地界址串改寫後輸出 D13（超過 8 點則在檔尾附加記錄）；已刪除的點不從 D14 移除記錄（避免索引不一致）。尚未用 NECEXE 驗證匯入，請先備份。JSON 輸出新增 structure（新增／刪除的點）',
+      '圖層與樣式：「檢視→圖層與樣式」可逐項開關界址線、界址點、地號、點號、面積較差、變動底色、舊圖、現況點、控制點，並調整顏色與大小；面積較差可設正常／超限各自的顏色與字級，並可選顯示「有變動」或「全部宗地」。設定記在瀏覽器，列印成果圖同樣套用',
+      '宗地關係偵錯報表：「檔案→一鍵產出偵錯報表 .ERR」仿 NECEXE 的重測成果檢核報表（Big5、CRLF）——界址點號空號、面積總和、段外圍與地中地外圍、無地號界址、新地號重覆、點數統計；另附補充檢核（未使用的點、直線多餘點、面積與 D11 差異、環內重複點）。調查情形、界址查註、坐標來源等本程式未讀取的欄位會註明略過',
+      '介面重整：上方改為功能列表（檔案／編輯／檢視／處理／說明）與常用工具列；原本全部展開的細項設定移到選單開出的浮動面板（開著也能操作圖面）；右側欄只留「選取資訊」與「面積較差」兩個可收折區塊，可在「檢視」隱藏。底圖、顯示選項移出工具列',
+      'AI／MCP：CadastralAPI 新增 addPoint／deletePoints／cleanupPoints（可 preview）／exportD13／exportErrReport／getStyle／setStyle',
+    ],
+  },
   {
     version: 'v0.8.0', date: '2026-10-18', type: 'minor',
     title: '影像圖層管理：資料夾內影像全部登記但預設不顯示，逐張設定顯示／透明度／上下層／向量之上或之下',
@@ -1116,7 +1458,7 @@ const APP_VERSION = CHANGELOG[0].version;
 const REPO = 'chenweihanfool/cadastral-resurvey-workstation';
 
 const S = {
-  ds: null, ref: null, dbf: { pts: null }, names: {},
+  ds: null, ref: null, dbf: { pts: null, bnd: null }, names: {},
   img: [], imgActive: -1,                  // 疊合影像 [{name,w,h,bmp,wf,wf0,visible,opacity,located}]
   nb: [], seam: null, seamStale: false,      // 鄰段 [{name,ds,color,visible,authoritative,seg}]；接合檢查報告
   survey: Core.newSurvey(),                // 現況點與手動參考線
@@ -1131,6 +1473,8 @@ const S = {
   cursor: null,                            // 滑鼠世界座標（橡皮筋線用）
   basemap: { provider: 'none', opacity: 0.9, cm: 121 },   // 底圖（需 TWD97）
   printing: false,
+  style: null,                             // 圖層與樣式（見 STYLE_DEF）
+  clean: null,                             // 清理預覽（圖上標示將被刪的點）
 };
 
 // ── 座標轉換 ───────────────────────────────────────────────────────────────
@@ -1170,15 +1514,7 @@ function hitTest(mx, my) {
   const ds = S.ds; if (!ds) return null;
   const wx = toWx(mx), wy = toWy(my), px = 1 / S.view.s;
   if (S.filter.pt) { const b = nearestPoint(ds.points, wx, wy, 9 * px); if (b) return { t: 'pt', k: b.id }; }
-  if (S.filter.edge) {
-    let best = null, bd = 6 * px;
-    for (const e of ds.edges.values()) {
-      const a = ds.points.get(e.a), b = ds.points.get(e.b);
-      const d = Core.distToSeg(wx, wy, a.x, a.y, b.x, b.y);
-      if (d < bd) { bd = d; best = e; }
-    }
-    if (best) return { t: 'edge', k: best.key };
-  }
+  if (S.filter.edge) { const best = hitEdgeAt(wx, wy, 6 * px); if (best) return { t: 'edge', k: best.key }; }
   if (S.filter.par) {
     let best = null, ba = Infinity;
     for (const p of ds.parcels) if (p.area < ba && Core.pointInRing(p.ids, ds.points, wy, wx)) { ba = p.area; best = p; }
@@ -1224,6 +1560,99 @@ function applyEntries(entries) { if (!S.ds) return; Core.setPoints(S.ds, entries
 function undo() { S.seamStale = true; const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); refresh(); }
 function redo() { S.seamStale = true; const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); refresh(); }
 function resetAll() { if (!S.ds) return; Core.resetAll(S.ds); S.undo.length = 0; S.redo.length = 0; refresh(); }
+
+// ── 界址點編修（新增／修改／刪除）：核心在 Core.insertPoint／removePoints／cleanupPoints，這裡負責復原、選取與介面 ──
+function pruneSel() {
+  const ds = S.ds; if (!ds) return;
+  for (const id of [...S.sel.pt]) if (!ds.points.has(id)) S.sel.pt.delete(id);
+  for (const k of [...S.sel.edge]) if (!ds.edges.has(k)) S.sel.edge.delete(k);
+  S.hover = null;
+}
+function pushStruct(delta, label) {
+  pushUndo({ undoFn: () => { Core.applyDelta(S.ds, delta, 'undo'); pruneSel(); }, redoFn: () => { Core.applyDelta(S.ds, delta, 'redo'); pruneSel(); }, label });
+}
+const parLabels = delta => [...delta.parcels.keys()].map(i => S.ds.parcels[i].label);
+function hitEdgeAt(wx, wy, r) {
+  let best = null, bd = r;
+  for (const e of S.ds.edges.values()) { const a = S.ds.points.get(e.a), b = S.ds.points.get(e.b), d = Core.distToSeg(wx, wy, a.x, a.y, b.x, b.y); if (d < bd) { bd = d; best = e; } }
+  return best;
+}
+function selectOnlyPoint(id) { clearSel(); S.sel.pt.add(id); }
+function addPoint({ edge, y, x, project = true }) {   // edge=[a,b]：加在該線（所有以此線為界的宗地）；省略＝孤立點
+  const ds = S.ds; if (!ds) throw new Error('尚未載入圖資');
+  const r = edge ? Core.insertPoint(ds, edge[0], edge[1], y, x, { project }) : Core.addFreePoint(ds, y, x);
+  pushStruct(r.delta, `加點 ${r.id}`); selectOnlyPoint(r.id);
+  return { id: r.id, parcels: parLabels(r.delta) };
+}
+function addPointAt(mx, my, free) {
+  const wx = toWx(mx), wy = toWy(my);
+  if (nearestPoint(S.ds.points, wx, wy, 9 / S.view.s)) return msg('這裡已有界址點；要在線上加點請點在兩點之間的線上');
+  const e = hitEdgeAt(wx, wy, 8 / S.view.s);
+  try {
+    if (e) { const r = addPoint({ edge: [e.a, e.b], y: wy, x: wx }); msg(`已在 ${e.a}–${e.b} 加入點 ${r.id}，同步插入宗地 ${r.parcels.join('、')}（面積不變）；切到「選取」可拖曳`); }
+    else if (free) { const r = addPoint({ y: wy, x: wx }); msg(`已新增孤立點 ${r.id}（不屬於任何宗地）`); }
+    else msg('請點在界址線上；Shift＋點空白處＝新增孤立點');
+  } catch (err) { msg(String(err.message || err)); }
+}
+function deletePoints(ids) {
+  const ds = S.ds; if (!ds) throw new Error('尚未載入圖資');
+  const r = Core.removePoints(ds, ids);
+  if (r.done.length) { pushStruct(r.delta, `刪除 ${r.done.length} 點`); pruneSel(); }
+  return { deleted: r.done, skipped: r.skipped, parcels: parLabels(r.delta) };
+}
+function deleteSelectedPoints() {
+  if (!S.ds) return msg('請先載入圖資'); if (!S.sel.pt.size) return msg('請先用「選取」工具選取要刪除的界址點（可框選多個）');
+  const r = deletePoints([...S.sel.pt]);
+  msg((r.deleted.length ? `已刪除 ${r.deleted.length} 個界址點，更新宗地 ${r.parcels.slice(0, 6).join('、')}${r.parcels.length > 6 ? '…' : ''}；可復原` : '沒有刪除任何點') + (r.skipped.length ? `。無法刪除 ${r.skipped.length} 點：` + r.skipped.slice(0, 3).map(q => `${q.id}（${q.reason}）`).join('、') : ''));
+}
+// 一鍵清理多餘點：預覽＝實際執行後立刻還原，所以數字與實際結果一致
+const cleanOpts = () => ({ unused: $('clUnused').checked, collinear: $('clCol').checked, ratio: (parseFloat($('clRatio').value) || 0) / 1000, maxAbs: parseFloat($('clCap').value) || 0 });
+let cleanKey = '';
+function cleanPreview() {
+  const ds = S.ds, box = $('clSum');
+  if (!ds) { S.clean = null; box.textContent = '尚未載入圖資'; return; }
+  const o = cleanOpts(), hmap = new Map(Core.collinearCandidates(ds, o).map(c => [c.id, c.h])), before = ds.parcels.map(p => p.area);
+  const r = Core.cleanupPoints(ds, o); let n = 0, maxd = 0, tot = 0;
+  ds.parcels.forEach((p, i) => { const d = p.area - before[i]; if (Math.abs(d) > 1e-6) { n++; tot += d; maxd = Math.max(maxd, Math.abs(d)); } });
+  const pts = r.delta.removed.map(p => ({ y: p.y, x: p.x, u: r.unused.includes(p.id) }));
+  Core.applyDelta(ds, r.delta, 'undo');
+  S.clean = (r.unused.length || r.collinear.length) && $('clShow').checked ? { pts } : null;
+  const hmax = Math.max(0, ...r.collinear.map(id => hmap.get(id) || 0));
+  box.innerHTML = `<div>沒有宗地使用的點：<b>${r.unused.length}</b> 個</div><div>直線上的多餘點：<b>${r.collinear.length}</b> 個` + (r.collinear.length ? `（最大偏差 ${(hmax * 100).toFixed(1)} cm）` : '') + '</div>' +
+    `<div class="muted">影響 ${n} 宗地面積，合計 ${tot >= 0 ? '+' : ''}${tot.toFixed(3)} m²，單宗最大 ${maxd.toFixed(3)} m²` + (r.skipped.length ? `；${r.skipped.length} 點因圓弧或環點數不足保留` : '') + '</div>';
+  $('btnClean').disabled = !(r.unused.length || r.collinear.length); draw();
+}
+let cleanTimer = null; const cleanSoon = () => { clearTimeout(cleanTimer); cleanTimer = setTimeout(() => { if ($('dlgClean').open) cleanPreview(); }, 120); };
+['clUnused', 'clCol', 'clRatio', 'clCap', 'clShow'].forEach(id => $(id).addEventListener('input', cleanSoon));
+$('dlgClean').addEventListener('close', () => { S.clean = null; draw(); });
+$('btnClean').onclick = () => {
+  if (!S.ds) return; S.clean = null; const r = Core.cleanupPoints(S.ds, cleanOpts());
+  if (!r.unused.length && !r.collinear.length) return msg('沒有可清理的點');
+  pushStruct(r.delta, '清理多餘點'); pruneSel();
+  msg(`已清理：沒有宗地使用的點 ${r.unused.length} 個、直線上多餘點 ${r.collinear.length} 個，更新 ${r.delta.parcels.size} 宗地；可復原。記得輸出 D14 與 D13`); cleanSoon();
+};
+$('btnPtTool').onclick = () => setTool('addpt'); $('btnPtDel').onclick = deleteSelectedPoints; $('btnOpenClean').onclick = () => openPanel('dlgClean');
+$('btnPtSet').onclick = () => {
+  if (S.sel.pt.size !== 1) return msg('請先選取一個界址點'); const id = [...S.sel.pt][0], p = S.ds.points.get(id), y = parseFloat($('ptN').value), x = parseFloat($('ptE').value);
+  if (!isFinite(y) || !isFinite(x)) return msg('座標格式不正確'); transformSelectionIds(new Set([id]), { dy: y - p.y, dx: x - p.x, angle: 0 }, '座標修改'); refresh();
+};
+$('btnPtAdd').onclick = () => {
+  if (!S.ds) return msg('請先載入圖資'); const y = parseFloat($('addN').value), x = parseFloat($('addE').value); if (!isFinite(y) || !isFinite(x)) return msg('請輸入 N、E 座標');
+  try {
+    const only = S.sel.edge.size === 1 && !S.sel.pt.size ? S.ds.edges.get([...S.sel.edge][0]) : null;
+    const r = addPoint({ edge: only ? [only.a, only.b] : null, y, x, project: false }); msg(`已新增點 ${r.id}` + (only ? `，插入 ${only.a}–${only.b}（宗地 ${r.parcels.join('、')}）` : '（孤立點）'));
+  } catch (err) { msg(String(err.message || err)); }
+};
+function ptPanel() {
+  const ds = S.ds, st = S.st || { added: 0, removed: 0, rings: 0 };
+  $('ptEditInfo').innerHTML = ds ? `結構異動：新增 <b>${st.added}</b> 點、刪除 <b>${st.removed}</b> 點、<b>${st.rings}</b> 宗地的界址串改變` + (st.added || st.removed || st.rings ? '<div class="muted">輸出時需同時輸出 D14 與 D13。</div>' : '') : '';
+  if (S.sel.pt.size === 1 && ds) {
+    const p = ds.points.get([...S.sel.pt][0]); if (!p) return;
+    const used = (ds.pointParcels.get(p.id) || []).map(i => ds.parcels[i].label);
+    $('ptInfo').innerHTML = `點 <b>${p.id}</b>${p.added ? '（新增）' : ''}　${used.length ? '屬於宗地 ' + used.slice(0, 6).join('、') + (used.length > 6 ? '…' : '') : '<span class="neg">沒有宗地使用</span>'}`;
+    for (const [id, v] of [['ptN', p.y], ['ptE', p.x]]) if (document.activeElement !== $(id)) $(id).value = v.toFixed(3);
+  } else $('ptInfo').textContent = S.sel.pt.size > 1 ? `已選 ${S.sel.pt.size} 個點（座標修改一次只能一個；可按「刪除」）` : '尚未選取界址點（用「選取」工具點一個點）';
+}
 
 // ── 現況點與參考線 ─────────────────────────────────────────────────────────
 function addSurveyPoints(pts) {
@@ -1341,6 +1770,58 @@ function transformSelectionIds(ids, T, label) {
 }
 
 // ── 繪圖 ───────────────────────────────────────────────────────────────────
+// ── 圖層與樣式：開關、顏色、大小。顏色 null＝依深淺色主題的預設；設定記在瀏覽器（列印同樣套用）──
+const STYLE_DEF = {
+  edge: { show: true, color: null, width: 1 },
+  pt: { show: true, color: null, movedColor: null, size: 0 },
+  label: { show: true, color: null, size: 0 },
+  ptid: { show: true, color: null, size: 10 },
+  delta: { show: true, okColor: null, badColor: null, size: 0, scope: 'changed' },
+  fill: { show: true, color: null },
+  ref: { show: true, color: null, width: 1 },
+  survey: { show: true, color: null, size: 5, width: 2, names: true },
+  ctl: { show: true, color: null, size: 6, names: true },
+  sel: { color: null },
+};
+// [鍵, 名稱, 有開關, 欄位…]：['color', 屬性, 標籤, 預設色變數]｜['num', 屬性, 標籤, min, max, step]｜['chk', 屬性, 標籤]｜['sel', 屬性, 標籤, [[值, 文字]…]]
+const STYLE_UI = [
+  ['edge', '界址線', true, ['color', 'color', '色', '--edge'], ['num', 'width', '線寬', 0.5, 6, 0.5]],
+  ['pt', '界址點', true, ['color', 'color', '色', '--edge'], ['color', 'movedColor', '已移動', '--bad'], ['num', 'size', '大小', 0, 12, 0.5, '0＝依縮放自動']],
+  ['label', '地號標註', true, ['color', 'color', '色', '--edge'], ['num', 'size', '字級', 0, 30, 1, '0＝自動']],
+  ['ptid', '點號標註（放大後）', true, ['color', 'color', '色', '--ref'], ['num', 'size', '字級', 6, 24, 1]],
+  ['delta', '面積較差（圖上）', true, ['color', 'okColor', '正常色', '--ok'], ['color', 'badColor', '超限色', '--bad'], ['num', 'size', '字級', 0, 30, 1, '0＝自動'], ['sel', 'scope', '顯示', [['changed', '有變動／已選'], ['all', '全部宗地']]]],
+  ['fill', '變動宗地底色', true, ['color', 'color', '色', '--changed']],
+  ['ref', '舊圖線', true, ['color', 'color', '色', '--ref'], ['num', 'width', '線寬', 0.5, 6, 0.5]],
+  ['survey', '現況點／參考線', true, ['color', 'color', '色', '--survey'], ['num', 'size', '點大小', 2, 14, 1], ['num', 'width', '線寬', 1, 8, 0.5], ['chk', 'names', '點名']],
+  ['ctl', '控制點／補點', true, ['color', 'color', '色', '--ok'], ['num', 'size', '大小', 3, 14, 1], ['chk', 'names', '點名']],
+  ['sel', '選取色', false, ['color', 'color', '色', '--sel']],
+];
+const cloneStyle = o => JSON.parse(JSON.stringify(o));
+S.style = cloneStyle(STYLE_DEF);
+try { const j = JSON.parse(localStorage.getItem('cw.style') || 'null'); if (j) for (const k of Object.keys(STYLE_DEF)) if (j[k]) Object.assign(S.style[k], j[k]); } catch (e) { /* 無儲存或被封鎖時用預設 */ }
+const saveStyle = () => { try { localStorage.setItem('cw.style', JSON.stringify(S.style)); } catch (e) { /* ignore */ } };
+const sc_ = (k, p, v) => S.style[k][p] || css(v);   // 使用者色，否則主題預設
+const cssHex = v => { const c = document.createElement('canvas').getContext('2d'); c.fillStyle = '#000'; c.fillStyle = v; let m = /^#([0-9a-f]{6})/i.exec(c.fillStyle); if (m) return '#' + m[1]; m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c.fillStyle); return m ? '#' + [m[1], m[2], m[3]].map(n => (+n).toString(16).padStart(2, '0')).join('') : '#000000'; };
+function renderStyleRows() {
+  const g = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  $('styleRows').innerHTML = STYLE_UI.map(([k, name, hasShow, ...fs]) => {
+    const st = S.style[k], ctl = fs.map(f => {
+      const id = `data-s="${k}.${f[1]}"`;
+      if (f[0] === 'color') return `<label>${f[2]} <input type="color" ${id} value="${st[f[1]] || cssHex(g(f[3]))}"><button class="sx" data-reset="${k}.${f[1]}" title="還原預設色">↺</button></label>`;
+      if (f[0] === 'num') return `<label title="${f[6] || ''}">${f[2]} <input type="number" ${id} min="${f[3]}" max="${f[4]}" step="${f[5]}" value="${st[f[1]]}"></label>`;
+      if (f[0] === 'chk') return `<label class="chk"><input type="checkbox" ${id}${st[f[1]] ? ' checked' : ''}>${f[2]}</label>`;
+      return `<label>${f[2]} <select ${id}>${f[3].map(([v, t]) => `<option value="${v}"${st[f[1]] === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
+    }).join('');
+    return `<div class="srow"><span>${hasShow ? `<input type="checkbox" data-s="${k}.show"${st.show ? ' checked' : ''} title="顯示／隱藏">` : ''}</span><b>${name}</b><div class="sctl">${ctl}</div></div>`;
+  }).join('');
+}
+$('styleRows').addEventListener('input', e => {
+  const t = e.target, key = t.dataset.s; if (!key) return; const [k, p] = key.split('.');
+  S.style[k][p] = t.type === 'checkbox' ? t.checked : t.type === 'number' ? (parseFloat(t.value) || 0) : t.value; saveStyle(); draw();
+});
+$('styleRows').addEventListener('click', e => { const r = e.target.dataset.reset; if (!r) return; const [k, p] = r.split('.'); S.style[k][p] = null; saveStyle(); renderStyleRows(); draw(); });
+$('btnStyleReset').onclick = () => { S.style = cloneStyle(STYLE_DEF); saveStyle(); renderStyleRows(); draw(); };
+
 const PRINT_PALETTE = { '--edge': '#1d2330', '--ref': '#8a93a6', '--sel': '#1f6feb', '--hover': '#00a3a3', '--changed': 'rgba(255,160,0,.28)', '--bad': '#d1242f', '--survey': '#c2188e', '--ok': '#1a7f37', '--canvas': '#ffffff' };
 const css = n => (S.printing ? PRINT_PALETTE[n] : getComputedStyle(document.documentElement).getPropertyValue(n).trim());
 
@@ -1406,82 +1887,91 @@ function render() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
   drawBasemap(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); drawImages(false);
   const ds = S.ds, sc = S.view.s;
-  const cEdge = css('--edge'), cRef = css('--ref'), cSel = css('--sel'), cHov = css('--hover'), cChg = css('--changed'), cBad = css('--bad'), cSv = css('--survey');
+  const ST = S.style, cEdge = sc_('edge', 'color', '--edge'), cRef = sc_('ref', 'color', '--ref'), cSel = sc_('sel', 'color', '--sel'), cHov = css('--hover'), cChg = ST.fill.color ? ST.fill.color + '38' : css('--changed'), cBad = css('--bad'), cSv = sc_('survey', 'color', '--survey');
   const tracePoly = (d, ids) => { ctx.beginPath(); ids.forEach((id, i) => { const p = d.points.get(id); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); }); ctx.closePath(); };
   // 舊圖
-  if (S.ref && $('chkRef').checked) {
-    ctx.strokeStyle = cRef; ctx.lineWidth = 1; ctx.setLineDash([5, 4]); ctx.beginPath();
+  if (S.ref && ST.ref.show) {
+    ctx.strokeStyle = cRef; ctx.lineWidth = ST.ref.width; ctx.setLineDash([5, 4]); ctx.beginPath();
     for (const e of S.ref.edges.values()) { if (e.arcPart) continue; const a = S.ref.points.get(e.a), b = S.ref.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
-    ctx.stroke(); ctx.setLineDash([]); strokeArcs(S.ref, cRef, 1, [5, 4]);
+    ctx.stroke(); ctx.setLineDash([]); strokeArcs(S.ref, cRef, ST.ref.width, [5, 4]);
   }
   for (const n of S.nb) if (n.visible) drawNeighbor(n);
   if (ds) {
     // 已變動宗地底色
     ctx.fillStyle = cChg;
-    for (const p of ds.parcels) if (Math.abs(p.area - p.areaOrig) > 1e-6) { tracePoly(ds, p.ids); ctx.fill(); }
+    if (ST.fill.show) for (const p of ds.parcels) if (Math.abs(p.area - p.areaOrig) > 1e-6) { tracePoly(ds, p.ids); ctx.fill(); }
     // 選取/懸停宗地
     ctx.fillStyle = cSel + '33';
     for (const i of S.sel.par) { tracePoly(ds, ds.parcels[i].ids); ctx.fill(); }
     if (S.hover && S.hover.t === 'par') { ctx.fillStyle = cHov + '22'; tracePoly(ds, ds.parcels[S.hover.k].ids); ctx.fill(); }
     // 邊
-    ctx.strokeStyle = cEdge; ctx.lineWidth = 1; ctx.beginPath();
-    for (const e of ds.edges.values()) { if (e.arcPart) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
-    ctx.stroke(); strokeArcs(ds, cEdge, 1);
+    if (ST.edge.show) {
+      ctx.strokeStyle = cEdge; ctx.lineWidth = ST.edge.width; ctx.beginPath();
+      for (const e of ds.edges.values()) { if (e.arcPart) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
+      ctx.stroke(); strokeArcs(ds, cEdge, ST.edge.width);
+    }
     const strokeEdges = (keys, color, w) => { ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath();
       for (const k of keys) { const e = ds.edges.get(k); if (!e) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); } ctx.stroke(); };
     strokeEdges(S.sel.edge, cSel, 3);
     if (S.hover && S.hover.t === 'edge') strokeEdges([S.hover.k], cHov, 3);
     for (const i of S.sel.par) { ctx.strokeStyle = cSel; ctx.lineWidth = 2; tracePoly(ds, ds.parcels[i].ids); ctx.stroke(); }
     // 點
-    if (sc > 0.6) {
-      const r = sc > 8 ? 3 : 1.6;
+    if (ST.pt.show && sc > 0.6) {
+      const r = ST.pt.size > 0 ? ST.pt.size : sc > 8 ? 3 : 1.6, cP = sc_('pt', 'color', '--edge'), cM = sc_('pt', 'movedColor', '--bad');
       for (const p of ds.points.values()) {
         const sx = toSx(p.x), sy = toSy(p.y); if (sx < -5 || sy < -5 || sx > W + 5 || sy > H + 5) continue;
-        ctx.fillStyle = Core.isMoved(p) ? cBad : cEdge; ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
+        ctx.fillStyle = Core.isMoved(p) ? cM : cP; ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
       }
+    }
+    if (S.clean && !S.printing) {   // 清理預覽：將被刪的點（橘＝沒有宗地使用、紫＝直線多餘）
+      ctx.lineWidth = 2; for (const q of S.clean.pts) { const sx = toSx(q.x), sy = toSy(q.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue; ctx.strokeStyle = q.u ? '#f08c00' : '#9c36b5'; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 7); ctx.moveTo(sx - 5, sy - 5); ctx.lineTo(sx + 5, sy + 5); ctx.moveTo(sx + 5, sy - 5); ctx.lineTo(sx - 5, sy + 5); ctx.stroke(); }
+    }
+    if (S.tool === 'addpt' && S.hover && S.hover.t === 'edge' && S.cursor && !S.printing) {   // 加點預覽：垂足
+      const e = ds.edges.get(S.hover.k), a = e && ds.points.get(e.a), b = e && ds.points.get(e.b);
+      if (e && !e.arcPart) { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy, t = l2 ? Math.max(0, Math.min(1, ((S.cursor.x - a.x) * dx + (S.cursor.y - a.y) * dy) / l2)) : 0; ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(toSx(a.x + t * dx), toSy(a.y + t * dy), 6, 0, 7); ctx.stroke(); }
     }
     const eff = selCount() ? effectiveIds() : [];
     ctx.fillStyle = cSel; for (const id of eff) { const p = ds.points.get(id); if (!p) continue; ctx.fillRect(toSx(p.x) - 4, toSy(p.y) - 4, 8, 8); }
     if (S.seam && $('chkSeam').checked && !S.printing) drawSeam();
     if (S.hover && S.hover.t === 'pt') { const p = ds.points.get(S.hover.k); ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.strokeRect(toSx(p.x) - 6, toSy(p.y) - 6, 12, 12); }
     // 標註
-    if ($('chkLabel').checked) {
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      if (sc > 1.2) {
-        ctx.font = `${Math.min(15, Math.max(9, sc * 1.6))}px sans-serif`; ctx.fillStyle = cEdge;
-        for (const p of ds.parcels) {
-          const c = Core.centroidOf(ds.points, p.ids), sx = toSx(c.x), sy = toSy(c.y); if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
-          ctx.fillText(p.label, sx, sy);
-        }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const autoFs = Math.min(15, Math.max(9, sc * 1.6));
+    if (ST.label.show && sc > 1.2) {
+      ctx.font = `${ST.label.size > 0 ? ST.label.size : autoFs}px sans-serif`; ctx.fillStyle = sc_('label', 'color', '--edge');
+      for (const p of ds.parcels) {
+        const c = Core.centroidOf(ds.points, p.ids), sx = toSx(c.x), sy = toSy(c.y); if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
+        ctx.fillText(p.label, sx, sy);
       }
-      // 圖上面積較差：有變動或已選取的宗地，在地號下方標示 Δ（紅=超過警示值）
-      if ($('chkDelta').checked && sc > 0.25) {
-        const mode = $('deltaMode').value, tol = parseFloat($('tol').value) || 0, bg = css('--canvas');
-        ctx.font = `bold ${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.textAlign = 'center'; ctx.lineJoin = 'round'; ctx.lineWidth = 3;
-        for (const p of ds.parcels) {
-          const changed = Math.abs(p.area - p.areaOrig) > 1e-6;
-          if (!changed && !S.sel.par.has(p.idx)) continue;
-          const base = mode === 'reg' ? p.areaReg : p.areaOrig; if (base == null) continue;
-          const d = p.area - base, c = Core.centroidOf(ds.points, p.ids);
-          const sx = toSx(c.x), sy = toSy(c.y) + Math.min(15, Math.max(9, sc * 1.6)) + 1; if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
-          const t = (d >= 0 ? '+' : '') + d.toFixed(2);
-          ctx.strokeStyle = bg; ctx.strokeText(t, sx, sy); ctx.fillStyle = Math.abs(d) > tol ? cBad : css('--ok'); ctx.fillText(t, sx, sy);
-        }
+    }
+    // 圖上面積較差：預設只標有變動或已選取的宗地，在地號下方標示 Δ（超限用超限色）；可改為全部宗地
+    if (ST.delta.show && sc > 0.25) {
+      const mode = $('deltaMode').value, tol = parseFloat($('tol').value) || 0, bg = css('--canvas'), cOk = sc_('delta', 'okColor', '--ok'), cBd = sc_('delta', 'badColor', '--bad');
+      const fs = ST.delta.size > 0 ? ST.delta.size : Math.min(14, Math.max(9, sc * 1.4)), off = (ST.label.show ? (ST.label.size > 0 ? ST.label.size : autoFs) : 0) + 1;
+      ctx.font = `bold ${fs}px sans-serif`; ctx.textAlign = 'center'; ctx.lineJoin = 'round'; ctx.lineWidth = 3;
+      for (const p of ds.parcels) {
+        const changed = Math.abs(p.area - p.areaOrig) > 1e-6;
+        if (ST.delta.scope !== 'all' && !changed && !S.sel.par.has(p.idx)) continue;
+        const base = mode === 'reg' ? p.areaReg : p.areaOrig; if (base == null) continue;
+        const d = p.area - base, c = Core.centroidOf(ds.points, p.ids);
+        const sx = toSx(c.x), sy = toSy(c.y) + off; if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
+        const t = (d >= 0 ? '+' : '') + d.toFixed(2);
+        ctx.strokeStyle = bg; ctx.strokeText(t, sx, sy); ctx.fillStyle = Math.abs(d) > tol ? cBd : cOk; ctx.fillText(t, sx, sy);
       }
-      if (sc > 14) {
-        ctx.font = '10px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = cRef;
-        for (const p of ds.points.values()) { const sx = toSx(p.x), sy = toSy(p.y); if (sx > 0 && sy > 0 && sx < W && sy < H) ctx.fillText(p.id, sx + 5, sy - 5); }
-      }
+    }
+    if (ST.ptid.show && sc > 14) {
+      ctx.font = `${ST.ptid.size}px sans-serif`; ctx.textAlign = 'left'; ctx.fillStyle = sc_('ptid', 'color', '--ref');
+      for (const p of ds.points.values()) { const sx = toSx(p.x), sy = toSy(p.y); if (sx > 0 && sy > 0 && sx < W && sy < H) ctx.fillText(p.id, sx + 5, sy - 5); }
     }
   }
   drawImages(true);
   // 現況點與參考線
   const sv = S.survey;
-  if (sv.lines.length) {
+  if (ST.survey.show && sv.lines.length) {
     for (const ln of sv.lines) {
       ctx.beginPath(); ln.points.forEach((n, i) => { const p = sv.points.get(n); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); });
       if (ln.closed) { ctx.closePath(); ctx.fillStyle = cSv + '22'; ctx.fill(); }
-      ctx.strokeStyle = cSv; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = cSv; ctx.lineWidth = ST.survey.width; ctx.stroke();
     }
   }
   if (S.draft && S.draft.names.length) {
@@ -1489,24 +1979,24 @@ function render() {
     S.draft.names.forEach((n, i) => { const p = sv.points.get(n); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); });
     if (S.cursor) ctx.lineTo(toSx(S.cursor.x), toSy(S.cursor.y)); ctx.stroke(); ctx.setLineDash([]);
   }
-  if (sv.points.size) {
-    const showName = $('chkLabel').checked && sc > 1.5, inDraft = S.draft ? new Set(S.draft.names) : new Set();
+  if (ST.survey.show && sv.points.size) {
+    const showName = ST.survey.names && sc > 1.5, sz = ST.survey.size, inDraft = S.draft ? new Set(S.draft.names) : new Set();
     ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     for (const p of sv.points.values()) {
       const sx = toSx(p.x), sy = toSy(p.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue;
-      ctx.fillStyle = inDraft.has(p.name) ? cSel : cSv; ctx.beginPath(); ctx.moveTo(sx, sy - 5); ctx.lineTo(sx + 5, sy); ctx.lineTo(sx, sy + 5); ctx.lineTo(sx - 5, sy); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = inDraft.has(p.name) ? cSel : cSv; ctx.beginPath(); ctx.moveTo(sx, sy - sz); ctx.lineTo(sx + sz, sy); ctx.lineTo(sx, sy + sz); ctx.lineTo(sx - sz, sy); ctx.closePath(); ctx.fill();
       if (showName) { ctx.fillStyle = cSv; ctx.fillText(p.name, sx + 8, sy - 6); }
     }
     if (S.hover && S.hover.t === 'sp') { const p = sv.points.get(S.hover.k); if (p) { ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(toSx(p.x), toSy(p.y), 9, 0, 7); ctx.stroke(); } }
   }
   // 控制點／補點（綠色三角形）
-  if (S.controls.size) {
-    const cOk = css('--ok'), showName = $('chkLabel').checked && sc > 0.8;
+  if (ST.ctl.show && S.controls.size) {
+    const cOk = sc_('ctl', 'color', '--ok'), showName = ST.ctl.names && sc > 0.8, z = ST.ctl.size;
     ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     for (const p of S.controls.values()) {
       const sx = toSx(p.x), sy = toSy(p.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue;
-      ctx.fillStyle = cOk; ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 5.5, sy + 4); ctx.lineTo(sx - 5.5, sy + 4); ctx.closePath(); ctx.fill();
-      if (showName) ctx.fillText(p.name, sx + 8, sy - 5);
+      ctx.fillStyle = cOk; ctx.beginPath(); ctx.moveTo(sx, sy - z); ctx.lineTo(sx + z * 0.92, sy + z * 0.67); ctx.lineTo(sx - z * 0.92, sy + z * 0.67); ctx.closePath(); ctx.fill();
+      if (showName) ctx.fillText(p.name, sx + z + 2, sy - 5);
     }
   }
   // 旋轉樞紐
@@ -1551,9 +2041,11 @@ function lineList() {
 }
 function panel() {
   const ds = S.ds;
+  const st = S.st = ds ? Core.structSummary(ds) : { added: 0, removed: 0, rings: 0 }, structEd = st.added + st.removed + st.rings > 0, edited = !!ds && (structEd || Core.movedPoints(ds).length > 0);
   $('btnUndo').disabled = !S.undo.length; $('btnRedo').disabled = !S.redo.length;
-  $('btnReset').disabled = !ds || !Core.movedPoints(ds).length;
-  $('btnExpD14').disabled = !ds || !S.dbf.pts || !Core.movedPoints(ds).length;
+  actDis('undo', !S.undo.length); actDis('redo', !S.redo.length); actDis('reset', !edited); actDis('delpt', !S.sel.pt.size); actDis('err', !ds);
+  $('btnExpD14').disabled = !ds || !S.dbf.pts || !edited; $('btnExpD13').disabled = !ds || !S.dbf.bnd || !st.rings; $('btnErr').disabled = !ds;
+  ptPanel(); if ($('dlgClean').open) { const k = S.undo.length + ':' + S.redo.length + ':' + (S.ds && S.ds.points.size); if (k !== cleanKey) { cleanKey = k; cleanSoon(); } }
   $('btnExpJson').disabled = !ds && !S.survey.points.size;
   $('drop').style.display = (ds || S.survey.points.size || S.nb.length || S.img.length) ? 'none' : 'flex';
   lineList(); nbPanel(); outPanel(); imgPanel();
@@ -1647,6 +2139,7 @@ cv.addEventListener('pointerdown', e => {
     setHint(`連線中：已選 ${S.draft.names.length} 點。繼續點選；Enter 完成、點回第一點閉合、Backspace 退一點、Esc 取消`); refresh(); return;
   }
   if (!S.ds) return;
+  if (S.tool === 'addpt') { addPointAt(mx, my, e.shiftKey); return; }
   if (e.altKey) { S.pivot = { y: toWy(my), x: toWx(mx) }; refresh(); return; }
   if (layerMode()) {
     const ids = moveIds(), pv = pivotOf(ids), wx = toWx(mx), wy = toWy(my);
@@ -1666,9 +2159,9 @@ cv.addEventListener('pointermove', e => {
   { const ll = Core.tm2ToLatLon(S.cursor.y, S.cursor.x, S.basemap.cm); $('stCoord').textContent = `N ${S.cursor.y.toFixed(3)}　E ${S.cursor.x.toFixed(3)}　(${ll.lat.toFixed(6)}°, ${ll.lon.toFixed(6)}°)`; }
   $('stScale').textContent = `1 px = ${(1 / S.view.s).toFixed(3)} m`;
   if (!d) {
-    const h = S.align ? null : S.tool === 'line' ? hitSurvey(mx, my) : S.tool === 'select' && S.ds ? hitTest(mx, my) : null;
+    const h = S.align ? null : S.tool === 'line' ? hitSurvey(mx, my) : S.tool === 'select' && S.ds ? hitTest(mx, my) : S.tool === 'addpt' && S.ds ? (e2 => e2 ? { t: 'edge', k: e2.key } : null)(hitEdgeAt(toWx(mx), toWy(my), 8 / S.view.s)) : null;
     if (JSON.stringify(h) !== JSON.stringify(S.hover)) { S.hover = h; draw(); }
-    tip(h, e); if (S.draft || S.align) draw(); return;
+    tip(h, e); if (S.draft || S.align || S.tool === 'addpt') draw(); return;
   }
   if (d.kind === 'pan') { S.view.cx = d.cx - (mx - d.mx) / S.view.s; S.view.cy = d.cy + (my - d.my) / S.view.s; draw(); return; }
   if (d.kind === 'img') { setImgPos(d.im, d.c0 + (toWx(mx) - d.wx), d.f0 + (toWy(my) - d.wy)); return; }
@@ -1718,7 +2211,8 @@ addEventListener('keydown', e => {
   else if (k === 'Escape') { if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
   else if (k === 'Enter') { if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
   else if (k === 'Backspace' && S.draft) { S.draft.names.pop(); if (!S.draft.names.length) { S.draft = null; setHint(''); } draw(); }
-  else if (k === 'v' || k === 'V') setTool('select'); else if (k === 'h' || k === 'H') setTool('pan'); else if (k === 'm' || k === 'M') setTool('layer'); else if (k === 'l' || k === 'L') setTool('line'); else if (k === 'i' || k === 'I') setTool('img');
+  else if (k === 'Delete' && S.ds && S.sel.pt.size) { e.preventDefault(); deleteSelectedPoints(); }
+  else if (k === 'a' || k === 'A') setTool('addpt'); else if (k === 'v' || k === 'V') setTool('select'); else if (k === 'h' || k === 'H') setTool('pan'); else if (k === 'm' || k === 'M') setTool('layer'); else if (k === 'l' || k === 'L') setTool('line'); else if (k === 'i' || k === 'I') setTool('img');
   else if (k === '1') toggleFilter('pt'); else if (k === '2') toggleFilter('edge'); else if (k === '3') toggleFilter('par');
   else if (k.startsWith('Arrow') && S.tool === 'img' && imgActive()) {
     e.preventDefault(); const st = parseFloat($('step').value) * (e.shiftKey ? 10 : 1);
@@ -1736,16 +2230,39 @@ addEventListener('keyup', e => { if (e.key === ' ') S.space = false; });
 function setTool(t) {
   S.tool = t; if (t !== 'line' && S.draft) { S.draft = null; } if (t !== 'line' && t !== 'img' && !S.align) setHint('');
   document.querySelectorAll('#tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
-  cv.style.cursor = t === 'pan' ? 'grab' : t === 'layer' || t === 'img' ? 'move' : t === 'line' ? 'crosshair' : 'default';
-  if (t === 'img') setHint('移影像：拖曳作用中影像平移（點選哪張就以哪張為作用中），或用方向鍵微調（步距同「處理」）；即時坐標顯示在底部與「處理」分頁');
+  cv.style.cursor = t === 'pan' ? 'grab' : t === 'layer' || t === 'img' ? 'move' : t === 'line' || t === 'addpt' ? 'crosshair' : 'default';
+  if (t === 'addpt') setHint('加點工具：在界址線上點一下加點（共用此線的宗地一併插入）；Shift＋點空白處＝孤立點。按 V 回到選取');
+  if (t === 'img') setHint('移影像：拖曳作用中影像平移（點選哪張就以哪張為作用中），或用方向鍵微調（步距見「移動／旋轉」面板）；即時坐標顯示在底部與「處理」分頁');
   if (t === 'line') setHint('連線工具：依序點選現況點（Enter 完成、點回第一點閉合、Backspace 退一點、Esc 取消）'); refresh();
 }
 function toggleFilter(f) { S.filter[f] = !S.filter[f]; document.querySelector(`#filters [data-f=${f}]`).classList.toggle('on', S.filter[f]); }
 document.querySelectorAll('#tools button').forEach(b => b.onclick = () => setTool(b.dataset.tool));
 document.querySelectorAll('#filters button').forEach(b => b.onclick = () => toggleFilter(b.dataset.f));
-$('btnUndo').onclick = undo; $('btnRedo').onclick = redo; $('btnReset').onclick = () => confirm('確定還原所有移動？') && resetAll();
-$('btnFit').onclick = () => fit(); $('btnHelp').onclick = () => $('help').showModal();
-$('chkRef').onchange = $('chkLabel').onchange = $('chkDelta').onchange = $('deltaMode').onchange = draw;
+$('btnUndo').onclick = undo; $('btnRedo').onclick = redo; $('btnFit').onclick = () => fit();
+const actDis = (n, v) => document.querySelectorAll(`[data-act="${n}"]`).forEach(b => { b.disabled = v; });
+// ── 功能列表與浮動面板 ──
+function openPanel(id) {
+  document.querySelectorAll('dialog.fp[open]').forEach(d => { if (d.id !== id) d.close(); });
+  const d = $(id); if (!d.open) d.show();
+  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); refresh();
+}
+function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
+const ACTS = {
+  open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
+  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), move: () => openPanel('dlgMove'),
+  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
+  help: () => $('help').showModal(),
+};
+document.addEventListener('click', e => {
+  const mb = e.target.closest('.mbtn'); document.querySelectorAll('.menu.open').forEach(m => { if (!mb || m !== mb.parentElement) m.classList.remove('open'); });
+  if (mb) { mb.parentElement.classList.toggle('open'); return; }
+  const a = e.target.closest('[data-act]'); if (a && !a.disabled && ACTS[a.dataset.act]) ACTS[a.dataset.act]();
+  const c = e.target.closest('[data-close]'); if (c) c.closest('dialog').close();
+});
+document.querySelectorAll('.menu').forEach(m => m.addEventListener('mouseenter', () => { if (document.querySelector('.menu.open') && !m.classList.contains('open')) { document.querySelectorAll('.menu.open').forEach(x => x.classList.remove('open')); m.classList.add('open'); } }));
+$('btnSide').onclick = toggleSidebar;
+try { if (localStorage.getItem('cw.sidebar') === '0') document.querySelector('main').classList.add('nosb'); } catch (e) { /* ignore */ }
+$('deltaMode').onchange = draw;
 document.querySelectorAll('input[name=scope]').forEach(r => r.onchange = refresh); $('tol').oninput = refresh;
 $('btnMove').onclick = () => { if (!moveSelection(parseFloat($('dN').value) || 0, parseFloat($('dE').value) || 0, '數值移動')) msg('請先選取要素，或切到「移圖」工具'); };
 const rotAngle = () => { const v = Core.parseAngle($('rotDeg').value, 'auto'); return Number.isNaN(v) ? null : v; };
@@ -1767,8 +2284,35 @@ function download(name, data, type = 'application/octet-stream') {
 }
 $('btnExpD14').onclick = () => {
   const r = Core.exportD14(S.dbf.pts, S.ds); download(S.names.d14 || 'out.D14', r.bytes);
-  msg(`已輸出 ${S.names.d14}：只改動 ${r.changed} 個點的坐標。覆蓋原檔前請先備份案件資料夾。`);
+  const st = S.st || {};
+  msg(`已輸出 ${S.names.d14}：改動 ${r.changed} 個點的坐標` + (r.added ? `、檔尾附加 ${r.added} 個新增點` : '') + (r.orphans ? `；${r.orphans} 個已刪除的點仍留在檔內（不從 D14 移除記錄，避免索引不一致）` : '') + '。' + (st.added || st.removed || st.rings ? '有增刪界址點，請一併輸出 D13。' : '') + '覆蓋原檔前請先備份案件資料夾。');
 };
+// ── 宗地關係偵錯報表 .ERR（仿 NECEXE；Big5、CRLF）──
+let big5Map = null;
+function big5Bytes(text) {   // TextEncoder 只會 UTF-8：用 TextDecoder('big5') 反推出字元 → 雙位元組對照表
+  if (!big5Map) {
+    big5Map = new Map(); const dec = new TextDecoder('big5');
+    for (let a = 0xa1; a <= 0xf9; a++) for (let b = 0x40; b <= 0xfe; b++) { if (b > 0x7e && b < 0xa1) continue; const ch = dec.decode(Uint8Array.of(a, b)); if (ch.length === 1 && ch !== '�' && !big5Map.has(ch)) big5Map.set(ch, [a, b]); }
+  }
+  const out = []; for (const ch of text) { const c = ch.codePointAt(0); if (c < 128) out.push(c); else { const q = big5Map.get(ch); if (q) out.push(q[0], q[1]); else out.push(0x3f); } }
+  return Uint8Array.from(out);
+}
+const caseBase = () => (S.names.d14 || S.names.coa || (S.ds && S.ds.name) || 'case').replace(/\.\w+$/, '');
+function errReportText() {
+  let pts = null;
+  if (S.dbf.pts) { const rows = S.dbf.pts.rows.filter(r => !r._deleted && r.COT_NUMBER != null); pts = { confirmed: rows.filter(r => r.COT_REF === 0 && r.COT_Y && r.COT_X).length, refs: rows.filter(r => r.COT_REF !== 0 && r.COT_REF != null).length }; }
+  return Core.errReport(S.ds, { name: caseBase(), date: new Date(), pts });
+}
+$('btnErr').onclick = () => {
+  if (!S.ds) return msg('請先載入圖資');
+  const txt = errReportText(), bytes = big5Bytes(txt.replace(/\n/g, '\r\n')); download(caseBase() + '.ERR', bytes, 'text/plain');
+  msg(`已產出 ${caseBase()}.ERR（Big5、CRLF；${txt.split('\n').length} 行）。NECEXE 讀的欄位（調查情形、界址查註、坐標來源）本程式未讀取，報表內已註明略過`);
+};
+$('btnExpD13').onclick = () => {
+  const r = Core.exportD13(S.dbf.bnd, S.ds); download(S.names.d13 || 'out.D13', r.bytes);
+  msg(`已輸出 ${S.names.d13 || 'D13'}：改寫 ${r.parcels} 宗地的界址串（${r.rewritten} 筆記錄，檔尾附加 ${r.appended} 筆）。請與 D14 一併取代原檔；尚未用 NECEXE 驗證匯入，請先備份案件資料夾`);
+};
+
 $('btnExpJson').onclick = () => download((S.names.d14 || 'session').replace(/\.\w+$/, '') + '.adjust.json', JSON.stringify(Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })) }, S.survey), null, 2), 'application/json');
 
 // ── 載入檔案 ───────────────────────────────────────────────────────────────
@@ -1797,16 +2341,16 @@ async function loadFiles(files) {
   const DL = async (cp, cl, extra = {}) => Core.datasetFromLines({ pts: Core.parseDbf(await readBuf(cp)), lin: Core.parseDbf(await readBuf(cl)), ...extra });
   if (has('d14', 'd13')) {
     const par = by.d11 ? Core.parseDbf(await readBuf(by.d11)) : null, d12 = by.d12 ? Core.parseDbf(await readBuf(by.d12)) : null;
-    ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d14));
+    ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d14)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d13));
     names.d14 = by.d14.name; names.d13 = by.d13.name; if (by.d11) names.d11 = by.d11.name; if (by.d12) names.d12 = by.d12.name;
     if (has('d2c', 'd2d')) { ref = await DL(by.d2c, by.d2d, { name: 'old', source: 'D2C/D2D 舊圖線' }); names.d2c = by.d2c.name; names.d2d = by.d2d.name; }
     else if (has('d2c', 'd2b')) { ref = await DS(by.d2c, by.d2b, { name: 'old', source: 'D2C/D2B 舊圖' }); names.d2c = by.d2c.name; names.d2b = by.d2b.name; }
   } else if (has('coa', 'bnp')) {
-    ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null;
+    ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null; S.dbf.bnd = null;
     names.coa = by.coa.name; names.bnp = by.bnp.name; if (by.par) names.par = by.par.name;
   } else if (has('d2c', 'd2b')) {
-    ds = await DS(by.d2c, by.d2b, { name: by.d2c.name, source: 'D2C/D2B 舊圖' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d2c));
-    names.d14 = by.d2c.name; names.d2c = by.d2c.name; names.d2b = by.d2b.name;
+    ds = await DS(by.d2c, by.d2b, { name: by.d2c.name, source: 'D2C/D2B 舊圖' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d2c)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d2b));
+    names.d14 = by.d2c.name; names.d13 = by.d2b.name; names.d2c = by.d2c.name; names.d2b = by.d2b.name;
   }
   if (imgs.length) await loadImages(imgs);
   if (!ds) {
@@ -1816,7 +2360,7 @@ async function loadFiles(files) {
     if (ctlMsg) return true;
     msg('缺少必要檔案：需要 D14+D13，或 COA+BNP，或 D2C+D2B；控制點用 CTL/CT2/D20；現況點請用「匯入現況點」'); return false;
   }
-  S.seam = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
+  S.seam = null; S.clean = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
   fit(); refresh();
   msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
   return true;
@@ -1876,7 +2420,7 @@ async function loadImages(files) {
   }
   if (added.length && !many) { const a = imgActive(); if (a) fit(imgBox(a)); }
   refresh();
-  msg(added.length ? (many ? `已登記 ${added.length} 張影像（預設不顯示）：到「處理」分頁的「影像圖層」勾選要顯示的` : `已載入影像：${added.join('、')}`) + (skipped.length ? `；略過 ${skipped.join('、')}` : '') : '沒有可載入的影像' + (skipped.length ? `：${skipped.join('、')}` : '（需要 JPG／PNG，建議附同名 JGW／PGW）'));
+  msg(added.length ? (many ? `已登記 ${added.length} 張影像（預設不顯示）：到「檢視→影像圖層」勾選要顯示的` : `已載入影像：${added.join('、')}`) + (skipped.length ? `；略過 ${skipped.join('、')}` : '') : '沒有可載入的影像' + (skipped.length ? `：${skipped.join('、')}` : '（需要 JPG／PNG，建議附同名 JGW／PGW）'));
   return { added, skipped };
 }
 // 影像 above=false 畫在向量圖之下、true 畫在向量圖之上；陣列後面的在上層
@@ -1928,7 +2472,7 @@ function imgPanel() {
       `<div class="row small" style="margin-top:4px"><span class="muted">透明度</span><input type="range" min="0.05" max="1" step="0.05" value="${im.opacity}" data-i="${i}" data-k="opacity" style="width:90px"><span class="muted" data-pct="${i}">${Math.round(im.opacity * 100)}%</span>` +
       `<select data-i="${i}" data-k="above" title="疊在向量圖之下或之上"><option value="0"${im.above ? '' : ' selected'}>向量之下</option><option value="1"${im.above ? ' selected' : ''}>向量之上</option></select>` +
       `<label class="chk" title="作用中：移影像工具與下方平移對位的對象"><input type="radio" name="imgAct" data-i="${i}" data-k="active"${i === S.imgActive ? ' checked' : ''}>作用中</label></div></div>`); }
-  $('imgList').innerHTML = S.img.length ? (rows.join('') || '<span class="muted">沒有符合的影像</span>') : '<span class="muted">尚未載入影像 — 到「輸入」分頁載入</span>';
+  $('imgList').innerHTML = S.img.length ? (rows.join('') || '<span class="muted">沒有符合的影像</span>') : '<span class="muted">尚未載入影像 — 到「檔案→資料來源與匯入」載入</span>';
   $('btnImgTool').classList.toggle('primary', S.tool === 'img');
   $('imgActiveSel').innerHTML = S.img.map((im, i) => `<option value="${i}"${i === S.imgActive ? ' selected' : ''}>${esc(im.name)}</option>`).join('');
   $('imgActiveSel').disabled = !S.img.length; $('btnImgMove').disabled = $('btnImgReset').disabled = !act;
@@ -1938,7 +2482,7 @@ function imgPanel() {
 }
 $('btnImgAdd').onclick = () => $('imgIn').click(); $('imgIn').onchange = e => { loadImages([...e.target.files]); e.target.value = ''; };
 $('btnImgFit').onclick = () => { const a = imgActive(); if (a) fit(imgBox(a)); };
-$('btnImgManage').onclick = () => setTab('proc');
+$('btnImgManage').onclick = () => openPanel('dlgImg');
 $('btnImgTool').onclick = () => setTool(S.tool === 'img' ? 'select' : 'img');
 $('imgActiveSel').onchange = e => { S.imgActive = +e.target.value; refresh(); };
 $('btnImgMove').onclick = () => { const a = imgActive(); if (a) moveImage(a, parseFloat($('imgDN').value) || 0, parseFloat($('imgDE').value) || 0); };
@@ -1954,31 +2498,23 @@ $('imgList').addEventListener('click', e => { const b = e.target.closest('button
   if (b.dataset.k === 'up') moveImgLayer(im, 'up'); else if (b.dataset.k === 'down') moveImgLayer(im, 'down'); else if (b.dataset.k === 'fit') fit(imgBox(im)); else if (b.dataset.k === 'del') removeImage(im); });
 $('imgOut').addEventListener('click', e => { if (!e.target.classList.contains('imgjgw')) return; const im = S.img[+e.target.dataset.i]; download(im.name.replace(/\.\w+$/, '') + '.jgw', Core.worldFileText(im.wf), 'text/plain'); });
 
-// ── 分頁：輸入／處理／輸出 ───────────────────────────────────────────────────
-function setTab(k) {
-  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === k));
-  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === 'pane-' + k));
-  try { localStorage.setItem('cw.tab', k); } catch (e) { /* ignore */ }
-}
-document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => setTab(b.dataset.tab); });
-try { const k = localStorage.getItem('cw.tab'); if (k && document.getElementById('pane-' + k)) setTab(k); } catch (e) { /* ignore */ }
-$('btnGoOut').onclick = () => setTab('out');
-// 輸出分頁的摘要：說明目前有什麼可輸出、為何輸出鈕是灰的
+$('btnGoOut').onclick = () => openPanel('dlgOut');
+// 輸出面板的摘要：說明目前有什麼可輸出、為何輸出鈕是灰的
 function outPanel() {
-  const ds = S.ds, moved = ds ? Core.movedPoints(ds).length : 0, changed = ds ? ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0;
-  $('btnExpMoved').disabled = !moved; $('btnGoOut').hidden = !moved;
+  const ds = S.ds, moved = ds ? Core.movedPoints(ds).length : 0, changed = ds ? ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0, st = S.st || { added: 0, removed: 0, rings: 0 }, sEd = st.added + st.removed + st.rings;
+  $('btnExpMoved').disabled = !moved; $('btnGoOut').hidden = !(moved || sEd);
   let h = '', hint = '';
   if (!ds) h = '<span class="muted">尚未載入主要測區。</span>';
   else {
-    h = `已移動 <b>${moved}</b> 個界址點，面積變動 <b>${changed}</b> 宗地號。`;
-    if (!moved) {
+    h = `已移動 <b>${moved}</b> 個界址點，面積變動 <b>${changed}</b> 宗地號。` + (sEd ? `<br>界址點新增 <b>${st.added}</b>、刪除 <b>${st.removed}</b>，<b>${st.rings}</b> 宗地的界址串改變。` : '');
+    if (!moved && !sEd) {
       const j = S.seam && S.seam.join;
-      hint = '目前沒有異動點，所以輸出鈕是灰色。先在「處理」移動點，或按「自動接合」。';
+      hint = '目前沒有異動點，所以輸出鈕是灰色。先移動點、增刪界址點，或按「自動接合」。';
       if (j) {
         const un = j.unresolved, beyond = un.filter(u => u.reason === 'beyond_snap').length, conf = un.filter(u => u.reason === 'conflict').length;
         hint = '上次自動接合沒有移動任何點：' + [j.skipped.length ? `未勾選「以鄰段為準」的鄰段：${j.skipped.join('、')}` : '', beyond ? `${beyond} 點超出吸附上限（可到「處理」調高「吸附」）` : '', conf ? `${conf} 點與別點搶同一鄰段點` : ''].filter(Boolean).join('；') + '。';
       }
-    } else if (S.dbf.pts) hint = '「輸出 D14」：取代案件資料夾內原 D14 後，在 NECEXE 重開並重算面積（尚未實際匯入 NECEXE 驗證）。D13／D11 不變。';
+    } else if (S.dbf.pts) hint = sEd ? '有新增／刪除界址點：D14 與 D13（界址串）都要輸出並一起取代原檔，再在 NECEXE 重開並重算面積。新增點附加在 D14 檔尾、D13 改寫受影響宗地的記錄——兩者尚未實際匯入 NECEXE 驗證，請先備份。' : '「輸出 D14」：取代案件資料夾內原 D14 後，在 NECEXE 重開並重算面積（尚未實際匯入 NECEXE 驗證）。D13／D11 不變。';
     else hint = '主要測區不是由 D14 載入（COA／BNP），無法輸出 D14；請用「異動點位 CSV」或「輸出 JSON」。';
   }
   $('outSummary').innerHTML = h; $('outHint').textContent = hint;
@@ -2059,7 +2595,7 @@ function drawNeighbor(n) {
   ctx.restore();
   if (sc > 3) { ctx.fillStyle = col; const r = sc > 8 ? 2.5 : 1.8; for (let i = 0; i < c.bv.length; i += 2) { if (c.bv[i] < vx0 || c.bv[i] > vx1 || c.bv[i + 1] < vy0 || c.bv[i + 1] > vy1) continue; ctx.fillRect(toSx(c.ox + c.bv[i]) - r, toSy(c.oy + c.bv[i + 1]) - r, r * 2, r * 2); } }
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  if (sc > 2 && $('chkLabel').checked) { ctx.font = `${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.fillStyle = col; let k = 0; for (const l of c.labels) { if (l.x < vx0 || l.x > vx1 || l.y < vy0 || l.y > vy1) continue; ctx.fillText(l.t, toSx(c.ox + l.x), toSy(c.oy + l.y)); if (++k > 800) break; } }
+  if (sc > 2 && S.style.label.show) { ctx.font = `${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.fillStyle = col; let k = 0; for (const l of c.labels) { if (l.x < vx0 || l.x > vx1 || l.y < vy0 || l.y > vy1) continue; ctx.fillText(l.t, toSx(c.ox + l.x), toSy(c.oy + l.y)); if (++k > 800) break; } }
   ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = col; ctx.fillText(n.name, toSx(c.ox + c.cx), toSy(c.oy + c.cy));
 }
 function drawSeam() {
@@ -2255,7 +2791,7 @@ function drawPrintFrame(o, plan) {
   ctx.font = '11px sans-serif'; let lx = mx, ly = ty + 34;
   const item = (label, drawIcon) => { drawIcon(lx, ly + 6); ctx.fillStyle = ink; ctx.textBaseline = 'middle'; ctx.fillText(label, lx + 26, ly + 6); ctx.textBaseline = 'top'; lx += 26 + ctx.measureText(label).width + 12; };
   item('新圖', (x, y) => { ctx.strokeStyle = '#1d2330'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke(); });
-  if (S.ref && $('chkRef').checked) item('舊圖', (x, y) => { ctx.strokeStyle = '#8a93a6'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke(); ctx.setLineDash([]); });
+  if (S.ref && S.style.ref.show) item('舊圖', (x, y) => { ctx.strokeStyle = '#8a93a6'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke(); ctx.setLineDash([]); });
   if (changed) item('面積變動', (x, y) => { ctx.fillStyle = 'rgba(255,160,0,.45)'; ctx.fillRect(x, y - 5, 20, 10); });
   ly += 18; lx = mx;
   if (S.survey.points.size) item('現況點', (x, y) => { ctx.fillStyle = '#c2188e'; ctx.beginPath(); ctx.moveTo(x + 10, y - 5); ctx.lineTo(x + 15, y); ctx.lineTo(x + 10, y + 5); ctx.lineTo(x + 5, y); ctx.closePath(); ctx.fill(); });
@@ -2320,7 +2856,7 @@ function renderTimeline() {
   }).join('') : '<li style="display:block;text-align:center;padding:48px;color:var(--muted)">沒有符合的更新紀錄</li>';
 }
 function renderUpdate() {
-  const u = S.update, b = $('btnVer'); b.textContent = APP_VERSION + (u ? ' ↑' : ''); b.classList.toggle('primary', !!u); b.title = u ? `有新版本 ${u.tag}` : '版本歷程與更新';
+  const u = S.update, b = document.querySelector('[data-act="ver"]'); b.textContent = '版本歷程與更新　' + APP_VERSION + (u ? `　↑ 有新版 ${u.tag}` : '');
   const ban = $('updBanner'); ban.hidden = !u; if (!u) return;
   ban.innerHTML = `<b>有新版本 ${esc(u.tag)}</b>${u.name ? '：' + esc(u.name) : ''}　<button class="btn primary" id="btnApplyUpd">立即更新</button> <a href="${esc(u.url)}" target="_blank" rel="noopener">發行頁面</a>` +
     (u.body ? `<div class="notes">${esc(u.body.split('---')[0].split(NL).map(l => l.replace(/^#+\s*/, '')).join(NL).trim())}</div>` : '') + `<div class="muted small" style="margin-top:4px">更新會以新版覆寫你選取的檔案（Chrome／Edge）或下載新檔；請先輸出 D14／JSON，重新開啟後才生效。</div>`;
@@ -2349,7 +2885,7 @@ async function applyUpdate() {
   } catch (e) { if (e && e.name === 'AbortError') return; msg('更新失敗：' + (e.message || e)); }
 }
 const autoUpdOn = () => { try { return localStorage.getItem('cw.autoUpdate') !== '0'; } catch (e) { return true; } };
-$('btnVer').onclick = () => { $('chkAutoUpd').checked = autoUpdOn(); renderTimeline(); renderUpdate(); $('verDlg').showModal(); };
+ACTS.ver = () => { $('chkAutoUpd').checked = autoUpdOn(); renderTimeline(); renderUpdate(); $('verDlg').showModal(); };
 $('verClose').onclick = e => { e.preventDefault(); $('verDlg').close(); };
 $('verQ').oninput = () => { verState.q = $('verQ').value; renderTimeline(); };
 $('verTypes').onclick = e => { const t = e.target.dataset && e.target.dataset.t; if (!t) return; verState.type = t; document.querySelectorAll('#verTypes button').forEach(b => b.classList.toggle('on', b.dataset.t === t)); renderTimeline(); };
@@ -2428,6 +2964,17 @@ const api = {
   },
   removeImage: ({ name }) => { const im = S.img.find(q => q.name.toLowerCase() === String(name).toLowerCase()); if (!im) throw new Error('找不到影像 ' + name); removeImage(im); return api.listImages(); },
   exportWorldFile: ({ name }) => { const im = S.img.find(q => q.name.toLowerCase() === String(name).toLowerCase()); if (!im) throw new Error('找不到影像 ' + name); return Core.worldFileText(im.wf); },
+  // ── 界址點編修：addPoint（edge=[a,b] 加在該線並同步插入所有鄰接宗地；省略 edge＝孤立點）、deletePoints、cleanupPoints（preview 只算不改）──
+  addPoint: ({ edge = null, y, x, project = true } = {}) => { const r = addPoint({ edge, y, x, project }); refresh(); return r; },
+  deletePoints: ({ ids = [] } = {}) => { const r = deletePoints(ids); refresh(); return r; },
+  cleanupPoints: ({ preview = false, unused = true, collinear = true, ratio_permille = 1, max_abs_m = 0.05 } = {}) => {
+    if (!S.ds) throw new Error('尚未載入圖資'); const o = { unused, collinear, ratio: ratio_permille / 1000, maxAbs: max_abs_m }, r = Core.cleanupPoints(S.ds, o);
+    if (preview) Core.applyDelta(S.ds, r.delta, 'undo'); else if (r.unused.length || r.collinear.length) { pushStruct(r.delta, '清理多餘點'); pruneSel(); } else Core.applyDelta(S.ds, r.delta, 'undo');
+    refresh(); return { preview, unused: r.unused, collinear: r.collinear, skipped: r.skipped };
+  },
+  exportErrReport: () => { if (!S.ds) throw new Error('尚未載入圖資'); return errReportText(); },
+  exportD13: () => { if (!S.dbf.bnd) throw new Error('主要測區不是由 D13 載入'); const r = Core.exportD13(S.dbf.bnd, S.ds); let bin = ''; for (let i = 0; i < r.bytes.length; i += 8192) bin += String.fromCharCode.apply(null, r.bytes.subarray(i, i + 8192)); return { name: S.names.d13, base64: btoa(bin), parcels: r.parcels, rewritten: r.rewritten, appended: r.appended }; },
+  getStyle: () => cloneStyle(S.style), setStyle: (patch = {}) => { for (const k of Object.keys(patch)) if (S.style[k]) Object.assign(S.style[k], patch[k]); saveStyle(); draw(); return cloneStyle(S.style); },
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
   exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
 };

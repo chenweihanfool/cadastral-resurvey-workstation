@@ -12,7 +12,7 @@
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.45 "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
 #app{display:grid;grid-template-rows:auto 1fr auto;height:100%}
-header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+header{position:relative;z-index:10;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
 header h1{font-size:15px;margin:0 8px 0 0;white-space:nowrap}
 .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit}
 .btn:hover{border-color:var(--accent)} .btn:disabled{opacity:.45;cursor:default}
@@ -21,22 +21,22 @@ header h1{font-size:15px;margin:0 8px 0 0;white-space:nowrap}
 .seg button{border:0;background:var(--panel);color:var(--ink);padding:5px 10px;cursor:pointer;font:inherit;border-right:1px solid var(--line)}
 .seg button:last-child{border-right:0}.seg button.on{background:var(--accent);color:var(--accent-ink)}
 .sep{width:1px;height:22px;background:var(--line);margin:0 2px}
-main{display:grid;grid-template-columns:1fr 440px;min-height:0}
+main{display:grid;grid-template-columns:1fr 360px;min-height:0}main.nosb{grid-template-columns:1fr}main.nosb aside{display:none}
 #stage{position:relative;min-width:0;min-height:0;background:var(--canvas)}
 #cv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
 #tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;display:none;white-space:pre;z-index:3;box-shadow:0 2px 8px #0003}
 #drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);pointer-events:none}
 #drop b{color:var(--ink);font-size:18px;display:block;margin-bottom:6px}
 aside{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:auto}
-#tabs{display:flex;position:sticky;top:0;z-index:2;background:var(--panel);border-bottom:1px solid var(--line)}
-#tabs button{flex:1;border:0;border-bottom:3px solid transparent;background:none;color:var(--muted);padding:9px 4px;font:inherit;font-weight:600;cursor:pointer}
-#tabs button.on{color:var(--accent);border-bottom-color:var(--accent)} #tabs button:hover{color:var(--ink)}
-.pane{display:none}.pane.on{display:block}
+.acc{border-bottom:1px solid var(--line)}.acc>summary{cursor:pointer;padding:9px 12px;font-weight:600;font-size:13px;color:var(--muted);letter-spacing:.04em;list-style:none;user-select:none}
+.acc>summary::-webkit-details-marker{display:none}.acc>summary::before{content:"▸";display:inline-block;width:1em;transition:transform .12s}.acc[open]>summary::before{transform:rotate(90deg)}
+.acc>summary:hover{color:var(--ink)}.accbody{padding:0 12px 10px}
 section{padding:10px 12px;border-bottom:1px solid var(--line)}
 section h2{font-size:13px;margin:0 0 6px;color:var(--muted);font-weight:600;letter-spacing:.04em}
 .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 input[type=number],input[type=text]{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;padding:4px 6px;font:inherit;width:90px}
 input[type=text]{width:130px}
+select{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;padding:4px 6px;font:inherit}
 label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
 table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
 th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -81,8 +81,23 @@ dialog.verdlg[open]{display:flex;flex-direction:column}
 @media (max-width:700px){.tl > li{grid-template-columns:64px 18px minmax(0,1fr)}.tl .ver b{font-size:12px}}
 #printArea{display:none}
 @media print{body.printing>#app,body.printing dialog{display:none!important}body.printing{background:#fff}body.printing #printArea{display:block}body.printing #printArea canvas{display:block}}
+/* 功能列表 */
+#menubar{display:flex;gap:2px}.menu{position:relative}
+.mbtn{border:0;background:none;color:var(--ink);padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit}.mbtn:hover,.menu.open .mbtn{background:var(--bg)}
+.mlist{display:none;position:absolute;top:100%;left:0;min-width:230px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px #0003;padding:4px;z-index:30}
+.menu.open .mlist{display:block}
+.mlist button{display:flex;justify-content:space-between;gap:16px;width:100%;border:0;background:none;color:var(--ink);padding:6px 10px;text-align:left;font:inherit;cursor:pointer;border-radius:4px;white-space:nowrap}
+.mlist button:hover:not(:disabled){background:var(--bg);color:var(--accent)}.mlist button:disabled{opacity:.4;cursor:default}
+.mlist small{color:var(--muted);font-size:11px}.mlist hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+/* 浮動面板（非強制回應，開著也能操作圖面） */
+dialog.fp{position:fixed;inset:auto 12px auto auto;top:52px;margin:0;width:min(470px,96vw);max-height:calc(100vh - 110px);padding:0;box-shadow:0 8px 28px #0004;overflow:hidden}
+dialog.fp[open]{display:flex;flex-direction:column;z-index:15}
+.fphead{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel)}.fpbody{overflow:auto}
+.srow{display:grid;grid-template-columns:20px 118px 1fr;gap:6px 10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}.srow .sctl{justify-content:flex-end;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px}
+.srow input[type=color]{width:30px;height:22px;padding:0;border:1px solid var(--line);border-radius:4px;background:none;cursor:pointer}.srow input[type=number]{width:56px}
+.srow .sx{border:0;background:none;color:var(--muted);cursor:pointer;padding:0 2px}.srow .sx:hover{color:var(--bad)}
 kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;font-size:12px}
-@media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:minmax(280px,1fr) auto}#stage{min-height:280px}aside{max-height:45vh;border-left:0;border-top:1px solid var(--line)}}
+@media (max-width:900px){main,main.nosb{grid-template-columns:1fr;grid-template-rows:minmax(280px,1fr) auto}#stage{min-height:280px}aside{max-height:45vh;border-left:0;border-top:1px solid var(--line)}}
 </style>
 </head>
 <body>
@@ -93,32 +108,55 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <input type="file" id="fileIn" multiple hidden>
   <input type="file" id="dirIn" webkitdirectory hidden>
   <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden>
-  <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button><button data-tool="img" title="平移疊合的影像（JPG／JGW）對位 (I)">移影像</button></div>
+  <nav id="menubar">
+    <div class="menu"><button class="mbtn">檔案</button><div class="mlist">
+      <button data-act="open">開啟檔案…</button><button data-act="folder">開啟資料夾…</button><hr>
+      <button data-act="data">資料來源與匯入…<small>鄰段、影像、控制點</small></button><button data-act="imp">匯入現況點…</button><hr>
+      <button data-act="out">輸出成果…<small>D14／D13／CSV</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
+    <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
+      <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
+      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><hr>
+      <button data-act="move">移動／旋轉／對位…</button></div></div>
+    <div class="menu"><button class="mbtn">檢視</button><div class="mlist">
+      <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
+      <button data-act="sidebar">顯示／隱藏右側欄</button></div></div>
+    <div class="menu"><button class="mbtn">處理</button><div class="mlist">
+      <button data-act="seam">鄰段接合…</button><button data-act="ref">現況點參考線…</button></div></div>
+    <div class="menu"><button class="mbtn">說明</button><div class="mlist">
+      <button data-act="help">操作說明</button><button data-act="ver">版本歷程與更新</button></div></div>
+  </nav>
+  <span class="sep"></span>
+  <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="addpt" title="在界址線上加界址點 (A)">加點</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button><button data-tool="img" title="平移疊合的影像（JPG／JGW）對位 (I)">移影像</button></div>
   <div class="seg" id="filters" title="可複選：決定能選取哪些要素 (1/2/3)">
     <button data-f="pt" class="on">點</button><button data-f="edge" class="on">線</button><button data-f="par" class="on">面</button></div>
   <button class="btn" id="btnUndo" disabled>復原</button><button class="btn" id="btnRedo" disabled>重做</button>
-  <button class="btn" id="btnReset" disabled>還原全部</button>
-  <span class="sep"></span>
-  <label class="chk"><input type="checkbox" id="chkRef" checked>舊圖</label>
-  <label class="chk"><input type="checkbox" id="chkLabel" checked>標註</label>
-  <label class="chk" title="在圖上直接標示面積較差"><input type="checkbox" id="chkDelta" checked>圖上較差</label>
-  <select id="deltaMode" title="較差基準"><option value="adj">對調整前</option><option value="reg">對登記面積</option></select>
   <button class="btn" id="btnFit">全圖</button>
-  <span class="sep"></span>
-  <select id="bmSel" title="底圖（需連網，適用 TWD97）"><option value="none">底圖：無</option><option value="osm">OpenStreetMap</option><option value="emap">NLSC 電子地圖</option><option value="photo">NLSC 航照</option></select>
-  <input type="range" id="bmOp" min="0.2" max="1" step="0.05" value="0.9" title="底圖不透明度" style="width:64px">
-  <select id="bmCm" title="TWD97 中央經線"><option value="121">121°E 本島</option><option value="119">119°E 澎金馬</option></select>
   <span style="flex:1"></span>
-  <button class="btn" id="btnHelp">說明</button>
-  <button class="btn" id="btnVer" title="版本歷程與更新">版本</button>
+  <button class="btn" id="btnSide" title="顯示／隱藏右側欄">側欄</button>
 </header>
 <main>
   <div id="stage"><canvas id="cv"></canvas><div id="tip"></div><div id="hint" style="display:none;position:absolute;left:10px;top:10px;right:10px;z-index:3;background:var(--panel);border:1px solid var(--accent);border-radius:6px;padding:6px 10px;font-size:13px"></div>
     <div id="drop"><div><b>把案件資料夾或檔案拖進來</b>支援 D11 / D13 / D14（可加 D2B / D2C 舊圖）<br>或 COA / BNP / PAR</div></div></div>
   <aside>
-    <nav id="tabs"><button data-tab="in" class="on">① 輸入</button><button data-tab="proc">② 處理</button><button data-tab="out">③ 輸出</button></nav>
-    <div class="pane on" id="pane-in">
-    <section><h2>主要測區（要重測的地段）</h2>
+    <details class="acc" open><summary>選取資訊</summary>
+      <div class="accbody"><div id="selInfo" class="small muted">尚未選取</div>
+      <div class="row small" style="margin-top:6px"><button class="btn" data-act="move" title="輸入位移、旋轉、兩點對位">移動／旋轉…</button><button class="btn" data-act="pts">界址點編修…</button></div></div></details>
+    <details class="acc" open><summary>面積較差</summary>
+      <div class="accbody">
+      <div class="row small" style="margin-bottom:6px">
+        <label class="chk"><input type="radio" name="scope" value="changed" checked>有變動</label>
+        <label class="chk"><input type="radio" name="scope" value="selected">已選取</label>
+        <span class="muted">警示 &gt;</span><input type="number" id="tol" value="1" step="0.1" style="width:60px"><span class="muted">m²</span>
+        <select id="deltaMode" title="圖上面積較差的基準"><option value="adj">圖上：對調整前</option><option value="reg">圖上：對登記面積</option></select>
+        <input type="text" id="find" placeholder="跳至地號 (例 137-1)"></div>
+      <div id="tblwrap"><table><thead><tr><th>地號</th><th>登記</th><th>調整前</th><th>現面積</th><th>Δ調整</th><th>Δ登記</th></tr></thead><tbody id="tbody"></tbody></table></div>
+      <div id="sumInfo" class="small muted" style="margin-top:6px"></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" data-act="style">較差顯示設定…</button></div></div></details>
+  </aside>
+</main>
+<footer><span id="stCoord">—</span><span id="stScale">—</span><span id="stMsg"></span></footer>
+</div>
+<dialog class="fp" id="dlgData"><div class="fphead"><b>資料來源與匯入</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>主要測區（要重測的地段）</h2>
       <div class="row"><button class="btn primary" id="btnOpen">開啟檔案</button><button class="btn" id="btnFolder">開啟資料夾</button></div>
       <div class="small muted" style="margin-top:6px">D14＋D13（建議加 D11／D12，可附 D2C＋D2D 舊圖）或 COA＋BNP。也可直接把資料夾拖進畫面。</div>
       <div id="layerInfo" class="small muted" style="margin-top:6px">—</div></section>
@@ -129,7 +167,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <section><h2>影像（JPG／PNG＋JGW 定位檔）</h2>
       <div class="row small"><button class="btn" id="btnImgAdd">載入影像</button><button class="btn" id="btnImgFit">縮放至作用中影像</button><button class="btn" id="btnImgManage">影像圖層設定 →</button></div>
       <div id="imgSummary" class="small" style="margin:6px 0">尚未載入影像</div>
-      <div class="small muted">可一次選資料夾內所有 JPG（與同名 JGW）：全部先登記、預設不顯示，到「處理」分頁逐張決定顯示、透明度、上下層。只選一張時直接顯示。沒有 JGW 時放畫面中央，用「移影像」平移對位。</div></section>
+      <div class="small muted">可一次選資料夾內所有 JPG（與同名 JGW）：全部先登記、預設不顯示，到「檢視→影像圖層」逐張決定顯示、透明度、上下層。只選一張時直接顯示。沒有 JGW 時放畫面中央，用「移影像」平移對位。</div></section>
     <section><h2>控制點與補點（已知點）</h2>
       <div id="ctlInfo" class="small muted"></div>
       <div class="row small" style="margin-top:6px"><button class="btn" id="btnCtlFit">縮放</button><button class="btn" id="btnCtlClear">清除</button>
@@ -138,10 +176,8 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div class="row small"><button class="btn" id="btnImp">匯入現況點</button><span class="muted">座標檔、極座標觀測或 MAC 手簿檔</span></div>
       <div id="svInfo" class="small muted" style="margin:6px 0"></div>
 </section>
-    </div>
-    <div class="pane" id="pane-proc">
-    <section><h2>選取與移動</h2><div id="selInfo" class="small muted">尚未選取</div>
-      <div class="row" style="margin-top:8px">
+    </div></dialog>
+<dialog class="fp" id="dlgMove"><div class="fphead"><b>移動／旋轉／對位</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>選取與移動</h2><div class="row" style="margin-top:8px">
         <label>北 ΔN(m) <input type="number" id="dN" step="0.01" value="0"></label>
         <label>東 ΔE(m) <input type="number" id="dE" step="0.01" value="0"></label>
         <button class="btn" id="btnMove">移動</button></div>
@@ -154,7 +190,8 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div class="row small" style="margin-top:6px"><span id="pivotInfo" class="muted"></span><button class="btn" id="btnPivotReset">重設樞紐</button></div>
       <div class="row small" style="margin-top:6px"><button class="btn" id="btnAlign" title="依序點新圖點A→目標A′→新圖點B→目標B′，自動算旋轉與平移">兩點對位</button>
         <span class="muted">對象：已選取的要素；未選取則為整張新圖。「移圖」工具下 Shift+拖曳可旋轉。</span></div></section>
-    <section><h2>影像圖層</h2>
+    </div></dialog>
+<dialog class="fp" id="dlgImg"><div class="fphead"><b>影像圖層</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>影像圖層</h2>
       <div class="row small"><input type="text" id="imgFilter" placeholder="篩選檔名" style="width:110px"><button class="btn" id="btnImgAll" title="顯示（符合篩選的）全部影像">全部顯示</button><button class="btn" id="btnImgNone">全部隱藏</button></div>
       <div id="imgList" class="small" style="margin:6px 0"></div>
       <div class="small muted">清單由上而下＝上層到下層（▲▼ 調整）。「向量之下」畫在底圖與向量圖之間，「向量之上」蓋在向量圖上。隱藏的影像不佔記憶體。</div></section>
@@ -163,34 +200,29 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="imgPos" class="small" style="margin:6px 0">尚未載入影像</div>
       <div class="row small"><label>北 ΔN(m) <input type="number" id="imgDN" step="0.01" value="0"></label><label>東 ΔE(m) <input type="number" id="imgDE" step="0.01" value="0"></label><button class="btn" id="btnImgMove">移動</button><button class="btn" id="btnImgReset">還原定位</button></div>
       <div class="small muted" style="margin-top:4px">拖曳影像或用方向鍵微調（步距同上）；上方即時顯示左上像元中心坐標與相對原定位的位移。</div></section>
-    <section><h2>鄰段接合</h2>
-      <div class="small muted" style="margin-bottom:6px">先在「輸入」加入鄰段。已重測的鄰段勾選「以鄰段為準」，主區段界點會吸附過去。</div>
+    </div></dialog>
+<dialog class="fp" id="dlgSeam"><div class="fphead"><b>鄰段接合</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>鄰段接合</h2>
+      <div class="small muted" style="margin-bottom:6px">先在「檔案→資料來源與匯入」加入鄰段。已重測的鄰段勾選「以鄰段為準」，主區段界點會吸附過去。</div>
 
       <div class="row small"><span class="muted">重合容差</span><input type="number" id="seamTol" value="0.01" step="0.005" min="0" style="width:62px"><span class="muted">搜尋</span><input type="number" id="seamSearch" value="3" step="0.5" min="0" style="width:52px"><span class="muted">吸附</span><input type="number" id="seamSnap" value="1" step="0.1" min="0" style="width:52px"><span class="muted">m</span></div>
-      <div class="row small" style="margin-top:6px"><button class="btn" id="btnSeamChk">檢查接合</button><button class="btn" id="btnSeamJoin" title="把脫開／重疊的主區段界點吸附到鄰段界址點（可復原）">自動接合</button><button class="btn" id="btnGoOut" hidden title="到「輸出」分頁輸出 D14">前往輸出 →</button></div>
+      <div class="row small" style="margin-top:6px"><button class="btn" id="btnSeamChk">檢查接合</button><button class="btn" id="btnSeamJoin" title="把脫開／重疊的主區段界點吸附到鄰段界址點（可復原）">自動接合</button><button class="btn" id="btnGoOut" hidden title="開啟輸出面板">前往輸出 →</button></div>
       <div class="row small" style="margin-top:6px"><label class="chk"><input type="checkbox" id="chkSeam" checked>圖上標記</label><label class="chk"><input type="checkbox" id="seamShowOk">列出重合點</label></div>
       <div id="seamSum" class="small muted" style="margin:6px 0"></div>
       <div id="seamWrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>鄰段</th><th>點號</th><th>狀態</th><th>偏差 m</th></tr></thead><tbody id="seamTbl"></tbody></table></div>
       <div class="small muted" style="margin-top:4px">偏差：脫開為＋、重疊為−。以鄰段為準：主區點吸附到鄰段界址點。</div></section>
-    <section><h2>現況點參考線</h2>
+    </div></dialog>
+<dialog class="fp" id="dlgRef"><div class="fphead"><b>現況點參考線</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>現況點參考線</h2>
       <div class="row small"><button class="btn" id="btnSvFit">縮放至現況點</button><button class="btn" id="btnSvClear">清除</button></div>
       <table><thead><tr><th>參考線</th><th>點</th><th>長 m</th><th>面積 m²</th><th></th><th></th></tr></thead><tbody id="lineList"></tbody></table>
       <div class="small muted" style="margin-top:4px">「連線」工具 (L)：依序點現況點；Enter 完成；點回第一點閉合。</div></section>
-    <section><h2>面積較差</h2>
-      <div class="row small" style="margin-bottom:6px">
-        <label class="chk"><input type="radio" name="scope" value="changed" checked>有變動</label>
-        <label class="chk"><input type="radio" name="scope" value="selected">已選取</label>
-        <span class="muted">警示 &gt;</span><input type="number" id="tol" value="1" step="0.1" style="width:60px"><span class="muted">m²</span>
-        <input type="text" id="find" placeholder="跳至地號 (例 137-1)"></div>
-      <div id="tblwrap"><table><thead><tr><th>地號</th><th>登記</th><th>調整前</th><th>現面積</th><th>Δ調整</th><th>Δ登記</th></tr></thead><tbody id="tbody"></tbody></table></div>
-      <div id="sumInfo" class="small muted" style="margin-top:6px"></div></section>
-    </div>
-    <div class="pane" id="pane-out">
-    <section><h2>調整成果</h2>
+    </div></dialog>
+<dialog class="fp" id="dlgOut"><div class="fphead"><b>輸出成果</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>調整成果</h2>
       <div id="outSummary" class="small" style="margin-bottom:8px"></div>
-      <div class="row"><button class="btn primary" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div>
+      <div class="row"><button class="btn primary" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpD13" disabled title="新增／刪除界址點後，宗地界址串（D13）需同步輸出；尚未用 NECEXE 驗證匯入">輸出 D13</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div>
       <div id="outHint" class="small muted" style="margin-top:6px"></div></section>
-    <section><h2>鄰段接合報告</h2>
+    <section><h2>宗地關係偵錯報表（.ERR）</h2>
+      <div class="row"><button class="btn primary" id="btnErr" title="仿 NECEXE 的重測成果檢核報表，Big5 編碼、CRLF 換行">一鍵產出 .ERR</button></div>
+      <div class="small muted" style="margin-top:6px">界址點號空號、面積總和、段外圍與地中地外圍、無界址的地號、新地號重覆、點數統計，另附本工作站的補充檢核。調查情形、界址查註等本程式未讀取的欄位會註明略過。</div></section><section><h2>鄰段接合報告</h2>
       <div class="row"><button class="btn" id="btnSeamCsv">報告 CSV</button><button class="btn" id="btnSeamJson">報告 JSON</button></div>
       <div class="small muted" style="margin-top:6px">逐點檢查結果（重合／重疊／脫開）與自動接合的移動紀錄。</div></section>
     <section><h2>影像定位檔（JGW）</h2>
@@ -199,16 +231,44 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <section><h2>成果圖</h2>
       <div class="row"><button class="btn" id="btnPrint" title="列印 (Ctrl+P)">列印成果圖</button></div>
       <div class="small muted" style="margin-top:6px">A4／A3、比例尺、可另存 PDF 或輸出 PNG。</div></section>
-    </div>
-  </aside>
-</main>
-<footer><span id="stCoord">—</span><span id="stScale">—</span><span id="stMsg"></span></footer>
-</div>
+    </div></dialog>
+<dialog class="fp" id="dlgBase"><div class="fphead"><b>底圖</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><div class="row"><select id="bmSel" title="底圖（需連網，適用 TWD97）"><option value="none">底圖：無</option><option value="osm">OpenStreetMap</option><option value="emap">NLSC 電子地圖</option><option value="photo">NLSC 航照</option></select>
+  <label class="small">不透明度 <input type="range" id="bmOp" min="0.2" max="1" step="0.05" value="0.9" style="width:90px"></label>
+  <select id="bmCm" title="TWD97 中央經線"><option value="121">121°E 本島</option><option value="119">119°E 澎金馬</option></select></div>
+  <div class="small muted" style="margin-top:6px">底圖需連網，只適用 TWD97（TWD67 會偏移約 800 m）；澎湖金門馬祖請選 119°E。</div></section></div></dialog>
+<dialog class="fp" id="dlgPts"><div class="fphead"><b>界址點編修（新增／修改／刪除）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>選取的界址點</h2>
+  <div id="ptInfo" class="small muted">尚未選取界址點（用「選取」工具點一個點）</div>
+  <div class="row small" style="margin-top:6px"><label>北 N <input type="number" id="ptN" step="0.001" style="width:120px"></label><label>東 E <input type="number" id="ptE" step="0.001" style="width:110px"></label><button class="btn" id="btnPtSet">套用座標</button></div>
+  <div class="small muted" style="margin-top:4px">修改座標＝移動該點；共用此點的宗地一起變動、面積即時更新。</div></section>
+<section><h2>新增</h2>
+  <div class="row small"><button class="btn" id="btnPtTool" title="切到「加點」工具 (A)">加點工具</button><span class="muted">在界址線上點一下＝在該線加點（所有以此線為界的宗地都會一併插入，面積不變）；Shift＋點空白處＝孤立點</span></div>
+  <div class="row small" style="margin-top:8px"><label>北 N <input type="number" id="addN" step="0.001" style="width:120px"></label><label>東 E <input type="number" id="addE" step="0.001" style="width:110px"></label><button class="btn" id="btnPtAdd">依座標新增</button></div>
+  <div class="small muted" style="margin-top:4px">已選取一條界址線時，新點插入該線（放在你輸入的位置，面積可能改變）；否則建立不屬於任何宗地的孤立點。圓弧上的線段暫不支援加點。</div></section>
+<section><h2>刪除</h2>
+  <div class="row small"><button class="btn" id="btnPtDel">刪除所選界址點（Del）</button><button class="btn" id="btnOpenClean">一鍵清理多餘點…</button></div>
+  <div class="small muted" style="margin-top:4px">刪除會同時從所有含該點的宗地環移除；環不能少於 3 點，圓弧的弧端與中點不能刪。可復原。</div>
+  <div id="ptEditInfo" class="small" style="margin-top:6px"></div></section></div></dialog>
+<dialog class="fp" id="dlgClean"><div class="fphead"><b>一鍵清理多餘界址點</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
+  <label class="chk"><input type="checkbox" id="clUnused" checked><b>沒有宗地使用的界址點</b></label>
+  <div class="small muted" style="margin:2px 0 8px 22px">不屬於任何宗地的點（只在點檔、沒出現在任何界址串）。</div>
+  <label class="chk"><input type="checkbox" id="clCol" checked><b>直線上的多餘點</b></label>
+  <div class="small muted" style="margin:2px 0 6px 22px">一點與前後鄰點成三角形，該點到對邊的高低於門檻即視為多餘；含此點的每一宗地都成立才刪（轉角、T 字路口、圓弧不動）。門檻＝三角形<b>最長邊</b>×比例，長線容許較大偏差。</div>
+  <div class="row small" style="margin-left:22px"><label>比例 <input type="number" id="clRatio" value="1" step="0.1" min="0" style="width:64px"> ‰</label><label>絕對上限 <input type="number" id="clCap" value="0.05" step="0.01" min="0" style="width:64px"> m <span class="muted">（0＝不設）</span></label></div>
+  <div class="small muted" style="margin:4px 0 0 22px">例：長邊 50 m、1‰ → 高 ≤ 5 cm（再受絕對上限 5 cm 限制）。</div></section>
+<section><div id="clSum" class="small">—</div>
+  <label class="chk small" style="margin-top:6px"><input type="checkbox" id="clShow" checked>在圖上標示將被刪除的點</label>
+  <div class="row" style="margin-top:8px"><button class="btn primary" id="btnClean">清理</button><span class="small muted">可復原（Ctrl+Z）</span></div></section></div></dialog>
+<dialog class="fp" id="dlgStyle"><div class="fphead"><b>圖層與樣式</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><div id="styleRows"></div>
+  <div class="row small" style="margin-top:8px"><button class="btn" id="btnStyleReset">全部還原預設</button><span class="muted">設定會記在這台電腦的瀏覽器；列印成果圖同樣套用。</span></div></section></div></dialog>
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
-<p><b>版面</b>：右側分三個分頁——<b>① 輸入</b>（主要測區、鄰段、控制點、現況點）、<b>② 處理</b>（選取移動、變換、鄰段接合、參考線、面積較差）、<b>③ 輸出</b>（D14、異動點位 CSV、JSON、接合報告、列印）。上方工具列放繪圖工具與顯示選項。</p>
-<p><b>載入</b>：把案件資料夾拖進視窗，或在「輸入」分頁按「開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
+<p><b>版面</b>：上方是<b>功能列表</b>（檔案／編輯／檢視／處理／說明）與常用工具列；細項設定都在選單開出的<b>浮動面板</b>裡（開著也能操作圖面，✕ 關閉）。右側欄只留兩塊：選取資訊與面積較差表，可收折，也可在「檢視」隱藏。</p>
+<p><b>界址點編修</b>：「編輯→界址點編修」或工具列「加點」(<kbd>A</kbd>)。<b>新增</b>：在界址線上點一下，新點落在線上（垂足），所有以該線為界的宗地都一併插入、面積不變；Shift＋點空白處＝孤立點；也可輸入座標新增。<b>修改</b>：拖曳、方向鍵或輸入座標。<b>刪除</b>：選取點按 <kbd>Del</kbd>，會從所有含該點的宗地移除，環不能少於 3 點，圓弧的點不能刪。全部可復原。新增／刪除後請輸出 D14 與 D13（D13 輸出尚未用 NECEXE 驗證）。</p>
+<p><b>一鍵清理多餘點</b>：「編輯→一鍵清理多餘點」。① 沒有宗地使用的點；② 直線上的多餘點——一點與前後鄰點成三角形，到最長邊的高 ≤ 最長邊×比例（預設 1‰，並以絕對上限 5 cm 封頂）即多餘；含該點的每一宗地都成立才刪，轉角與 T 字路口不動。面板即時預覽數量與面積影響，圖上標出將被刪的點。</p>
+<p><b>圖層與樣式</b>：「檢視→圖層與樣式」可逐項開關界址線、界址點、地號、點號、面積較差、舊圖、現況點、控制點，並調整顏色與大小；面積較差可選「僅有變動」或「全部宗地」，超限與正常各自可設顏色。</p>
+<p><b>偵錯報表 .ERR</b>：「檔案→一鍵產出偵錯報表」仿 NECEXE 的重測成果檢核報表（Big5、CRLF）。</p>
+<p><b>載入</b>：把案件資料夾拖進視窗，或用「檔案→開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
 <p><b>鄰段接合</b>：先開主要測區，再按「加入鄰段」（或「加入鄰段資料夾」，可選含多個案件資料夾的上層資料夾；也可 Shift＋拖入）。每個鄰段以不同顏色顯示。「檢查接合」逐點檢查主區段界點與鄰段段界：<b>重合</b>（落在鄰段界址點／界線上）、<b>重疊</b>（跑進鄰段宗地內）、<b>脫開</b>（離鄰段段界有縫）。鄰段已重測時勾選「以鄰段為準」，按「自動接合」把主區點吸附到鄰段界址點（可復原）；報告可輸出 CSV／JSON。AI 可用 <code>CadastralAPI.joinSeam()</code>。</p>
-<p><b>影像疊圖</b>：「輸入」分頁「載入影像」選 JPG（或 PNG）與同名 JGW（PGW／WLD），可一次選整個資料夾的影像——全部先登記但預設不顯示，到「處理」分頁「影像圖層」逐張勾選顯示、調透明度、選「向量之下／之上」、用 ▲▼ 調上下層。用上方「移影像」工具 (I) 拖曳作用中影像平移對位，或用方向鍵、輸入 ΔN／ΔE；「處理」分頁即時顯示左上像元中心坐標與位移，「輸出」分頁可下載調整後的 JGW。影像畫在底圖之上、向量圖之下，可調不透明度。</p>
+<p><b>影像疊圖</b>：「檔案→資料來源與匯入」的「載入影像」選 JPG（或 PNG）與同名 JGW（PGW／WLD），可一次選整個資料夾的影像——全部先登記但預設不顯示，到「檢視→影像圖層」逐張勾選顯示、調透明度、選「向量之下／之上」、用 ▲▼ 調上下層。用上方「移影像」工具 (I) 拖曳作用中影像平移對位，或用方向鍵、輸入 ΔN／ΔE；影像圖層面板即時顯示左上像元中心坐標與位移，「輸出成果」面板可下載調整後的 JGW。影像畫在底圖之上、向量圖之下，可調不透明度。</p>
 <p><b>選取</b>：上方「點／線／面」可複選，決定點擊與框選能選到什麼。<kbd>Shift</kbd> 點擊加選／取消；在空白處拖曳框選。</p>
 <p><b>移動</b>：拖曳已選取的要素，或用方向鍵微調、或輸入 ΔN/ΔE。共用的界址點會讓相鄰地號一起變動，面積即時更新。選「線」會移動線的兩端點，選「面」會移動整宗地所有界址點。</p>
 <p><b>底圖與列印</b>：上方工具列「底圖」可選 OpenStreetMap、國土測繪中心電子地圖或正射影像（需連網；只適用 TWD97，TWD67 會偏移約 800 m；澎湖金門馬祖請改選 119°E）。「列印」(<kbd>Ctrl+P</kbd>) 可選 A4/A3、橫直式、指定比例尺（200～5000）與範圍，附標題欄、圖例、比例尺條與指北；列印時選「另存為 PDF」即可輸出 PDF。</p>

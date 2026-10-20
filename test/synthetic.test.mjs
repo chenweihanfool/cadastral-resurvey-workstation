@@ -184,4 +184,62 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
     if (i) assert.ok(Core.compareVersions(log[i - 1].version, e.version) > 0, '版本需由新到舊：' + e.version);
   });
 }
+// ── 界址點編修：新增／刪除維持宗地完整、一鍵清理、輸出 ──
+{
+  const Y = 2700000, X = 200000, P = [[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 0, 20], [6, 10, 20]];   // A=[1,2,3,4]、B=[2,5,6,3] 共用 2–3
+  const rows = [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [2, 5, 6, 3])];
+  const mk = () => Core.datasetFromD({ pts: Core.parseDbf(makeDbf(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x)))), bnd: Core.parseDbf(makeDbf(F_D13, rows)) });
+  const ds = mk(), A = ds.parcels[0], B = ds.parcels[1];
+  // 在共用邊 2–3 上加點：兩宗地都要插入，面積不變；點落在線上（垂足）
+  const r = Core.insertPoint(ds, 2, 3, Y + 5, X + 14);
+  assert.equal(r.id, 7); assert.deepEqual(A.ids, [1, 2, 7, 3, 4]); assert.deepEqual(B.ids, [2, 5, 6, 3, 7]); assert.ok(A.ids.includes(7) && B.ids.includes(7), '共用邊上加點：兩邊宗地都要有');
+  near(ds.points.get(7).x, X + 10, 1e-9); near(ds.points.get(7).y, Y + 5, 1e-9); near(A.area, 100, 1e-6); near(B.area, 100, 1e-6);
+  assert.ok(ds.edges.has('2-7') && ds.edges.has('3-7') && !ds.edges.has('2-3'));
+  Core.applyDelta(ds, r.delta, 'undo'); assert.ok(!ds.points.has(7) && A.ids.length === 4 && B.ids.length === 4 && ds.edges.has('2-3')); Core.applyDelta(ds, r.delta, 'redo'); assert.ok(A.ids.includes(7));
+  // 刪除：兩邊一起刪、還原原貌；環只剩 2 點則拒絕
+  const rm = Core.removePoints(ds, [7]); assert.deepEqual(rm.done, [7]); assert.ok(!A.ids.includes(7) && !B.ids.includes(7));
+  const tri = Core.datasetFromD({ pts: Core.parseDbf(makeDbf(F_D14, [pt(1, Y, X), pt(2, Y, X + 10), pt(3, Y + 10, X)])), bnd: Core.parseDbf(makeDbf(F_D13, [ring(1, 1, 0, [1, 2, 3])])) });
+  assert.ok(Core.removeBlocker(tri, 1), '三角形不能再少點'); assert.equal(Core.removePoints(tri, [1]).done.length, 0);
+  // 圓弧點不可刪、弧上不可加點
+  const arc = Core.datasetFromD({ pts: Core.parseDbf(makeDbf(F_D14, [pt(1, Y, X), pt(2, Y + 5, X + 5), pt(3, Y, X + 10), pt(4, Y + 10, X + 10), pt(5, Y + 10, X)])), bnd: Core.parseDbf(makeDbf(F_D13, [ring(1, 1, 0, [1, 2, 3, 4, 5], [false, true])])) });
+  assert.ok(Core.removeBlocker(arc, 2) && Core.removeBlocker(arc, 1) && Core.removeBlocker(arc, 3), '弧中點與弧端點都不可刪'); assert.throws(() => Core.insertPoint(arc, 1, 2, Y, X + 1));
+  // 一鍵清理：孤立點、直線上的點（相對門檻）、轉角點不動
+  const c = mk(); const a0 = c.parcels[0].area;
+  Core.addFreePoint(c, Y + 50, X + 50, 90);                                        // 孤立點
+  const on = Core.insertPoint(c, 1, 2, Y, X + 5, {}).id;                          // 線上（偏差 0）
+  const off = Core.insertPoint(c, 4, 1, Y + 5, X, { project: false }).id; Core.movePoints(c, [off], 0, 0.02);   // 偏 2 cm（10 m 線；1‰＝1 cm）
+  assert.deepEqual(Core.unusedPoints(c), [90]);
+  let pv = Core.cleanupPoints(c, {}); assert.deepEqual(pv.unused, [90]); assert.deepEqual(pv.collinear, [on], '偏 2 cm 的點在 1‰ 下不算多餘');
+  Core.applyDelta(c, pv.delta, 'undo'); assert.ok(c.points.has(90) && c.points.has(on), '預覽後可還原');
+  pv = Core.cleanupPoints(c, { ratio: 0.005 }); assert.deepEqual(pv.collinear.sort(), [on, off].sort()); near(c.parcels[0].area, a0, 0.2); assert.ok(c.parcels[0].ids.length === 4 || c.parcels[0].ids.length === 4);
+  assert.ok(!Core.collinearCandidates(c).some(q => [1, 2, 3, 4].includes(q.id)), '轉角點不可當多餘點');
+  const corner = mk(), cc = Core.insertPoint(corner, 2, 3, Y + 5, X + 10).id; Core.movePoints(corner, [cc], 0, 3);   // 凸出 3 m：不是直線
+  assert.ok(!Core.collinearCandidates(corner).some(q => q.id === cc));
+  // T 字路口：B 在 A 內是直線、但在 B2 宗地是轉角 → 不可刪
+  const T = Core.datasetFromD({ pts: Core.parseDbf(makeDbf(F_D14, [pt(1, Y, X), pt(2, Y, X + 10), pt(3, Y, X + 20), pt(4, Y + 10, X + 20), pt(5, Y + 10, X), pt(6, Y - 10, X + 10)].concat([pt(7, Y - 10, X), pt(8, Y - 10, X + 20)]))),
+    bnd: Core.parseDbf(makeDbf(F_D13, [ring(1, 1, 0, [1, 2, 3, 4, 5]), ring(1, 2, 0, [1, 7, 6, 2]), ring(1, 3, 0, [2, 6, 8, 3])])) });
+  assert.ok(!Core.collinearCandidates(T).some(q => q.id === 2), 'T 字路口的點不可刪');
+  // 輸出：新增點附加進 D14；D13 環改寫；重新載入後與編修結果一致
+  const e = mk(), n7 = Core.insertPoint(e, 2, 3, Y + 5, X + 10).id, n8 = Core.insertPoint(e, 1, 2, Y, X + 5).id;
+  const d14 = Core.parseDbf(makeDbf(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x)))), d13 = Core.parseDbf(makeDbf(F_D13, rows));
+  const o14 = Core.exportD14(d14, e), o13 = Core.exportD13(d13, e); assert.equal(o14.added, 2);
+  const back = Core.datasetFromD({ pts: Core.parseDbf(o14.bytes), bnd: Core.parseDbf(o13.bytes) });
+  assert.deepEqual(back.parcels.map(p => p.ids), e.parcels.map(p => p.ids)); assert.ok(back.points.has(n7) && back.points.has(n8)); near(back.points.get(n7).x, X + 10, 1e-6);
+  assert.equal(Core.parseDbf(o14.bytes).n, 8); assert.equal(o14.bytes[o14.bytes.length - 1], 0x1a);
+  // 環超過 8 點 → 檔尾附加記錄
+  const big = mk(); let last = 4; for (let i = 0; i < 9; i++) last = Core.insertPoint(big, last, 1, Y + 9 - i, X).id;
+  const bo = Core.exportD13(d13, big); assert.equal(bo.appended, 1); { const bb = Core.datasetFromD({ pts: Core.parseDbf(Core.exportD14(d14, big).bytes), bnd: Core.parseDbf(bo.bytes) }); assert.deepEqual(bb.parcels[0].ids, big.parcels[0].ids); }
+  // 還原全部：結構一起還原
+  Core.resetAll(big); assert.equal(big.parcels[0].ids.length, 4); assert.equal(big.points.size, 6); assert.equal(Core.structSummary(big).added, 0);
+}
+// ── 宗地關係偵錯報表（.ERR）──
+{
+  const Y = 2700000, X = 200000;
+  const ds = Core.datasetFromD({ pts: Core.parseDbf(makeDbf(F_D14, [[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 0, 20], [6, 10, 20], [900, 50, 50]].map(([n, y, x]) => pt(n, Y + y, X + x)))), bnd: Core.parseDbf(makeDbf(F_D13, [ring(336, 1, 0, [1, 2, 3, 4]), ring(336, 2, 0, [2, 5, 6, 3])])),
+    par: Core.parseDbf(makeDbf(F_D11, [{ SECTION_O: 336, PAR_O_M: 1, PAR_O_C: 0, PAR_N_M: 1, PAR_N_C: 0, SECTION_N: 336, AREA_OLD: 100, AREA_NEW: 0.01 }, { SECTION_O: 336, PAR_O_M: 2, PAR_O_C: 0, PAR_N_M: 2, PAR_N_C: 0, SECTION_N: 336, AREA_OLD: 100, AREA_NEW: 0.01 }, { SECTION_O: 336, PAR_O_M: 9, PAR_O_C: 0, PAR_N_M: 9, PAR_N_C: 1, SECTION_N: 336, AREA_OLD: 5, AREA_NEW: 0.0001 }])) });
+  const outl = Core.outlineLoops(ds, [0, 1]); assert.equal(outl.length, 1); near(outl[0].area, 200, 1e-6); assert.equal(outl[0].ids.length, 6, '共邊不算外圍：外圍 6 點');
+  const txt = Core.errReport(ds, { name: 'KC9', date: new Date(2026, 2, 27) });
+  assert.ok(txt.includes('重測成果檢核 KC9 (115. 3.27)') && txt.includes('段外圍面積 = 200.00 ㎡') && txt.includes('宗地地號 9-1-336 無地號界址') && txt.includes('界址點號 7 - 899 為空號') && txt.includes('未被任何宗地使用的界址點 1 個：900') && txt.includes('(END)'));
+  assert.ok(txt.includes('\n      1       2       3 ') || txt.split('\n').some(l => /^ +\d+ +\d+ +\d+ /.test(l)), 'id 每格寬 8、每行 10 個');
+}
 console.log('SYNTHETIC OK');
