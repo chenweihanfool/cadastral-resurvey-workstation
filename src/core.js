@@ -462,15 +462,39 @@ const Core = (() => {
   // 一鍵清理：① 補上鄰段有、測區缺的接縫點（opt.adds）② 沒有宗地使用的點 ③ 直線上的多餘點；opt.protect 內的點一律不刪。
   // 逐點以「目前」的鄰點重新判斷（連續多點共線時不會累積漂移）。
   // 回傳 {added, unused, collinear, skipped, skippedAdds, kept, delta}；呼叫端自行決定是否保留（預覽時用 applyDelta(…,'undo') 還原）。
+  // 點格網（查詢範圍內的點）
+  function pointGrid(ds, cell = 10) {
+    const g = new Map(), cc = v => Math.floor(v / cell);
+    for (const p of ds.points.values()) { const k = cc(p.x) + ',' + cc(p.y); let l = g.get(k); if (!l) g.set(k, l = []); l.push(p.id); }
+    return { query(x0, y0, x1, y1) { const out = []; for (let i = cc(x0); i <= cc(x1); i++) for (let j = cc(y0); j <= cc(y1); j++) { const l = g.get(i + ',' + j); if (l) out.push(...l); } return out; } };
+  }
+  // 移除點 B 會讓各環改走弦 AC：若三角形 ABC（含邊界）裡有「不在這些環內」的別宗地界址點，弦會跨過它，造成交錯。回傳擋住的點號或 null。
+  function sweepBlocker(ds, grid, id) {
+    const pps = ds.pointParcels.get(id) || [], inB = new Set(pps), B = ds.points.get(id);
+    for (const pi of pps) {
+      const p = ds.parcels[pi], n = p.ids.length, i = p.ids.indexOf(id), A = ds.points.get(p.ids[(i + n - 1) % n]), C = ds.points.get(p.ids[(i + 1) % n]);
+      if (distToSeg(B.x, B.y, A.x, A.y, C.x, C.y) <= 1e-4) continue;   // 幾乎在線上：掃過的面積可忽略
+      const cr = (u, v, w) => (v.x - u.x) * (w.y - u.y) - (v.y - u.y) * (w.x - u.x), t = Math.sign(cr(A, B, C)), tol = 1e-6 * Math.max(Math.hypot(B.x - A.x, B.y - A.y), Math.hypot(C.x - B.x, C.y - B.y), Math.hypot(C.x - A.x, C.y - A.y));
+      for (const q of grid.query(Math.min(A.x, B.x, C.x), Math.min(A.y, B.y, C.y), Math.max(A.x, B.x, C.x), Math.max(A.y, B.y, C.y))) {
+        if (q === A.id || q === B.id || q === C.id || !ds.points.has(q)) continue;
+        const qq = ds.pointParcels.get(q); if (!qq || qq.every(x => inB.has(x))) continue;   // 沒有宗地用、或只屬於同樣要簡化的環：不擋
+        const X = ds.points.get(q);
+        if (t * cr(A, B, X) >= -tol && t * cr(B, C, X) >= -tol && t * cr(C, A, X) >= -tol) return q;
+      }
+    }
+    return null;
+  }
   function cleanupPoints(ds, opt = {}) {
     const protect = new Set(opt.protect || []), o = { unused: true, collinear: true, ...COLLINEAR_DEFAULT, ...opt, protect }, d = newDelta();
-    const res = { added: [], unused: [], collinear: [], skipped: [], skippedAdds: [], kept: 0, protect };
+    const res = { added: [], unused: [], collinear: [], skipped: [], skippedAdds: [], kept: 0, blocked: [], protect };
     if (opt.adds && opt.adds.length) addSeamPoints(ds, opt.adds, opt.tol != null ? opt.tol : SEAM_DEFAULT.tol, d, res);
     if (o.unused) { const r = removeInto(ds, unusedPoints(ds).filter(id => !protect.has(id)), d); res.unused = r.done; res.skipped.push(...r.skipped); }
     if (o.collinear) {
+      const grid = pointGrid(ds);
       for (const c of collinearCandidates(ds, o)) {
         if (c.protected) { res.kept++; continue; }
         if (!collinearCheck(ds, c.id, o)) continue;
+        const bl = sweepBlocker(ds, grid, c.id); if (bl != null) { res.blocked.push({ id: c.id, by: bl }); continue; }
         const r = removeInto(ds, [c.id], d); res.collinear.push(...r.done); res.skipped.push(...r.skipped);
       }
     }
@@ -874,6 +898,34 @@ const Core = (() => {
     return null;
   }
 
+  // ── 界址線的交錯／重疊偵測（NECEXE 報表的「交錯」「重疊」）─────────────────────
+  // 交錯＝兩條不共端點的線相交或共線重疊；重疊＝共一個端點且共線重疊。同一條線（兩端點相同）不算。圓弧的弦不檢查。
+  function edgeRelation(ds, e1, e2, eps = 1e-3) {
+    const a = ds.points.get(e1.a), b = ds.points.get(e1.b), c = ds.points.get(e2.a), d = ds.points.get(e2.b);
+    const shared = (e1.a === e2.a) + (e1.a === e2.b) + (e1.b === e2.a) + (e1.b === e2.b); if (shared >= 2) return null;
+    const bx = b.x - a.x, by = b.y - a.y, dx = d.x - c.x, dy = d.y - c.y, L1 = Math.hypot(bx, by), L2 = Math.hypot(dx, dy); if (!L1 || !L2) return null;
+    const cr = (ux, uy, vx, vy) => ux * vy - uy * vx;
+    const o1 = cr(bx, by, c.x - a.x, c.y - a.y) / L1, o2 = cr(bx, by, d.x - a.x, d.y - a.y) / L1, o3 = cr(dx, dy, a.x - c.x, a.y - c.y) / L2, o4 = cr(dx, dy, b.x - c.x, b.y - c.y) / L2;
+    if (Math.abs(o1) < eps && Math.abs(o2) < eps) {   // 共線：看投影重疊長度
+      const tc = ((c.x - a.x) * bx + (c.y - a.y) * by) / L1, td = ((d.x - a.x) * bx + (d.y - a.y) * by) / L1, ov = Math.min(L1, Math.max(tc, td)) - Math.max(0, Math.min(tc, td));
+      return ov > eps ? (shared ? 'overlap' : 'cross') : null;
+    }
+    if (!shared && o1 * o2 < 0 && o3 * o4 < 0 && Math.min(Math.abs(o1), Math.abs(o2), Math.abs(o3), Math.abs(o4)) > eps) return 'cross';
+    return null;
+  }
+  function ringConflicts(ds) {
+    const edges = [...ds.edges.values()].filter(e => !e.arcPart), cell = 10, grid = new Map(), cc = v => Math.floor(v / cell), out = { cross: [], overlap: [] }, seen = new Set();
+    edges.forEach((e, n) => {
+      const a = ds.points.get(e.a), b = ds.points.get(e.b);
+      for (let i = cc(Math.min(a.x, b.x)); i <= cc(Math.max(a.x, b.x)); i++) for (let j = cc(Math.min(a.y, b.y)); j <= cc(Math.max(a.y, b.y)); j++) { const k = i + ',' + j; let l = grid.get(k); if (!l) grid.set(k, l = []); l.push(n); }
+    });
+    for (const l of grid.values()) for (let i = 0; i < l.length; i++) for (let j = i + 1; j < l.length; j++) {
+      const k = l[i] < l[j] ? l[i] * 1e7 + l[j] : l[j] * 1e7 + l[i]; if (seen.has(k)) continue; seen.add(k);
+      const r = edgeRelation(ds, edges[l[i]], edges[l[j]]); if (r) out[r === 'cross' ? 'cross' : 'overlap'].push([edges[l[i]], edges[l[j]]]);
+    }
+    return out;
+  }
+
   // ── 宗地關係偵錯報表（仿 NECEXE 的 .ERR）─────────────────────────────────────
   // 各宗地輪廓的外圍環：取每個環（轉成逆時針）的有向邊，抵消掉有反向邊的（內部共邊），剩下的接成環。
   // 回傳 [{ids, area}]，area 有號（外圍為正、內部空洞為負），由大到小。弧線以弦計。
@@ -913,6 +965,10 @@ const Core = (() => {
     L.push(bar);
     const sumNew = ds.parcels.reduce((s, p) => s + p.area, 0), refs = ds.parcels.filter(p => p.areaRef != null);
     L.push(`各筆宗地實際新面積總和 = ${sumNew.toFixed(2)} ㎡`);
+    // 宗地面積為 0、界址線交錯／重疊（NECEXE 同樣列在這裡）
+    for (const p of ds.parcels) if (p.area < 0.005 && !(p.areaRef === 0)) L.push(` ${parLabelFull(p)} 地號新面積為 0.00 且未設定合併關係`);
+    const cf = ringConflicts(ds), pl = e => { const p = ds.parcels[e.parcels[0]]; return `${parLabelFull(p)} 地號 /${e.a},${e.b}`; };
+    for (const [kind, word] of [['cross', '交錯'], ['overlap', '重疊']]) for (const [e1, e2] of cf[kind]) L.push(`${pl(e1)} 與 ${pl(e2)} ${word}`);
     L.push(refs.length ? `各筆宗地登記新面積總和 = ${refs.reduce((s, p) => s + p.areaRef, 0).toFixed(2)} ㎡` : '各筆宗地登記新面積總和 = （無 D11 新面積）');
     L.push(bar);
     const outer = outlineLoops(ds, ds.parcels.filter(p => !(p.containers && p.containers.length)).map(p => p.idx)).filter(l => l.area > 0);
@@ -974,8 +1030,8 @@ const Core = (() => {
     const orphans = structSummary(ds).removed;
     return { bytes: out, changed: n, added: add.length, orphans };
   }
-  // D13（界址串）：環有增減點的宗地，依序改寫其記錄的 COORD_1..8／MIDARC_n；不夠放就在檔尾附加（沿用該宗地最後一筆當樣板），多出的整筆空記錄標為刪除。
-  // 尚未用 NECEXE 驗證匯入。
+  // D13（界址串）：環有增減點的宗地，依序改寫其記錄的 COORD_1..8／MIDARC_n；不夠放就在檔尾附加（沿用該宗地最後一筆當樣板），多出的整列清成 0（不用刪除旗標：真實案件驗證 NECEXE 不看旗標，舊點號會被讀回環造成「交錯」與面積 0）。
+  // 縮短後的結果尚未用 NECEXE 重新驗證。
   function exportD13(bnd, ds) {
     let out = new Uint8Array(bnd.u8), patched = 0, appended = 0; const recs = [], setRec = (u8, base, k, id, mid) => {
       const fc = bnd.fields.find(f => f.name === 'COORD_' + k), fm = bnd.fields.find(f => f.name === 'MIDARC_' + k);
@@ -994,7 +1050,7 @@ const Core = (() => {
     for (const j of jobs) {
       const n = j.p.ids.length;
       j.rowsUse.forEach((ri, r) => { const base = bnd.hl + ri * bnd.rl; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(out, base, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } patched++; });
-      for (const ri of j.blank) { out[bnd.hl + ri * bnd.rl] = 0x2a; patched++; }
+      for (const ri of j.blank) { const base = bnd.hl + ri * bnd.rl; for (let k = 1; k <= 8; k++) setRec(out, base, k, 0, false); patched++; }   // 多出的整列清成 0（保留記錄與地號鍵，索引不變）；不用刪除旗標——NECEXE 讀取時不看旗標，舊點號會被讀回環裡
       for (let e = 0; e < j.extra; e++) { const rec = new Uint8Array(j.tmpl), r = j.rowsUse.length + e; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(rec, 0, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } rec[0] = 0x20; recs.push(rec); appended++; }
     }
     out = appendRecords(out, bnd, recs);
@@ -1019,7 +1075,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, outlineLoops, errReport, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, outlineLoops, errReport, ringConflicts, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();

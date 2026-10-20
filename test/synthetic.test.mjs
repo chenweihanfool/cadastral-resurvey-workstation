@@ -259,4 +259,28 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.ok(Core.seamAnalyze(main, [{ name: 'NB', ds: nb }], {}).totals.neighbor_missing_in_main === 0, '補點後鄰段點在測區都有對應');
   Core.applyDelta(main, r.delta, 'undo'); assert.deepEqual(main.parcels[0].ids, [1, 2, 7, 8, 3, 4], '整批可復原');
 }
+// ── 真實案件 KC0336 的教訓：縮短的 D13 不可留舊點號、清理不可跨過鄰地的點、交錯／重疊偵測 ──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings) => Core.datasetFromD({ pts: Core.parseDbf(makeDbf(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x)))), bnd: Core.parseDbf(makeDbf(F_D13, rings)) });
+  // (a) 環 10 點（2 筆記錄）去點後只剩 4 點：第 2 筆要清成 0；NECEXE 不看刪除旗標，所以忽略旗標重讀也必須與記憶體一致
+  const P = [[1, 0, 0], [2, 0, 2], [3, 0, 4], [4, 0, 6], [5, 0, 8], [6, 0, 10], [7, 10, 10], [8, 10, 0], [9, 8, 0], [10, 5, 0]];
+  const d14 = Core.parseDbf(makeDbf(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x)))), d13 = Core.parseDbf(makeDbf(F_D13, [ring(1, 1, 0, [1, 2, 3, 4, 5, 6, 7, 8]), ring(1, 1, 0, [9, 10])]));
+  const ds = Core.datasetFromD({ pts: d14, bnd: d13 }); assert.equal(ds.parcels[0].ids.length, 10);
+  const r = Core.cleanupPoints(ds, {}); assert.deepEqual(ds.parcels[0].ids, [1, 6, 7, 8], '共線點都刪、剩 4 個轉角');
+  const o = Core.exportD13(d13, ds), bp = Core.parseDbf(o.bytes), flagless = Core.datasetFromD({ pts: d14, bnd: { ...bp, rows: bp.rows.map(x => ({ ...x, _deleted: false })) } });
+  assert.deepEqual(flagless.parcels[0].ids, [1, 6, 7, 8], '忽略刪除旗標重讀也不可殘留舊點號');
+  assert.ok(bp.rows[1].COORD_1 === 0 && bp.rows[1].COORD_2 === 0 && !bp.rows[1]._deleted, '多出的列清成 0，不設刪除旗標');
+  // (b) 三角形內有別宗地的點：不可刪（弦會跨過它）
+  const mk2 = withX => mk([[1, 0, 0], [2, 0.3, 10], [3, 0, 20], [4, 10, 20], [5, 10, 0], [6, -10, 0], [7, -10, 20], [8, 0.1, 10]], [ring(1, 1, 0, [1, 2, 3, 4, 5]), ring(1, 2, 0, withX ? [3, 8, 1] : [6, 7, 3, 1])]);   // 別宗地只有 3 點（8 不能刪）：點 8 在三角形 1-2-3 內
+  const blocked = mk2(true), rb = Core.cleanupPoints(blocked, { ratio: 0.02, maxAbs: 0 }); assert.ok(rb.blocked.some(q => q.id === 2 && q.by === 8) && blocked.parcels[0].ids.includes(2), '別宗地的點在三角形內 → 保留');
+  const free = mk2(false), rf = Core.cleanupPoints(free, { ratio: 0.02, maxAbs: 0 }); assert.ok(rf.collinear.includes(2), '沒有別的點擋著 → 刪');
+  // (c) 交錯／重疊偵測
+  const X1 = mk([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 5, 5], [6, 5, 15], [7, 15, 15], [8, 15, 5]], [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [5, 6, 7, 8])]);
+  assert.ok(Core.ringConflicts(X1).cross.length >= 2, '兩個方形交疊 → 邊相交');
+  const OV = mk([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 0, 5], [6, -10, 5], [7, -10, 0]], [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [1, 5, 6, 7])]);   // 1–5 與 1–2 共端點 1 且共線重疊
+  assert.equal(Core.ringConflicts(OV).overlap.length, 1);
+  const okSq = mk([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 0, 20], [6, 10, 20]], [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [2, 5, 6, 3])]);
+  assert.deepEqual([Core.ringConflicts(okSq).cross.length, Core.ringConflicts(okSq).overlap.length], [0, 0], '正常相鄰宗地沒有衝突');
+  assert.ok(Core.errReport(X1, { name: 'X' }).includes('交錯'));
+}
 console.log('SYNTHETIC OK');

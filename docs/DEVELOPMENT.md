@@ -78,6 +78,8 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 
 **清理與鄰段接縫（v0.9.1）**：`Core.seamGuard(main, neighbors, opt)` 用 `seamCheck` 算出 `protect`（測區點與鄰段界址點相距 ≤ max(重合容差, 吸附上限)，即使在直線上也不刪）與 `adds`（鄰段有點、測區界線上沒有＝`missing_in_main`）；`cleanupPoints({protect, adds, tol})` 先補點（`addSeamPoints`，只補在單一宗地的段界直線段、投影到線上）再刪，補的點自動加入保護，整批同一個 delta。**面積較差塗色**：`style.dfill`（正／負色、不透明度、忽略門檻、僅超限）；`style.delta.all`＝「全圖」開關，同時控制較差標註與塗色的範圍。
 
+**D13 輸出的教訓（v0.9.2，真實案件 KC0336 驗證）**：NECEXE 讀 D13 **不看 dBASE 刪除旗標**，舊的整列若只標刪除、欄位內仍有點號，會被讀回環裡（NECEXE 報表出現「交錯」「面積 0」）。縮短的環多出的列要把 COORD 清成 0（保留記錄與地號鍵）。DBF 檔尾 0x1A 有無都能被 NECEXE 接受（原檔沒有）。清理也要做拓撲保護：刪點＝環改走弦，三角形內有別宗地的點就不能刪（`sweepBlocker`）。`Core.ringConflicts` 偵測交錯（不共端點、相交或共線重疊）與重疊（共端點、共線重疊），用在 .ERR 與清理預覽。真實樣本只放在本機（不進 repo）。
+
 **.ERR 偵錯報表（v0.9.0）**：`Core.errReport` 仿 NECEXE `KC6336.ERR`（Big5、CRLF；app 端用 `TextDecoder('big5')` 反推對照表做 Big5 編碼，`big5Bytes`）。已實作：界址點號空號（>50）、面積總和、段外圍（`outlineLoops`：各環轉逆時針取有向邊、抵消共邊後接環）、地中地外圍、D11 有而 D13 無環的地號、新地號重覆、確定／參考點數、經界線數；調查情形、界址查註、坐標來源因不知欄位而略過並註明。「已用經界線」以 `ds.edges.size` 計，與 NECEXE 的定義是否一致未驗證；段外圍以弦計弧線。
 
 ### AI／MCP 現況（誠實版）
