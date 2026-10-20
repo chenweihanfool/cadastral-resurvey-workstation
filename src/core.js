@@ -325,6 +325,10 @@ const Core = (() => {
   // 原則：點的增減一律同步到「所有」含該點的宗地環（共用界址點不會只改一邊）；圓弧相關的點不動；
   // 刪除後環不得少於 3 點。每次編修回傳 delta，供復原／重做（applyDelta）。
   const newDelta = () => ({ parcels: new Map(), added: [], removed: [] });
+  function mergeDelta(d, d2) {   // 把後一步 d2 併入 d：各宗地保留最早的「前」狀態，「後」狀態由 closeDelta 重算
+    for (const [i, t] of d2.parcels) if (!d.parcels.has(i)) d.parcels.set(i, { ids0: t.ids0, mid0: t.mid0 });
+    d.added.push(...d2.added); d.removed.push(...d2.removed); return d;
+  }
   function touchParcel(d, p) { if (!d.parcels.has(p.idx)) d.parcels.set(p.idx, { ids0: p.ids.slice(), mid0: p.mid ? p.mid.slice() : null }); }
   function closeDelta(ds, d) {
     for (const [i, t] of d.parcels) { const p = ds.parcels[i]; t.ids1 = p.ids.slice(); t.mid1 = p.mid ? p.mid.slice() : null; }
@@ -424,16 +428,48 @@ const Core = (() => {
   }
   function collinearCandidates(ds, opt = {}) {
     const o = { ...COLLINEAR_DEFAULT, ...opt }, out = [];
-    for (const id of ds.pointParcels.keys()) { const r = collinearCheck(ds, id, o); if (r) out.push({ id, ...r }); }
+    for (const id of ds.pointParcels.keys()) { const r = collinearCheck(ds, id, o); if (r) out.push({ id, ...r, protected: !!(o.protect && o.protect.has(id)) }); }
     return out.sort((a, b) => a.h - b.h);
   }
-  // 一鍵清理：① 沒有宗地使用的點 ② 直線上的多餘點。逐點以「目前」的鄰點重新判斷（連續多點共線時不會累積漂移）。
-  // 回傳 {unused, collinear, skipped, delta}；呼叫端自行決定是否保留（預覽時用 applyDelta(…,'undo') 還原）。
+  // 鄰段接縫守則：鄰段在接縫上有界址點的位置，測區也必須有點。
+  // protect＝測區中與鄰段界址點相距 ≤ 半徑（max(重合容差, 吸附上限)）的點（即使在直線上也不可刪）；
+  // adds＝鄰段有點、測區在該處的界線上沒有點（missing_in_main）→ 需要補點。
+  function seamGuard(main, neighbors, opt = {}) {
+    const params = { ...SEAM_DEFAULT, ...opt }, radius = Math.max(params.tol, params.snap || 0), protect = new Set(), adds = [], seen = new Set();
+    for (const n of neighbors) {
+      const chk = seamCheck(main, n.ds, params);
+      for (const r of chk.points) if (r.vertex_dist <= radius) protect.add(r.id);
+      for (const q of chk.neighbor_points) {
+        if (q.status !== 'missing_in_main') continue;
+        const k = q.x.toFixed(4) + ',' + q.y.toFixed(4); if (seen.has(k)) continue; seen.add(k);
+        adds.push({ y: q.y, x: q.x, neighbor: n.name, neighbor_point: q.id });
+      }
+    }
+    return { protect, adds, radius, tol: params.tol };
+  }
+  // 把 adds 補進測區界線（只補在單一宗地的段界直線段上，投影到線上，面積不變）
+  function addSeamPoints(ds, adds, tol, d, out) {
+    for (const a of adds) {
+      let best = null, bd = Infinity;
+      for (const e of ds.edges.values()) {
+        if (e.parcels.length !== 1 || e.arcPart) continue; const p = ds.parcels[e.parcels[0]]; if (p.containers && p.containers.length) continue;
+        const A = ds.points.get(e.a), B = ds.points.get(e.b), dd = distToSeg(a.x, a.y, A.x, A.y, B.x, B.y); if (dd < bd) { bd = dd; best = e; }
+      }
+      if (!best || bd > tol) { out.skippedAdds.push({ neighbor: a.neighbor, neighbor_point: a.neighbor_point, reason: '測區該處是圓弧或找不到界線' }); continue; }
+      const r = insertPoint(ds, best.a, best.b, a.y, a.x); mergeDelta(d, r.delta); out.added.push({ id: r.id, neighbor: a.neighbor, neighbor_point: a.neighbor_point }); out.protect.add(r.id);
+    }
+  }
+  // 一鍵清理：① 補上鄰段有、測區缺的接縫點（opt.adds）② 沒有宗地使用的點 ③ 直線上的多餘點；opt.protect 內的點一律不刪。
+  // 逐點以「目前」的鄰點重新判斷（連續多點共線時不會累積漂移）。
+  // 回傳 {added, unused, collinear, skipped, skippedAdds, kept, delta}；呼叫端自行決定是否保留（預覽時用 applyDelta(…,'undo') 還原）。
   function cleanupPoints(ds, opt = {}) {
-    const o = { unused: true, collinear: true, ...COLLINEAR_DEFAULT, ...opt }, d = newDelta(), res = { unused: [], collinear: [], skipped: [] };
-    if (o.unused) { const r = removeInto(ds, unusedPoints(ds), d); res.unused = r.done; res.skipped.push(...r.skipped); }
+    const protect = new Set(opt.protect || []), o = { unused: true, collinear: true, ...COLLINEAR_DEFAULT, ...opt, protect }, d = newDelta();
+    const res = { added: [], unused: [], collinear: [], skipped: [], skippedAdds: [], kept: 0, protect };
+    if (opt.adds && opt.adds.length) addSeamPoints(ds, opt.adds, opt.tol != null ? opt.tol : SEAM_DEFAULT.tol, d, res);
+    if (o.unused) { const r = removeInto(ds, unusedPoints(ds).filter(id => !protect.has(id)), d); res.unused = r.done; res.skipped.push(...r.skipped); }
     if (o.collinear) {
       for (const c of collinearCandidates(ds, o)) {
+        if (c.protected) { res.kept++; continue; }
         if (!collinearCheck(ds, c.id, o)) continue;
         const r = removeInto(ds, [c.id], d); res.collinear.push(...r.done); res.skipped.push(...r.skipped);
       }
@@ -982,7 +1018,7 @@ const Core = (() => {
   }
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
-    buildTopology, applyDelta, insertPoint, addFreePoint, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
+    buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, outlineLoops, errReport, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };

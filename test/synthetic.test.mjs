@@ -242,4 +242,21 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.ok(txt.includes('重測成果檢核 KC9 (115. 3.27)') && txt.includes('段外圍面積 = 200.00 ㎡') && txt.includes('宗地地號 9-1-336 無地號界址') && txt.includes('界址點號 7 - 899 為空號') && txt.includes('未被任何宗地使用的界址點 1 個：900') && txt.includes('(END)'));
   assert.ok(txt.includes('\n      1       2       3 ') || txt.split('\n').some(l => /^ +\d+ +\d+ +\d+ /.test(l)), 'id 每格寬 8、每行 10 個');
 }
+// ── 清理遇鄰段接縫：鄰段有點的位置測區必須有點（不刪、缺則補）──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings) => Core.datasetFromD({ pts: Core.parseDbf(makeDbf(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x)))), bnd: Core.parseDbf(makeDbf(F_D13, rings)) });
+  const main = mk([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [7, 5, 10], [8, 8, 10]], [ring(1, 1, 0, [1, 2, 7, 8, 3, 4])]);
+  const nb = mk([[11, 0, 10], [12, 0, 20], [13, 10, 20], [14, 10, 10], [15, 5, 10], [16, 2, 10]], [ring(1, 2, 0, [11, 12, 13, 14, 15, 16])]);
+  const g = Core.seamGuard(main, [{ name: 'NB', ds: nb }], {});
+  assert.ok(g.protect.has(7) && g.protect.has(2) && g.protect.has(3) && !g.protect.has(8), '鄰段有點的位置受保護、鄰段沒點的不保護');
+  assert.equal(g.adds.length, 1); near(g.adds[0].y, Y + 2, 1e-9);
+  const plain = Core.cleanupPoints(main, {}); assert.ok(plain.collinear.includes(7) && plain.collinear.includes(8), '不帶接縫守則：直線上的點都會被刪');
+  Core.applyDelta(main, plain.delta, 'undo');
+  const r = Core.cleanupPoints(main, { protect: g.protect, adds: g.adds, tol: g.tol });
+  assert.deepEqual(r.collinear, [8], '7 受保護不刪，8 刪'); assert.equal(r.added.length, 1); assert.ok(r.kept >= 1);
+  const ids = main.parcels[0].ids; assert.ok(ids.includes(7) && !ids.includes(8) && ids.includes(r.added[0].id));
+  const np = main.points.get(r.added[0].id); near(np.x, X + 10, 1e-9); near(np.y, Y + 2, 1e-9); near(main.parcels[0].area, 100, 1e-6);
+  assert.ok(Core.seamAnalyze(main, [{ name: 'NB', ds: nb }], {}).totals.neighbor_missing_in_main === 0, '補點後鄰段點在測區都有對應');
+  Core.applyDelta(main, r.delta, 'undo'); assert.deepEqual(main.parcels[0].ids, [1, 2, 7, 8, 3, 4], '整批可復原');
+}
 console.log('SYNTHETIC OK');
