@@ -283,4 +283,17 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.deepEqual([Core.ringConflicts(okSq).cross.length, Core.ringConflicts(okSq).overlap.length], [0, 0], '正常相鄰宗地沒有衝突');
   assert.ok(Core.errReport(X1, { name: 'X' }).includes('交錯'));
 }
+// ── 三叉點（KC0336 的 5236）：各環看到的鄰點不同，各自去點會留下縫 → 不可刪；自由閉合區偵測 ──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings) => Core.datasetFromD({ pts: Core.parseDbf(makeDbf(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x)))), bnd: Core.parseDbf(makeDbf(F_D13, rings)) });
+  // J(1)、K(2) 是 R1／R2 的共用邊；R1 在 J 的鄰點是 A(3)，R2 在 J 的鄰點是 B(4)，R3 是補滿 A–J–B 楔形的三角形：兩宗各自看 J 都差 0.5 m、1/40
+  const P = [[1, 0, 0], [2, 0, 10], [3, 1, -10], [4, -1, -10], [5, 5, 10], [6, 5, -10], [7, -5, 10], [8, -5, -10], [9, 1, -20], [10, -1, -20]];
+  const rings = [ring(1, 1, 0, [3, 1, 2, 5, 6]), ring(1, 2, 0, [4, 1, 2, 7, 8]), ring(1, 3, 0, [3, 4, 1])];
+  const ds = mk(P, rings); assert.equal(Core.freeRegions(ds).length, 0, '原本沒有縫');
+  assert.ok(!Core.collinearCandidates(ds, { ratio: 0.03, maxAbs: 0 }).some(c => c.id === 1), '三叉點不是候選');
+  Core.cleanupPoints(ds, { ratio: 0.03, maxAbs: 0 }); assert.ok(ds.points.has(1) && ds.parcels[0].ids.includes(1) && ds.parcels[1].ids.includes(1), '三叉點保留'); assert.equal(Core.freeRegions(ds).length, 0, '清理後沒有縫');
+  // 若各環自行把 J 拿掉，A–K、B–K 兩條弦與 A–B 之間就是 20 m² 的自由閉合區
+  const bad = mk(P, [ring(1, 1, 0, [3, 2, 5, 6]), ring(1, 2, 0, [4, 2, 7, 8]), ring(1, 4, 0, [9, 10, 4, 3])]), fr = Core.freeRegions(bad);
+  assert.equal(fr.length, 1); near(Math.abs(fr[0].area), 20, 1e-6); assert.ok(Core.errReport(bad, { name: 'X' }).includes('自由閉合區面積 = 20.00 ㎡'));
+}
 console.log('SYNTHETIC OK');

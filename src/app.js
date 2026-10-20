@@ -165,8 +165,8 @@ let cleanKey = '';
 function cleanPreview() {
   const ds = S.ds, box = $('clSum');
   if (!ds) { S.clean = null; box.textContent = '尚未載入圖資'; return; }
-  const o = cleanOpts(), hmap = new Map(Core.collinearCandidates(ds, o).map(c => [c.id, c.h])), before = ds.parcels.map(p => p.area), cf0 = Core.ringConflicts(ds);
-  const r = Core.cleanupPoints(ds, o); let n = 0, maxd = 0, tot = 0; const cf1 = Core.ringConflicts(ds), c0 = cf0.cross.length + cf0.overlap.length, c1 = cf1.cross.length + cf1.overlap.length;
+  const o = cleanOpts(), hmap = new Map(Core.collinearCandidates(ds, o).map(c => [c.id, c.h])), before = ds.parcels.map(p => p.area), cf0 = Core.ringConflicts(ds), fr0 = Core.freeRegions(ds).length;
+  const r = Core.cleanupPoints(ds, o); let n = 0, maxd = 0, tot = 0; const cf1 = Core.ringConflicts(ds), c0 = cf0.cross.length + cf0.overlap.length + fr0, c1 = cf1.cross.length + cf1.overlap.length + Core.freeRegions(ds).length;
   ds.parcels.forEach((p, i) => { const d = p.area - before[i]; if (Math.abs(d) > 1e-6) { n++; tot += d; maxd = Math.max(maxd, Math.abs(d)); } });
   const pts = r.delta.removed.map(p => ({ y: p.y, x: p.x, u: r.unused.includes(p.id) })).concat(r.delta.added.map(p => ({ y: p.y, x: p.x, add: true })));
   Core.applyDelta(ds, r.delta, 'undo');
@@ -175,7 +175,7 @@ function cleanPreview() {
   box.innerHTML = `<div>沒有宗地使用的點：<b>${r.unused.length}</b> 個</div><div>直線上的多餘點：<b>${r.collinear.length}</b> 個` + (r.collinear.length ? `（最大偏差 ${(hmax * 100).toFixed(1)} cm）` : '') + '</div>' +
     `<div class="muted">影響 ${n} 宗地面積，合計 ${tot >= 0 ? '+' : ''}${tot.toFixed(3)} m²，單宗最大 ${maxd.toFixed(3)} m²` + (r.skipped.length ? `；${r.skipped.length} 點因圓弧或環點數不足保留` : '') + '</div>' +
     (r.blocked.length ? `<div class="muted">${r.blocked.length} 點因「三角形內有別宗地的界址點」保留（刪了弦會跨過它，造成交錯）</div>` : '') +
-    `<div>界址線交錯／重疊：清理前 <b>${c0}</b>、清理後 <b class="${c1 > c0 ? 'neg' : ''}">${c1}</b>` + (c1 > c0 ? '　⚠ 清理會讓 NECEXE 報表多出錯誤，建議調小比例' : '') + '</div>' +
+    `<div>界址線交錯／重疊／自由閉合區（縫）：清理前 <b>${c0}</b>、清理後 <b class="${c1 > c0 ? 'neg' : ''}">${c1}</b>` + (c1 > c0 ? '　⚠ 清理會讓 NECEXE 報表多出錯誤，建議調小比例' : '') + '</div>' +
     ($('clSeam').checked ? (S.nb.length ? `<div>鄰段接縫：補點 <b>${r.added.length}</b> 個（鄰段有點、測區缺）；保留 <b>${r.kept}</b> 個在直線上、但鄰段有點的點` + (r.skippedAdds.length ? `；${r.skippedAdds.length} 處在圓弧上無法補點` : '') + '</div>' : '<div class="muted">尚未載入鄰段，不做接縫保護</div>') : '<div class="muted">已關閉鄰段接縫保護</div>');
   $('btnClean').disabled = !any; draw();
 }
