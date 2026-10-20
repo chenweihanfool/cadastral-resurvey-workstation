@@ -165,8 +165,8 @@ let cleanKey = '';
 function cleanPreview() {
   const ds = S.ds, box = $('clSum');
   if (!ds) { S.clean = null; box.textContent = '尚未載入圖資'; return; }
-  const o = cleanOpts(), hmap = new Map(Core.collinearCandidates(ds, o).map(c => [c.id, c.h])), before = ds.parcels.map(p => p.area);
-  const r = Core.cleanupPoints(ds, o); let n = 0, maxd = 0, tot = 0;
+  const o = cleanOpts(), hmap = new Map(Core.collinearCandidates(ds, o).map(c => [c.id, c.h])), before = ds.parcels.map(p => p.area), cf0 = Core.ringConflicts(ds);
+  const r = Core.cleanupPoints(ds, o); let n = 0, maxd = 0, tot = 0; const cf1 = Core.ringConflicts(ds), c0 = cf0.cross.length + cf0.overlap.length, c1 = cf1.cross.length + cf1.overlap.length;
   ds.parcels.forEach((p, i) => { const d = p.area - before[i]; if (Math.abs(d) > 1e-6) { n++; tot += d; maxd = Math.max(maxd, Math.abs(d)); } });
   const pts = r.delta.removed.map(p => ({ y: p.y, x: p.x, u: r.unused.includes(p.id) })).concat(r.delta.added.map(p => ({ y: p.y, x: p.x, add: true })));
   Core.applyDelta(ds, r.delta, 'undo');
@@ -174,6 +174,8 @@ function cleanPreview() {
   const hmax = Math.max(0, ...r.collinear.map(id => hmap.get(id) || 0));
   box.innerHTML = `<div>沒有宗地使用的點：<b>${r.unused.length}</b> 個</div><div>直線上的多餘點：<b>${r.collinear.length}</b> 個` + (r.collinear.length ? `（最大偏差 ${(hmax * 100).toFixed(1)} cm）` : '') + '</div>' +
     `<div class="muted">影響 ${n} 宗地面積，合計 ${tot >= 0 ? '+' : ''}${tot.toFixed(3)} m²，單宗最大 ${maxd.toFixed(3)} m²` + (r.skipped.length ? `；${r.skipped.length} 點因圓弧或環點數不足保留` : '') + '</div>' +
+    (r.blocked.length ? `<div class="muted">${r.blocked.length} 點因「三角形內有別宗地的界址點」保留（刪了弦會跨過它，造成交錯）</div>` : '') +
+    `<div>界址線交錯／重疊：清理前 <b>${c0}</b>、清理後 <b class="${c1 > c0 ? 'neg' : ''}">${c1}</b>` + (c1 > c0 ? '　⚠ 清理會讓 NECEXE 報表多出錯誤，建議調小比例' : '') + '</div>' +
     ($('clSeam').checked ? (S.nb.length ? `<div>鄰段接縫：補點 <b>${r.added.length}</b> 個（鄰段有點、測區缺）；保留 <b>${r.kept}</b> 個在直線上、但鄰段有點的點` + (r.skippedAdds.length ? `；${r.skippedAdds.length} 處在圓弧上無法補點` : '') + '</div>' : '<div class="muted">尚未載入鄰段，不做接縫保護</div>') : '<div class="muted">已關閉鄰段接縫保護</div>');
   $('btnClean').disabled = !any; draw();
 }
@@ -1543,7 +1545,7 @@ const api = {
     if (seam && S.nb.length) { const g = Core.seamGuard(S.ds, nbArgs(), seamOpts()); o.protect = g.protect; o.adds = g.adds; o.tol = g.tol; }
     const r = Core.cleanupPoints(S.ds, o);
     if (preview) Core.applyDelta(S.ds, r.delta, 'undo'); else if (r.unused.length || r.collinear.length || r.added.length) { pushStruct(r.delta, '清理多餘點'); pruneSel(); } else Core.applyDelta(S.ds, r.delta, 'undo');
-    refresh(); return { preview, added: r.added, unused: r.unused, collinear: r.collinear, kept_for_seam: r.kept, skipped: r.skipped, skipped_adds: r.skippedAdds };
+    refresh(); return { preview, added: r.added, unused: r.unused, collinear: r.collinear, kept_for_seam: r.kept, blocked: r.blocked, skipped: r.skipped, skipped_adds: r.skippedAdds };
   },
   exportErrReport: () => { if (!S.ds) throw new Error('尚未載入圖資'); return errReportText(); },
   exportD13: () => { if (!S.dbf.bnd) throw new Error('主要測區不是由 D13 載入'); const r = Core.exportD13(S.dbf.bnd, S.ds); let bin = ''; for (let i = 0; i < r.bytes.length; i += 8192) bin += String.fromCharCode.apply(null, r.bytes.subarray(i, i + 8192)); return { name: S.names.d13, base64: btoa(bin), parcels: r.parcels, rewritten: r.rewritten, appended: r.appended }; },
