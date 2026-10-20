@@ -8,7 +8,7 @@ const APP_VERSION = CHANGELOG[0].version;
 const REPO = 'chenweihanfool/cadastral-resurvey-workstation';
 
 const S = {
-  ds: null, ref: null, dbf: { pts: null }, names: {},
+  ds: null, ref: null, dbf: { pts: null, bnd: null }, names: {},
   img: [], imgActive: -1,                  // 疊合影像 [{name,w,h,bmp,wf,wf0,visible,opacity,located}]
   nb: [], seam: null, seamStale: false,      // 鄰段 [{name,ds,color,visible,authoritative,seg}]；接合檢查報告
   survey: Core.newSurvey(),                // 現況點與手動參考線
@@ -23,6 +23,8 @@ const S = {
   cursor: null,                            // 滑鼠世界座標（橡皮筋線用）
   basemap: { provider: 'none', opacity: 0.9, cm: 121 },   // 底圖（需 TWD97）
   printing: false,
+  style: null,                             // 圖層與樣式（見 STYLE_DEF）
+  clean: null,                             // 清理預覽（圖上標示將被刪的點）
 };
 
 // ── 座標轉換 ───────────────────────────────────────────────────────────────
@@ -62,15 +64,7 @@ function hitTest(mx, my) {
   const ds = S.ds; if (!ds) return null;
   const wx = toWx(mx), wy = toWy(my), px = 1 / S.view.s;
   if (S.filter.pt) { const b = nearestPoint(ds.points, wx, wy, 9 * px); if (b) return { t: 'pt', k: b.id }; }
-  if (S.filter.edge) {
-    let best = null, bd = 6 * px;
-    for (const e of ds.edges.values()) {
-      const a = ds.points.get(e.a), b = ds.points.get(e.b);
-      const d = Core.distToSeg(wx, wy, a.x, a.y, b.x, b.y);
-      if (d < bd) { bd = d; best = e; }
-    }
-    if (best) return { t: 'edge', k: best.key };
-  }
+  if (S.filter.edge) { const best = hitEdgeAt(wx, wy, 6 * px); if (best) return { t: 'edge', k: best.key }; }
   if (S.filter.par) {
     let best = null, ba = Infinity;
     for (const p of ds.parcels) if (p.area < ba && Core.pointInRing(p.ids, ds.points, wy, wx)) { ba = p.area; best = p; }
@@ -116,6 +110,99 @@ function applyEntries(entries) { if (!S.ds) return; Core.setPoints(S.ds, entries
 function undo() { S.seamStale = true; const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); refresh(); }
 function redo() { S.seamStale = true; const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); refresh(); }
 function resetAll() { if (!S.ds) return; Core.resetAll(S.ds); S.undo.length = 0; S.redo.length = 0; refresh(); }
+
+// ── 界址點編修（新增／修改／刪除）：核心在 Core.insertPoint／removePoints／cleanupPoints，這裡負責復原、選取與介面 ──
+function pruneSel() {
+  const ds = S.ds; if (!ds) return;
+  for (const id of [...S.sel.pt]) if (!ds.points.has(id)) S.sel.pt.delete(id);
+  for (const k of [...S.sel.edge]) if (!ds.edges.has(k)) S.sel.edge.delete(k);
+  S.hover = null;
+}
+function pushStruct(delta, label) {
+  pushUndo({ undoFn: () => { Core.applyDelta(S.ds, delta, 'undo'); pruneSel(); }, redoFn: () => { Core.applyDelta(S.ds, delta, 'redo'); pruneSel(); }, label });
+}
+const parLabels = delta => [...delta.parcels.keys()].map(i => S.ds.parcels[i].label);
+function hitEdgeAt(wx, wy, r) {
+  let best = null, bd = r;
+  for (const e of S.ds.edges.values()) { const a = S.ds.points.get(e.a), b = S.ds.points.get(e.b), d = Core.distToSeg(wx, wy, a.x, a.y, b.x, b.y); if (d < bd) { bd = d; best = e; } }
+  return best;
+}
+function selectOnlyPoint(id) { clearSel(); S.sel.pt.add(id); }
+function addPoint({ edge, y, x, project = true }) {   // edge=[a,b]：加在該線（所有以此線為界的宗地）；省略＝孤立點
+  const ds = S.ds; if (!ds) throw new Error('尚未載入圖資');
+  const r = edge ? Core.insertPoint(ds, edge[0], edge[1], y, x, { project }) : Core.addFreePoint(ds, y, x);
+  pushStruct(r.delta, `加點 ${r.id}`); selectOnlyPoint(r.id);
+  return { id: r.id, parcels: parLabels(r.delta) };
+}
+function addPointAt(mx, my, free) {
+  const wx = toWx(mx), wy = toWy(my);
+  if (nearestPoint(S.ds.points, wx, wy, 9 / S.view.s)) return msg('這裡已有界址點；要在線上加點請點在兩點之間的線上');
+  const e = hitEdgeAt(wx, wy, 8 / S.view.s);
+  try {
+    if (e) { const r = addPoint({ edge: [e.a, e.b], y: wy, x: wx }); msg(`已在 ${e.a}–${e.b} 加入點 ${r.id}，同步插入宗地 ${r.parcels.join('、')}（面積不變）；切到「選取」可拖曳`); }
+    else if (free) { const r = addPoint({ y: wy, x: wx }); msg(`已新增孤立點 ${r.id}（不屬於任何宗地）`); }
+    else msg('請點在界址線上；Shift＋點空白處＝新增孤立點');
+  } catch (err) { msg(String(err.message || err)); }
+}
+function deletePoints(ids) {
+  const ds = S.ds; if (!ds) throw new Error('尚未載入圖資');
+  const r = Core.removePoints(ds, ids);
+  if (r.done.length) { pushStruct(r.delta, `刪除 ${r.done.length} 點`); pruneSel(); }
+  return { deleted: r.done, skipped: r.skipped, parcels: parLabels(r.delta) };
+}
+function deleteSelectedPoints() {
+  if (!S.ds) return msg('請先載入圖資'); if (!S.sel.pt.size) return msg('請先用「選取」工具選取要刪除的界址點（可框選多個）');
+  const r = deletePoints([...S.sel.pt]);
+  msg((r.deleted.length ? `已刪除 ${r.deleted.length} 個界址點，更新宗地 ${r.parcels.slice(0, 6).join('、')}${r.parcels.length > 6 ? '…' : ''}；可復原` : '沒有刪除任何點') + (r.skipped.length ? `。無法刪除 ${r.skipped.length} 點：` + r.skipped.slice(0, 3).map(q => `${q.id}（${q.reason}）`).join('、') : ''));
+}
+// 一鍵清理多餘點：預覽＝實際執行後立刻還原，所以數字與實際結果一致
+const cleanOpts = () => ({ unused: $('clUnused').checked, collinear: $('clCol').checked, ratio: (parseFloat($('clRatio').value) || 0) / 1000, maxAbs: parseFloat($('clCap').value) || 0 });
+let cleanKey = '';
+function cleanPreview() {
+  const ds = S.ds, box = $('clSum');
+  if (!ds) { S.clean = null; box.textContent = '尚未載入圖資'; return; }
+  const o = cleanOpts(), hmap = new Map(Core.collinearCandidates(ds, o).map(c => [c.id, c.h])), before = ds.parcels.map(p => p.area);
+  const r = Core.cleanupPoints(ds, o); let n = 0, maxd = 0, tot = 0;
+  ds.parcels.forEach((p, i) => { const d = p.area - before[i]; if (Math.abs(d) > 1e-6) { n++; tot += d; maxd = Math.max(maxd, Math.abs(d)); } });
+  const pts = r.delta.removed.map(p => ({ y: p.y, x: p.x, u: r.unused.includes(p.id) }));
+  Core.applyDelta(ds, r.delta, 'undo');
+  S.clean = (r.unused.length || r.collinear.length) && $('clShow').checked ? { pts } : null;
+  const hmax = Math.max(0, ...r.collinear.map(id => hmap.get(id) || 0));
+  box.innerHTML = `<div>沒有宗地使用的點：<b>${r.unused.length}</b> 個</div><div>直線上的多餘點：<b>${r.collinear.length}</b> 個` + (r.collinear.length ? `（最大偏差 ${(hmax * 100).toFixed(1)} cm）` : '') + '</div>' +
+    `<div class="muted">影響 ${n} 宗地面積，合計 ${tot >= 0 ? '+' : ''}${tot.toFixed(3)} m²，單宗最大 ${maxd.toFixed(3)} m²` + (r.skipped.length ? `；${r.skipped.length} 點因圓弧或環點數不足保留` : '') + '</div>';
+  $('btnClean').disabled = !(r.unused.length || r.collinear.length); draw();
+}
+let cleanTimer = null; const cleanSoon = () => { clearTimeout(cleanTimer); cleanTimer = setTimeout(() => { if ($('dlgClean').open) cleanPreview(); }, 120); };
+['clUnused', 'clCol', 'clRatio', 'clCap', 'clShow'].forEach(id => $(id).addEventListener('input', cleanSoon));
+$('dlgClean').addEventListener('close', () => { S.clean = null; draw(); });
+$('btnClean').onclick = () => {
+  if (!S.ds) return; S.clean = null; const r = Core.cleanupPoints(S.ds, cleanOpts());
+  if (!r.unused.length && !r.collinear.length) return msg('沒有可清理的點');
+  pushStruct(r.delta, '清理多餘點'); pruneSel();
+  msg(`已清理：沒有宗地使用的點 ${r.unused.length} 個、直線上多餘點 ${r.collinear.length} 個，更新 ${r.delta.parcels.size} 宗地；可復原。記得輸出 D14 與 D13`); cleanSoon();
+};
+$('btnPtTool').onclick = () => setTool('addpt'); $('btnPtDel').onclick = deleteSelectedPoints; $('btnOpenClean').onclick = () => openPanel('dlgClean');
+$('btnPtSet').onclick = () => {
+  if (S.sel.pt.size !== 1) return msg('請先選取一個界址點'); const id = [...S.sel.pt][0], p = S.ds.points.get(id), y = parseFloat($('ptN').value), x = parseFloat($('ptE').value);
+  if (!isFinite(y) || !isFinite(x)) return msg('座標格式不正確'); transformSelectionIds(new Set([id]), { dy: y - p.y, dx: x - p.x, angle: 0 }, '座標修改'); refresh();
+};
+$('btnPtAdd').onclick = () => {
+  if (!S.ds) return msg('請先載入圖資'); const y = parseFloat($('addN').value), x = parseFloat($('addE').value); if (!isFinite(y) || !isFinite(x)) return msg('請輸入 N、E 座標');
+  try {
+    const only = S.sel.edge.size === 1 && !S.sel.pt.size ? S.ds.edges.get([...S.sel.edge][0]) : null;
+    const r = addPoint({ edge: only ? [only.a, only.b] : null, y, x, project: false }); msg(`已新增點 ${r.id}` + (only ? `，插入 ${only.a}–${only.b}（宗地 ${r.parcels.join('、')}）` : '（孤立點）'));
+  } catch (err) { msg(String(err.message || err)); }
+};
+function ptPanel() {
+  const ds = S.ds, st = S.st || { added: 0, removed: 0, rings: 0 };
+  $('ptEditInfo').innerHTML = ds ? `結構異動：新增 <b>${st.added}</b> 點、刪除 <b>${st.removed}</b> 點、<b>${st.rings}</b> 宗地的界址串改變` + (st.added || st.removed || st.rings ? '<div class="muted">輸出時需同時輸出 D14 與 D13。</div>' : '') : '';
+  if (S.sel.pt.size === 1 && ds) {
+    const p = ds.points.get([...S.sel.pt][0]); if (!p) return;
+    const used = (ds.pointParcels.get(p.id) || []).map(i => ds.parcels[i].label);
+    $('ptInfo').innerHTML = `點 <b>${p.id}</b>${p.added ? '（新增）' : ''}　${used.length ? '屬於宗地 ' + used.slice(0, 6).join('、') + (used.length > 6 ? '…' : '') : '<span class="neg">沒有宗地使用</span>'}`;
+    for (const [id, v] of [['ptN', p.y], ['ptE', p.x]]) if (document.activeElement !== $(id)) $(id).value = v.toFixed(3);
+  } else $('ptInfo').textContent = S.sel.pt.size > 1 ? `已選 ${S.sel.pt.size} 個點（座標修改一次只能一個；可按「刪除」）` : '尚未選取界址點（用「選取」工具點一個點）';
+}
 
 // ── 現況點與參考線 ─────────────────────────────────────────────────────────
 function addSurveyPoints(pts) {
@@ -233,6 +320,58 @@ function transformSelectionIds(ids, T, label) {
 }
 
 // ── 繪圖 ───────────────────────────────────────────────────────────────────
+// ── 圖層與樣式：開關、顏色、大小。顏色 null＝依深淺色主題的預設；設定記在瀏覽器（列印同樣套用）──
+const STYLE_DEF = {
+  edge: { show: true, color: null, width: 1 },
+  pt: { show: true, color: null, movedColor: null, size: 0 },
+  label: { show: true, color: null, size: 0 },
+  ptid: { show: true, color: null, size: 10 },
+  delta: { show: true, okColor: null, badColor: null, size: 0, scope: 'changed' },
+  fill: { show: true, color: null },
+  ref: { show: true, color: null, width: 1 },
+  survey: { show: true, color: null, size: 5, width: 2, names: true },
+  ctl: { show: true, color: null, size: 6, names: true },
+  sel: { color: null },
+};
+// [鍵, 名稱, 有開關, 欄位…]：['color', 屬性, 標籤, 預設色變數]｜['num', 屬性, 標籤, min, max, step]｜['chk', 屬性, 標籤]｜['sel', 屬性, 標籤, [[值, 文字]…]]
+const STYLE_UI = [
+  ['edge', '界址線', true, ['color', 'color', '色', '--edge'], ['num', 'width', '線寬', 0.5, 6, 0.5]],
+  ['pt', '界址點', true, ['color', 'color', '色', '--edge'], ['color', 'movedColor', '已移動', '--bad'], ['num', 'size', '大小', 0, 12, 0.5, '0＝依縮放自動']],
+  ['label', '地號標註', true, ['color', 'color', '色', '--edge'], ['num', 'size', '字級', 0, 30, 1, '0＝自動']],
+  ['ptid', '點號標註（放大後）', true, ['color', 'color', '色', '--ref'], ['num', 'size', '字級', 6, 24, 1]],
+  ['delta', '面積較差（圖上）', true, ['color', 'okColor', '正常色', '--ok'], ['color', 'badColor', '超限色', '--bad'], ['num', 'size', '字級', 0, 30, 1, '0＝自動'], ['sel', 'scope', '顯示', [['changed', '有變動／已選'], ['all', '全部宗地']]]],
+  ['fill', '變動宗地底色', true, ['color', 'color', '色', '--changed']],
+  ['ref', '舊圖線', true, ['color', 'color', '色', '--ref'], ['num', 'width', '線寬', 0.5, 6, 0.5]],
+  ['survey', '現況點／參考線', true, ['color', 'color', '色', '--survey'], ['num', 'size', '點大小', 2, 14, 1], ['num', 'width', '線寬', 1, 8, 0.5], ['chk', 'names', '點名']],
+  ['ctl', '控制點／補點', true, ['color', 'color', '色', '--ok'], ['num', 'size', '大小', 3, 14, 1], ['chk', 'names', '點名']],
+  ['sel', '選取色', false, ['color', 'color', '色', '--sel']],
+];
+const cloneStyle = o => JSON.parse(JSON.stringify(o));
+S.style = cloneStyle(STYLE_DEF);
+try { const j = JSON.parse(localStorage.getItem('cw.style') || 'null'); if (j) for (const k of Object.keys(STYLE_DEF)) if (j[k]) Object.assign(S.style[k], j[k]); } catch (e) { /* 無儲存或被封鎖時用預設 */ }
+const saveStyle = () => { try { localStorage.setItem('cw.style', JSON.stringify(S.style)); } catch (e) { /* ignore */ } };
+const sc_ = (k, p, v) => S.style[k][p] || css(v);   // 使用者色，否則主題預設
+const cssHex = v => { const c = document.createElement('canvas').getContext('2d'); c.fillStyle = '#000'; c.fillStyle = v; let m = /^#([0-9a-f]{6})/i.exec(c.fillStyle); if (m) return '#' + m[1]; m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c.fillStyle); return m ? '#' + [m[1], m[2], m[3]].map(n => (+n).toString(16).padStart(2, '0')).join('') : '#000000'; };
+function renderStyleRows() {
+  const g = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  $('styleRows').innerHTML = STYLE_UI.map(([k, name, hasShow, ...fs]) => {
+    const st = S.style[k], ctl = fs.map(f => {
+      const id = `data-s="${k}.${f[1]}"`;
+      if (f[0] === 'color') return `<label>${f[2]} <input type="color" ${id} value="${st[f[1]] || cssHex(g(f[3]))}"><button class="sx" data-reset="${k}.${f[1]}" title="還原預設色">↺</button></label>`;
+      if (f[0] === 'num') return `<label title="${f[6] || ''}">${f[2]} <input type="number" ${id} min="${f[3]}" max="${f[4]}" step="${f[5]}" value="${st[f[1]]}"></label>`;
+      if (f[0] === 'chk') return `<label class="chk"><input type="checkbox" ${id}${st[f[1]] ? ' checked' : ''}>${f[2]}</label>`;
+      return `<label>${f[2]} <select ${id}>${f[3].map(([v, t]) => `<option value="${v}"${st[f[1]] === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
+    }).join('');
+    return `<div class="srow"><span>${hasShow ? `<input type="checkbox" data-s="${k}.show"${st.show ? ' checked' : ''} title="顯示／隱藏">` : ''}</span><b>${name}</b><div class="sctl">${ctl}</div></div>`;
+  }).join('');
+}
+$('styleRows').addEventListener('input', e => {
+  const t = e.target, key = t.dataset.s; if (!key) return; const [k, p] = key.split('.');
+  S.style[k][p] = t.type === 'checkbox' ? t.checked : t.type === 'number' ? (parseFloat(t.value) || 0) : t.value; saveStyle(); draw();
+});
+$('styleRows').addEventListener('click', e => { const r = e.target.dataset.reset; if (!r) return; const [k, p] = r.split('.'); S.style[k][p] = null; saveStyle(); renderStyleRows(); draw(); });
+$('btnStyleReset').onclick = () => { S.style = cloneStyle(STYLE_DEF); saveStyle(); renderStyleRows(); draw(); };
+
 const PRINT_PALETTE = { '--edge': '#1d2330', '--ref': '#8a93a6', '--sel': '#1f6feb', '--hover': '#00a3a3', '--changed': 'rgba(255,160,0,.28)', '--bad': '#d1242f', '--survey': '#c2188e', '--ok': '#1a7f37', '--canvas': '#ffffff' };
 const css = n => (S.printing ? PRINT_PALETTE[n] : getComputedStyle(document.documentElement).getPropertyValue(n).trim());
 
@@ -298,82 +437,91 @@ function render() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
   drawBasemap(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); drawImages(false);
   const ds = S.ds, sc = S.view.s;
-  const cEdge = css('--edge'), cRef = css('--ref'), cSel = css('--sel'), cHov = css('--hover'), cChg = css('--changed'), cBad = css('--bad'), cSv = css('--survey');
+  const ST = S.style, cEdge = sc_('edge', 'color', '--edge'), cRef = sc_('ref', 'color', '--ref'), cSel = sc_('sel', 'color', '--sel'), cHov = css('--hover'), cChg = ST.fill.color ? ST.fill.color + '38' : css('--changed'), cBad = css('--bad'), cSv = sc_('survey', 'color', '--survey');
   const tracePoly = (d, ids) => { ctx.beginPath(); ids.forEach((id, i) => { const p = d.points.get(id); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); }); ctx.closePath(); };
   // 舊圖
-  if (S.ref && $('chkRef').checked) {
-    ctx.strokeStyle = cRef; ctx.lineWidth = 1; ctx.setLineDash([5, 4]); ctx.beginPath();
+  if (S.ref && ST.ref.show) {
+    ctx.strokeStyle = cRef; ctx.lineWidth = ST.ref.width; ctx.setLineDash([5, 4]); ctx.beginPath();
     for (const e of S.ref.edges.values()) { if (e.arcPart) continue; const a = S.ref.points.get(e.a), b = S.ref.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
-    ctx.stroke(); ctx.setLineDash([]); strokeArcs(S.ref, cRef, 1, [5, 4]);
+    ctx.stroke(); ctx.setLineDash([]); strokeArcs(S.ref, cRef, ST.ref.width, [5, 4]);
   }
   for (const n of S.nb) if (n.visible) drawNeighbor(n);
   if (ds) {
     // 已變動宗地底色
     ctx.fillStyle = cChg;
-    for (const p of ds.parcels) if (Math.abs(p.area - p.areaOrig) > 1e-6) { tracePoly(ds, p.ids); ctx.fill(); }
+    if (ST.fill.show) for (const p of ds.parcels) if (Math.abs(p.area - p.areaOrig) > 1e-6) { tracePoly(ds, p.ids); ctx.fill(); }
     // 選取/懸停宗地
     ctx.fillStyle = cSel + '33';
     for (const i of S.sel.par) { tracePoly(ds, ds.parcels[i].ids); ctx.fill(); }
     if (S.hover && S.hover.t === 'par') { ctx.fillStyle = cHov + '22'; tracePoly(ds, ds.parcels[S.hover.k].ids); ctx.fill(); }
     // 邊
-    ctx.strokeStyle = cEdge; ctx.lineWidth = 1; ctx.beginPath();
-    for (const e of ds.edges.values()) { if (e.arcPart) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
-    ctx.stroke(); strokeArcs(ds, cEdge, 1);
+    if (ST.edge.show) {
+      ctx.strokeStyle = cEdge; ctx.lineWidth = ST.edge.width; ctx.beginPath();
+      for (const e of ds.edges.values()) { if (e.arcPart) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); }
+      ctx.stroke(); strokeArcs(ds, cEdge, ST.edge.width);
+    }
     const strokeEdges = (keys, color, w) => { ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath();
       for (const k of keys) { const e = ds.edges.get(k); if (!e) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); } ctx.stroke(); };
     strokeEdges(S.sel.edge, cSel, 3);
     if (S.hover && S.hover.t === 'edge') strokeEdges([S.hover.k], cHov, 3);
     for (const i of S.sel.par) { ctx.strokeStyle = cSel; ctx.lineWidth = 2; tracePoly(ds, ds.parcels[i].ids); ctx.stroke(); }
     // 點
-    if (sc > 0.6) {
-      const r = sc > 8 ? 3 : 1.6;
+    if (ST.pt.show && sc > 0.6) {
+      const r = ST.pt.size > 0 ? ST.pt.size : sc > 8 ? 3 : 1.6, cP = sc_('pt', 'color', '--edge'), cM = sc_('pt', 'movedColor', '--bad');
       for (const p of ds.points.values()) {
         const sx = toSx(p.x), sy = toSy(p.y); if (sx < -5 || sy < -5 || sx > W + 5 || sy > H + 5) continue;
-        ctx.fillStyle = Core.isMoved(p) ? cBad : cEdge; ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
+        ctx.fillStyle = Core.isMoved(p) ? cM : cP; ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
       }
+    }
+    if (S.clean && !S.printing) {   // 清理預覽：將被刪的點（橘＝沒有宗地使用、紫＝直線多餘）
+      ctx.lineWidth = 2; for (const q of S.clean.pts) { const sx = toSx(q.x), sy = toSy(q.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue; ctx.strokeStyle = q.u ? '#f08c00' : '#9c36b5'; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 7); ctx.moveTo(sx - 5, sy - 5); ctx.lineTo(sx + 5, sy + 5); ctx.moveTo(sx + 5, sy - 5); ctx.lineTo(sx - 5, sy + 5); ctx.stroke(); }
+    }
+    if (S.tool === 'addpt' && S.hover && S.hover.t === 'edge' && S.cursor && !S.printing) {   // 加點預覽：垂足
+      const e = ds.edges.get(S.hover.k), a = e && ds.points.get(e.a), b = e && ds.points.get(e.b);
+      if (e && !e.arcPart) { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy, t = l2 ? Math.max(0, Math.min(1, ((S.cursor.x - a.x) * dx + (S.cursor.y - a.y) * dy) / l2)) : 0; ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(toSx(a.x + t * dx), toSy(a.y + t * dy), 6, 0, 7); ctx.stroke(); }
     }
     const eff = selCount() ? effectiveIds() : [];
     ctx.fillStyle = cSel; for (const id of eff) { const p = ds.points.get(id); if (!p) continue; ctx.fillRect(toSx(p.x) - 4, toSy(p.y) - 4, 8, 8); }
     if (S.seam && $('chkSeam').checked && !S.printing) drawSeam();
     if (S.hover && S.hover.t === 'pt') { const p = ds.points.get(S.hover.k); ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.strokeRect(toSx(p.x) - 6, toSy(p.y) - 6, 12, 12); }
     // 標註
-    if ($('chkLabel').checked) {
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      if (sc > 1.2) {
-        ctx.font = `${Math.min(15, Math.max(9, sc * 1.6))}px sans-serif`; ctx.fillStyle = cEdge;
-        for (const p of ds.parcels) {
-          const c = Core.centroidOf(ds.points, p.ids), sx = toSx(c.x), sy = toSy(c.y); if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
-          ctx.fillText(p.label, sx, sy);
-        }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const autoFs = Math.min(15, Math.max(9, sc * 1.6));
+    if (ST.label.show && sc > 1.2) {
+      ctx.font = `${ST.label.size > 0 ? ST.label.size : autoFs}px sans-serif`; ctx.fillStyle = sc_('label', 'color', '--edge');
+      for (const p of ds.parcels) {
+        const c = Core.centroidOf(ds.points, p.ids), sx = toSx(c.x), sy = toSy(c.y); if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
+        ctx.fillText(p.label, sx, sy);
       }
-      // 圖上面積較差：有變動或已選取的宗地，在地號下方標示 Δ（紅=超過警示值）
-      if ($('chkDelta').checked && sc > 0.25) {
-        const mode = $('deltaMode').value, tol = parseFloat($('tol').value) || 0, bg = css('--canvas');
-        ctx.font = `bold ${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.textAlign = 'center'; ctx.lineJoin = 'round'; ctx.lineWidth = 3;
-        for (const p of ds.parcels) {
-          const changed = Math.abs(p.area - p.areaOrig) > 1e-6;
-          if (!changed && !S.sel.par.has(p.idx)) continue;
-          const base = mode === 'reg' ? p.areaReg : p.areaOrig; if (base == null) continue;
-          const d = p.area - base, c = Core.centroidOf(ds.points, p.ids);
-          const sx = toSx(c.x), sy = toSy(c.y) + Math.min(15, Math.max(9, sc * 1.6)) + 1; if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
-          const t = (d >= 0 ? '+' : '') + d.toFixed(2);
-          ctx.strokeStyle = bg; ctx.strokeText(t, sx, sy); ctx.fillStyle = Math.abs(d) > tol ? cBad : css('--ok'); ctx.fillText(t, sx, sy);
-        }
+    }
+    // 圖上面積較差：預設只標有變動或已選取的宗地，在地號下方標示 Δ（超限用超限色）；可改為全部宗地
+    if (ST.delta.show && sc > 0.25) {
+      const mode = $('deltaMode').value, tol = parseFloat($('tol').value) || 0, bg = css('--canvas'), cOk = sc_('delta', 'okColor', '--ok'), cBd = sc_('delta', 'badColor', '--bad');
+      const fs = ST.delta.size > 0 ? ST.delta.size : Math.min(14, Math.max(9, sc * 1.4)), off = (ST.label.show ? (ST.label.size > 0 ? ST.label.size : autoFs) : 0) + 1;
+      ctx.font = `bold ${fs}px sans-serif`; ctx.textAlign = 'center'; ctx.lineJoin = 'round'; ctx.lineWidth = 3;
+      for (const p of ds.parcels) {
+        const changed = Math.abs(p.area - p.areaOrig) > 1e-6;
+        if (ST.delta.scope !== 'all' && !changed && !S.sel.par.has(p.idx)) continue;
+        const base = mode === 'reg' ? p.areaReg : p.areaOrig; if (base == null) continue;
+        const d = p.area - base, c = Core.centroidOf(ds.points, p.ids);
+        const sx = toSx(c.x), sy = toSy(c.y) + off; if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
+        const t = (d >= 0 ? '+' : '') + d.toFixed(2);
+        ctx.strokeStyle = bg; ctx.strokeText(t, sx, sy); ctx.fillStyle = Math.abs(d) > tol ? cBd : cOk; ctx.fillText(t, sx, sy);
       }
-      if (sc > 14) {
-        ctx.font = '10px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = cRef;
-        for (const p of ds.points.values()) { const sx = toSx(p.x), sy = toSy(p.y); if (sx > 0 && sy > 0 && sx < W && sy < H) ctx.fillText(p.id, sx + 5, sy - 5); }
-      }
+    }
+    if (ST.ptid.show && sc > 14) {
+      ctx.font = `${ST.ptid.size}px sans-serif`; ctx.textAlign = 'left'; ctx.fillStyle = sc_('ptid', 'color', '--ref');
+      for (const p of ds.points.values()) { const sx = toSx(p.x), sy = toSy(p.y); if (sx > 0 && sy > 0 && sx < W && sy < H) ctx.fillText(p.id, sx + 5, sy - 5); }
     }
   }
   drawImages(true);
   // 現況點與參考線
   const sv = S.survey;
-  if (sv.lines.length) {
+  if (ST.survey.show && sv.lines.length) {
     for (const ln of sv.lines) {
       ctx.beginPath(); ln.points.forEach((n, i) => { const p = sv.points.get(n); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); });
       if (ln.closed) { ctx.closePath(); ctx.fillStyle = cSv + '22'; ctx.fill(); }
-      ctx.strokeStyle = cSv; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = cSv; ctx.lineWidth = ST.survey.width; ctx.stroke();
     }
   }
   if (S.draft && S.draft.names.length) {
@@ -381,24 +529,24 @@ function render() {
     S.draft.names.forEach((n, i) => { const p = sv.points.get(n); i ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y)); });
     if (S.cursor) ctx.lineTo(toSx(S.cursor.x), toSy(S.cursor.y)); ctx.stroke(); ctx.setLineDash([]);
   }
-  if (sv.points.size) {
-    const showName = $('chkLabel').checked && sc > 1.5, inDraft = S.draft ? new Set(S.draft.names) : new Set();
+  if (ST.survey.show && sv.points.size) {
+    const showName = ST.survey.names && sc > 1.5, sz = ST.survey.size, inDraft = S.draft ? new Set(S.draft.names) : new Set();
     ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     for (const p of sv.points.values()) {
       const sx = toSx(p.x), sy = toSy(p.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue;
-      ctx.fillStyle = inDraft.has(p.name) ? cSel : cSv; ctx.beginPath(); ctx.moveTo(sx, sy - 5); ctx.lineTo(sx + 5, sy); ctx.lineTo(sx, sy + 5); ctx.lineTo(sx - 5, sy); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = inDraft.has(p.name) ? cSel : cSv; ctx.beginPath(); ctx.moveTo(sx, sy - sz); ctx.lineTo(sx + sz, sy); ctx.lineTo(sx, sy + sz); ctx.lineTo(sx - sz, sy); ctx.closePath(); ctx.fill();
       if (showName) { ctx.fillStyle = cSv; ctx.fillText(p.name, sx + 8, sy - 6); }
     }
     if (S.hover && S.hover.t === 'sp') { const p = sv.points.get(S.hover.k); if (p) { ctx.strokeStyle = cHov; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(toSx(p.x), toSy(p.y), 9, 0, 7); ctx.stroke(); } }
   }
   // 控制點／補點（綠色三角形）
-  if (S.controls.size) {
-    const cOk = css('--ok'), showName = $('chkLabel').checked && sc > 0.8;
+  if (ST.ctl.show && S.controls.size) {
+    const cOk = sc_('ctl', 'color', '--ok'), showName = ST.ctl.names && sc > 0.8, z = ST.ctl.size;
     ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     for (const p of S.controls.values()) {
       const sx = toSx(p.x), sy = toSy(p.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue;
-      ctx.fillStyle = cOk; ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 5.5, sy + 4); ctx.lineTo(sx - 5.5, sy + 4); ctx.closePath(); ctx.fill();
-      if (showName) ctx.fillText(p.name, sx + 8, sy - 5);
+      ctx.fillStyle = cOk; ctx.beginPath(); ctx.moveTo(sx, sy - z); ctx.lineTo(sx + z * 0.92, sy + z * 0.67); ctx.lineTo(sx - z * 0.92, sy + z * 0.67); ctx.closePath(); ctx.fill();
+      if (showName) ctx.fillText(p.name, sx + z + 2, sy - 5);
     }
   }
   // 旋轉樞紐
@@ -443,9 +591,11 @@ function lineList() {
 }
 function panel() {
   const ds = S.ds;
+  const st = S.st = ds ? Core.structSummary(ds) : { added: 0, removed: 0, rings: 0 }, structEd = st.added + st.removed + st.rings > 0, edited = !!ds && (structEd || Core.movedPoints(ds).length > 0);
   $('btnUndo').disabled = !S.undo.length; $('btnRedo').disabled = !S.redo.length;
-  $('btnReset').disabled = !ds || !Core.movedPoints(ds).length;
-  $('btnExpD14').disabled = !ds || !S.dbf.pts || !Core.movedPoints(ds).length;
+  actDis('undo', !S.undo.length); actDis('redo', !S.redo.length); actDis('reset', !edited); actDis('delpt', !S.sel.pt.size); actDis('err', !ds);
+  $('btnExpD14').disabled = !ds || !S.dbf.pts || !edited; $('btnExpD13').disabled = !ds || !S.dbf.bnd || !st.rings; $('btnErr').disabled = !ds;
+  ptPanel(); if ($('dlgClean').open) { const k = S.undo.length + ':' + S.redo.length + ':' + (S.ds && S.ds.points.size); if (k !== cleanKey) { cleanKey = k; cleanSoon(); } }
   $('btnExpJson').disabled = !ds && !S.survey.points.size;
   $('drop').style.display = (ds || S.survey.points.size || S.nb.length || S.img.length) ? 'none' : 'flex';
   lineList(); nbPanel(); outPanel(); imgPanel();
@@ -539,6 +689,7 @@ cv.addEventListener('pointerdown', e => {
     setHint(`連線中：已選 ${S.draft.names.length} 點。繼續點選；Enter 完成、點回第一點閉合、Backspace 退一點、Esc 取消`); refresh(); return;
   }
   if (!S.ds) return;
+  if (S.tool === 'addpt') { addPointAt(mx, my, e.shiftKey); return; }
   if (e.altKey) { S.pivot = { y: toWy(my), x: toWx(mx) }; refresh(); return; }
   if (layerMode()) {
     const ids = moveIds(), pv = pivotOf(ids), wx = toWx(mx), wy = toWy(my);
@@ -558,9 +709,9 @@ cv.addEventListener('pointermove', e => {
   { const ll = Core.tm2ToLatLon(S.cursor.y, S.cursor.x, S.basemap.cm); $('stCoord').textContent = `N ${S.cursor.y.toFixed(3)}　E ${S.cursor.x.toFixed(3)}　(${ll.lat.toFixed(6)}°, ${ll.lon.toFixed(6)}°)`; }
   $('stScale').textContent = `1 px = ${(1 / S.view.s).toFixed(3)} m`;
   if (!d) {
-    const h = S.align ? null : S.tool === 'line' ? hitSurvey(mx, my) : S.tool === 'select' && S.ds ? hitTest(mx, my) : null;
+    const h = S.align ? null : S.tool === 'line' ? hitSurvey(mx, my) : S.tool === 'select' && S.ds ? hitTest(mx, my) : S.tool === 'addpt' && S.ds ? (e2 => e2 ? { t: 'edge', k: e2.key } : null)(hitEdgeAt(toWx(mx), toWy(my), 8 / S.view.s)) : null;
     if (JSON.stringify(h) !== JSON.stringify(S.hover)) { S.hover = h; draw(); }
-    tip(h, e); if (S.draft || S.align) draw(); return;
+    tip(h, e); if (S.draft || S.align || S.tool === 'addpt') draw(); return;
   }
   if (d.kind === 'pan') { S.view.cx = d.cx - (mx - d.mx) / S.view.s; S.view.cy = d.cy + (my - d.my) / S.view.s; draw(); return; }
   if (d.kind === 'img') { setImgPos(d.im, d.c0 + (toWx(mx) - d.wx), d.f0 + (toWy(my) - d.wy)); return; }
@@ -610,7 +761,8 @@ addEventListener('keydown', e => {
   else if (k === 'Escape') { if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
   else if (k === 'Enter') { if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
   else if (k === 'Backspace' && S.draft) { S.draft.names.pop(); if (!S.draft.names.length) { S.draft = null; setHint(''); } draw(); }
-  else if (k === 'v' || k === 'V') setTool('select'); else if (k === 'h' || k === 'H') setTool('pan'); else if (k === 'm' || k === 'M') setTool('layer'); else if (k === 'l' || k === 'L') setTool('line'); else if (k === 'i' || k === 'I') setTool('img');
+  else if (k === 'Delete' && S.ds && S.sel.pt.size) { e.preventDefault(); deleteSelectedPoints(); }
+  else if (k === 'a' || k === 'A') setTool('addpt'); else if (k === 'v' || k === 'V') setTool('select'); else if (k === 'h' || k === 'H') setTool('pan'); else if (k === 'm' || k === 'M') setTool('layer'); else if (k === 'l' || k === 'L') setTool('line'); else if (k === 'i' || k === 'I') setTool('img');
   else if (k === '1') toggleFilter('pt'); else if (k === '2') toggleFilter('edge'); else if (k === '3') toggleFilter('par');
   else if (k.startsWith('Arrow') && S.tool === 'img' && imgActive()) {
     e.preventDefault(); const st = parseFloat($('step').value) * (e.shiftKey ? 10 : 1);
@@ -628,16 +780,39 @@ addEventListener('keyup', e => { if (e.key === ' ') S.space = false; });
 function setTool(t) {
   S.tool = t; if (t !== 'line' && S.draft) { S.draft = null; } if (t !== 'line' && t !== 'img' && !S.align) setHint('');
   document.querySelectorAll('#tools button').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
-  cv.style.cursor = t === 'pan' ? 'grab' : t === 'layer' || t === 'img' ? 'move' : t === 'line' ? 'crosshair' : 'default';
-  if (t === 'img') setHint('移影像：拖曳作用中影像平移（點選哪張就以哪張為作用中），或用方向鍵微調（步距同「處理」）；即時坐標顯示在底部與「處理」分頁');
+  cv.style.cursor = t === 'pan' ? 'grab' : t === 'layer' || t === 'img' ? 'move' : t === 'line' || t === 'addpt' ? 'crosshair' : 'default';
+  if (t === 'addpt') setHint('加點工具：在界址線上點一下加點（共用此線的宗地一併插入）；Shift＋點空白處＝孤立點。按 V 回到選取');
+  if (t === 'img') setHint('移影像：拖曳作用中影像平移（點選哪張就以哪張為作用中），或用方向鍵微調（步距見「移動／旋轉」面板）；即時坐標顯示在底部與「處理」分頁');
   if (t === 'line') setHint('連線工具：依序點選現況點（Enter 完成、點回第一點閉合、Backspace 退一點、Esc 取消）'); refresh();
 }
 function toggleFilter(f) { S.filter[f] = !S.filter[f]; document.querySelector(`#filters [data-f=${f}]`).classList.toggle('on', S.filter[f]); }
 document.querySelectorAll('#tools button').forEach(b => b.onclick = () => setTool(b.dataset.tool));
 document.querySelectorAll('#filters button').forEach(b => b.onclick = () => toggleFilter(b.dataset.f));
-$('btnUndo').onclick = undo; $('btnRedo').onclick = redo; $('btnReset').onclick = () => confirm('確定還原所有移動？') && resetAll();
-$('btnFit').onclick = () => fit(); $('btnHelp').onclick = () => $('help').showModal();
-$('chkRef').onchange = $('chkLabel').onchange = $('chkDelta').onchange = $('deltaMode').onchange = draw;
+$('btnUndo').onclick = undo; $('btnRedo').onclick = redo; $('btnFit').onclick = () => fit();
+const actDis = (n, v) => document.querySelectorAll(`[data-act="${n}"]`).forEach(b => { b.disabled = v; });
+// ── 功能列表與浮動面板 ──
+function openPanel(id) {
+  document.querySelectorAll('dialog.fp[open]').forEach(d => { if (d.id !== id) d.close(); });
+  const d = $(id); if (!d.open) d.show();
+  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); refresh();
+}
+function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
+const ACTS = {
+  open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
+  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), move: () => openPanel('dlgMove'),
+  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
+  help: () => $('help').showModal(),
+};
+document.addEventListener('click', e => {
+  const mb = e.target.closest('.mbtn'); document.querySelectorAll('.menu.open').forEach(m => { if (!mb || m !== mb.parentElement) m.classList.remove('open'); });
+  if (mb) { mb.parentElement.classList.toggle('open'); return; }
+  const a = e.target.closest('[data-act]'); if (a && !a.disabled && ACTS[a.dataset.act]) ACTS[a.dataset.act]();
+  const c = e.target.closest('[data-close]'); if (c) c.closest('dialog').close();
+});
+document.querySelectorAll('.menu').forEach(m => m.addEventListener('mouseenter', () => { if (document.querySelector('.menu.open') && !m.classList.contains('open')) { document.querySelectorAll('.menu.open').forEach(x => x.classList.remove('open')); m.classList.add('open'); } }));
+$('btnSide').onclick = toggleSidebar;
+try { if (localStorage.getItem('cw.sidebar') === '0') document.querySelector('main').classList.add('nosb'); } catch (e) { /* ignore */ }
+$('deltaMode').onchange = draw;
 document.querySelectorAll('input[name=scope]').forEach(r => r.onchange = refresh); $('tol').oninput = refresh;
 $('btnMove').onclick = () => { if (!moveSelection(parseFloat($('dN').value) || 0, parseFloat($('dE').value) || 0, '數值移動')) msg('請先選取要素，或切到「移圖」工具'); };
 const rotAngle = () => { const v = Core.parseAngle($('rotDeg').value, 'auto'); return Number.isNaN(v) ? null : v; };
@@ -659,8 +834,35 @@ function download(name, data, type = 'application/octet-stream') {
 }
 $('btnExpD14').onclick = () => {
   const r = Core.exportD14(S.dbf.pts, S.ds); download(S.names.d14 || 'out.D14', r.bytes);
-  msg(`已輸出 ${S.names.d14}：只改動 ${r.changed} 個點的坐標。覆蓋原檔前請先備份案件資料夾。`);
+  const st = S.st || {};
+  msg(`已輸出 ${S.names.d14}：改動 ${r.changed} 個點的坐標` + (r.added ? `、檔尾附加 ${r.added} 個新增點` : '') + (r.orphans ? `；${r.orphans} 個已刪除的點仍留在檔內（不從 D14 移除記錄，避免索引不一致）` : '') + '。' + (st.added || st.removed || st.rings ? '有增刪界址點，請一併輸出 D13。' : '') + '覆蓋原檔前請先備份案件資料夾。');
 };
+// ── 宗地關係偵錯報表 .ERR（仿 NECEXE；Big5、CRLF）──
+let big5Map = null;
+function big5Bytes(text) {   // TextEncoder 只會 UTF-8：用 TextDecoder('big5') 反推出字元 → 雙位元組對照表
+  if (!big5Map) {
+    big5Map = new Map(); const dec = new TextDecoder('big5');
+    for (let a = 0xa1; a <= 0xf9; a++) for (let b = 0x40; b <= 0xfe; b++) { if (b > 0x7e && b < 0xa1) continue; const ch = dec.decode(Uint8Array.of(a, b)); if (ch.length === 1 && ch !== '�' && !big5Map.has(ch)) big5Map.set(ch, [a, b]); }
+  }
+  const out = []; for (const ch of text) { const c = ch.codePointAt(0); if (c < 128) out.push(c); else { const q = big5Map.get(ch); if (q) out.push(q[0], q[1]); else out.push(0x3f); } }
+  return Uint8Array.from(out);
+}
+const caseBase = () => (S.names.d14 || S.names.coa || (S.ds && S.ds.name) || 'case').replace(/\.\w+$/, '');
+function errReportText() {
+  let pts = null;
+  if (S.dbf.pts) { const rows = S.dbf.pts.rows.filter(r => !r._deleted && r.COT_NUMBER != null); pts = { confirmed: rows.filter(r => r.COT_REF === 0 && r.COT_Y && r.COT_X).length, refs: rows.filter(r => r.COT_REF !== 0 && r.COT_REF != null).length }; }
+  return Core.errReport(S.ds, { name: caseBase(), date: new Date(), pts });
+}
+$('btnErr').onclick = () => {
+  if (!S.ds) return msg('請先載入圖資');
+  const txt = errReportText(), bytes = big5Bytes(txt.replace(/\n/g, '\r\n')); download(caseBase() + '.ERR', bytes, 'text/plain');
+  msg(`已產出 ${caseBase()}.ERR（Big5、CRLF；${txt.split('\n').length} 行）。NECEXE 讀的欄位（調查情形、界址查註、坐標來源）本程式未讀取，報表內已註明略過`);
+};
+$('btnExpD13').onclick = () => {
+  const r = Core.exportD13(S.dbf.bnd, S.ds); download(S.names.d13 || 'out.D13', r.bytes);
+  msg(`已輸出 ${S.names.d13 || 'D13'}：改寫 ${r.parcels} 宗地的界址串（${r.rewritten} 筆記錄，檔尾附加 ${r.appended} 筆）。請與 D14 一併取代原檔；尚未用 NECEXE 驗證匯入，請先備份案件資料夾`);
+};
+
 $('btnExpJson').onclick = () => download((S.names.d14 || 'session').replace(/\.\w+$/, '') + '.adjust.json', JSON.stringify(Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })) }, S.survey), null, 2), 'application/json');
 
 // ── 載入檔案 ───────────────────────────────────────────────────────────────
@@ -689,16 +891,16 @@ async function loadFiles(files) {
   const DL = async (cp, cl, extra = {}) => Core.datasetFromLines({ pts: Core.parseDbf(await readBuf(cp)), lin: Core.parseDbf(await readBuf(cl)), ...extra });
   if (has('d14', 'd13')) {
     const par = by.d11 ? Core.parseDbf(await readBuf(by.d11)) : null, d12 = by.d12 ? Core.parseDbf(await readBuf(by.d12)) : null;
-    ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d14));
+    ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d14)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d13));
     names.d14 = by.d14.name; names.d13 = by.d13.name; if (by.d11) names.d11 = by.d11.name; if (by.d12) names.d12 = by.d12.name;
     if (has('d2c', 'd2d')) { ref = await DL(by.d2c, by.d2d, { name: 'old', source: 'D2C/D2D 舊圖線' }); names.d2c = by.d2c.name; names.d2d = by.d2d.name; }
     else if (has('d2c', 'd2b')) { ref = await DS(by.d2c, by.d2b, { name: 'old', source: 'D2C/D2B 舊圖' }); names.d2c = by.d2c.name; names.d2b = by.d2b.name; }
   } else if (has('coa', 'bnp')) {
-    ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null;
+    ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null; S.dbf.bnd = null;
     names.coa = by.coa.name; names.bnp = by.bnp.name; if (by.par) names.par = by.par.name;
   } else if (has('d2c', 'd2b')) {
-    ds = await DS(by.d2c, by.d2b, { name: by.d2c.name, source: 'D2C/D2B 舊圖' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d2c));
-    names.d14 = by.d2c.name; names.d2c = by.d2c.name; names.d2b = by.d2b.name;
+    ds = await DS(by.d2c, by.d2b, { name: by.d2c.name, source: 'D2C/D2B 舊圖' }); S.dbf.pts = Core.parseDbf(await readBuf(by.d2c)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d2b));
+    names.d14 = by.d2c.name; names.d13 = by.d2b.name; names.d2c = by.d2c.name; names.d2b = by.d2b.name;
   }
   if (imgs.length) await loadImages(imgs);
   if (!ds) {
@@ -708,7 +910,7 @@ async function loadFiles(files) {
     if (ctlMsg) return true;
     msg('缺少必要檔案：需要 D14+D13，或 COA+BNP，或 D2C+D2B；控制點用 CTL/CT2/D20；現況點請用「匯入現況點」'); return false;
   }
-  S.seam = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
+  S.seam = null; S.clean = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
   fit(); refresh();
   msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
   return true;
@@ -768,7 +970,7 @@ async function loadImages(files) {
   }
   if (added.length && !many) { const a = imgActive(); if (a) fit(imgBox(a)); }
   refresh();
-  msg(added.length ? (many ? `已登記 ${added.length} 張影像（預設不顯示）：到「處理」分頁的「影像圖層」勾選要顯示的` : `已載入影像：${added.join('、')}`) + (skipped.length ? `；略過 ${skipped.join('、')}` : '') : '沒有可載入的影像' + (skipped.length ? `：${skipped.join('、')}` : '（需要 JPG／PNG，建議附同名 JGW／PGW）'));
+  msg(added.length ? (many ? `已登記 ${added.length} 張影像（預設不顯示）：到「檢視→影像圖層」勾選要顯示的` : `已載入影像：${added.join('、')}`) + (skipped.length ? `；略過 ${skipped.join('、')}` : '') : '沒有可載入的影像' + (skipped.length ? `：${skipped.join('、')}` : '（需要 JPG／PNG，建議附同名 JGW／PGW）'));
   return { added, skipped };
 }
 // 影像 above=false 畫在向量圖之下、true 畫在向量圖之上；陣列後面的在上層
@@ -820,7 +1022,7 @@ function imgPanel() {
       `<div class="row small" style="margin-top:4px"><span class="muted">透明度</span><input type="range" min="0.05" max="1" step="0.05" value="${im.opacity}" data-i="${i}" data-k="opacity" style="width:90px"><span class="muted" data-pct="${i}">${Math.round(im.opacity * 100)}%</span>` +
       `<select data-i="${i}" data-k="above" title="疊在向量圖之下或之上"><option value="0"${im.above ? '' : ' selected'}>向量之下</option><option value="1"${im.above ? ' selected' : ''}>向量之上</option></select>` +
       `<label class="chk" title="作用中：移影像工具與下方平移對位的對象"><input type="radio" name="imgAct" data-i="${i}" data-k="active"${i === S.imgActive ? ' checked' : ''}>作用中</label></div></div>`); }
-  $('imgList').innerHTML = S.img.length ? (rows.join('') || '<span class="muted">沒有符合的影像</span>') : '<span class="muted">尚未載入影像 — 到「輸入」分頁載入</span>';
+  $('imgList').innerHTML = S.img.length ? (rows.join('') || '<span class="muted">沒有符合的影像</span>') : '<span class="muted">尚未載入影像 — 到「檔案→資料來源與匯入」載入</span>';
   $('btnImgTool').classList.toggle('primary', S.tool === 'img');
   $('imgActiveSel').innerHTML = S.img.map((im, i) => `<option value="${i}"${i === S.imgActive ? ' selected' : ''}>${esc(im.name)}</option>`).join('');
   $('imgActiveSel').disabled = !S.img.length; $('btnImgMove').disabled = $('btnImgReset').disabled = !act;
@@ -830,7 +1032,7 @@ function imgPanel() {
 }
 $('btnImgAdd').onclick = () => $('imgIn').click(); $('imgIn').onchange = e => { loadImages([...e.target.files]); e.target.value = ''; };
 $('btnImgFit').onclick = () => { const a = imgActive(); if (a) fit(imgBox(a)); };
-$('btnImgManage').onclick = () => setTab('proc');
+$('btnImgManage').onclick = () => openPanel('dlgImg');
 $('btnImgTool').onclick = () => setTool(S.tool === 'img' ? 'select' : 'img');
 $('imgActiveSel').onchange = e => { S.imgActive = +e.target.value; refresh(); };
 $('btnImgMove').onclick = () => { const a = imgActive(); if (a) moveImage(a, parseFloat($('imgDN').value) || 0, parseFloat($('imgDE').value) || 0); };
@@ -846,31 +1048,23 @@ $('imgList').addEventListener('click', e => { const b = e.target.closest('button
   if (b.dataset.k === 'up') moveImgLayer(im, 'up'); else if (b.dataset.k === 'down') moveImgLayer(im, 'down'); else if (b.dataset.k === 'fit') fit(imgBox(im)); else if (b.dataset.k === 'del') removeImage(im); });
 $('imgOut').addEventListener('click', e => { if (!e.target.classList.contains('imgjgw')) return; const im = S.img[+e.target.dataset.i]; download(im.name.replace(/\.\w+$/, '') + '.jgw', Core.worldFileText(im.wf), 'text/plain'); });
 
-// ── 分頁：輸入／處理／輸出 ───────────────────────────────────────────────────
-function setTab(k) {
-  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === k));
-  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === 'pane-' + k));
-  try { localStorage.setItem('cw.tab', k); } catch (e) { /* ignore */ }
-}
-document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => setTab(b.dataset.tab); });
-try { const k = localStorage.getItem('cw.tab'); if (k && document.getElementById('pane-' + k)) setTab(k); } catch (e) { /* ignore */ }
-$('btnGoOut').onclick = () => setTab('out');
-// 輸出分頁的摘要：說明目前有什麼可輸出、為何輸出鈕是灰的
+$('btnGoOut').onclick = () => openPanel('dlgOut');
+// 輸出面板的摘要：說明目前有什麼可輸出、為何輸出鈕是灰的
 function outPanel() {
-  const ds = S.ds, moved = ds ? Core.movedPoints(ds).length : 0, changed = ds ? ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0;
-  $('btnExpMoved').disabled = !moved; $('btnGoOut').hidden = !moved;
+  const ds = S.ds, moved = ds ? Core.movedPoints(ds).length : 0, changed = ds ? ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0, st = S.st || { added: 0, removed: 0, rings: 0 }, sEd = st.added + st.removed + st.rings;
+  $('btnExpMoved').disabled = !moved; $('btnGoOut').hidden = !(moved || sEd);
   let h = '', hint = '';
   if (!ds) h = '<span class="muted">尚未載入主要測區。</span>';
   else {
-    h = `已移動 <b>${moved}</b> 個界址點，面積變動 <b>${changed}</b> 宗地號。`;
-    if (!moved) {
+    h = `已移動 <b>${moved}</b> 個界址點，面積變動 <b>${changed}</b> 宗地號。` + (sEd ? `<br>界址點新增 <b>${st.added}</b>、刪除 <b>${st.removed}</b>，<b>${st.rings}</b> 宗地的界址串改變。` : '');
+    if (!moved && !sEd) {
       const j = S.seam && S.seam.join;
-      hint = '目前沒有異動點，所以輸出鈕是灰色。先在「處理」移動點，或按「自動接合」。';
+      hint = '目前沒有異動點，所以輸出鈕是灰色。先移動點、增刪界址點，或按「自動接合」。';
       if (j) {
         const un = j.unresolved, beyond = un.filter(u => u.reason === 'beyond_snap').length, conf = un.filter(u => u.reason === 'conflict').length;
         hint = '上次自動接合沒有移動任何點：' + [j.skipped.length ? `未勾選「以鄰段為準」的鄰段：${j.skipped.join('、')}` : '', beyond ? `${beyond} 點超出吸附上限（可到「處理」調高「吸附」）` : '', conf ? `${conf} 點與別點搶同一鄰段點` : ''].filter(Boolean).join('；') + '。';
       }
-    } else if (S.dbf.pts) hint = '「輸出 D14」：取代案件資料夾內原 D14 後，在 NECEXE 重開並重算面積（尚未實際匯入 NECEXE 驗證）。D13／D11 不變。';
+    } else if (S.dbf.pts) hint = sEd ? '有新增／刪除界址點：D14 與 D13（界址串）都要輸出並一起取代原檔，再在 NECEXE 重開並重算面積。新增點附加在 D14 檔尾、D13 改寫受影響宗地的記錄——兩者尚未實際匯入 NECEXE 驗證，請先備份。' : '「輸出 D14」：取代案件資料夾內原 D14 後，在 NECEXE 重開並重算面積（尚未實際匯入 NECEXE 驗證）。D13／D11 不變。';
     else hint = '主要測區不是由 D14 載入（COA／BNP），無法輸出 D14；請用「異動點位 CSV」或「輸出 JSON」。';
   }
   $('outSummary').innerHTML = h; $('outHint').textContent = hint;
@@ -951,7 +1145,7 @@ function drawNeighbor(n) {
   ctx.restore();
   if (sc > 3) { ctx.fillStyle = col; const r = sc > 8 ? 2.5 : 1.8; for (let i = 0; i < c.bv.length; i += 2) { if (c.bv[i] < vx0 || c.bv[i] > vx1 || c.bv[i + 1] < vy0 || c.bv[i + 1] > vy1) continue; ctx.fillRect(toSx(c.ox + c.bv[i]) - r, toSy(c.oy + c.bv[i + 1]) - r, r * 2, r * 2); } }
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  if (sc > 2 && $('chkLabel').checked) { ctx.font = `${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.fillStyle = col; let k = 0; for (const l of c.labels) { if (l.x < vx0 || l.x > vx1 || l.y < vy0 || l.y > vy1) continue; ctx.fillText(l.t, toSx(c.ox + l.x), toSy(c.oy + l.y)); if (++k > 800) break; } }
+  if (sc > 2 && S.style.label.show) { ctx.font = `${Math.min(14, Math.max(9, sc * 1.4))}px sans-serif`; ctx.fillStyle = col; let k = 0; for (const l of c.labels) { if (l.x < vx0 || l.x > vx1 || l.y < vy0 || l.y > vy1) continue; ctx.fillText(l.t, toSx(c.ox + l.x), toSy(c.oy + l.y)); if (++k > 800) break; } }
   ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = col; ctx.fillText(n.name, toSx(c.ox + c.cx), toSy(c.oy + c.cy));
 }
 function drawSeam() {
@@ -1147,7 +1341,7 @@ function drawPrintFrame(o, plan) {
   ctx.font = '11px sans-serif'; let lx = mx, ly = ty + 34;
   const item = (label, drawIcon) => { drawIcon(lx, ly + 6); ctx.fillStyle = ink; ctx.textBaseline = 'middle'; ctx.fillText(label, lx + 26, ly + 6); ctx.textBaseline = 'top'; lx += 26 + ctx.measureText(label).width + 12; };
   item('新圖', (x, y) => { ctx.strokeStyle = '#1d2330'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke(); });
-  if (S.ref && $('chkRef').checked) item('舊圖', (x, y) => { ctx.strokeStyle = '#8a93a6'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke(); ctx.setLineDash([]); });
+  if (S.ref && S.style.ref.show) item('舊圖', (x, y) => { ctx.strokeStyle = '#8a93a6'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20, y); ctx.stroke(); ctx.setLineDash([]); });
   if (changed) item('面積變動', (x, y) => { ctx.fillStyle = 'rgba(255,160,0,.45)'; ctx.fillRect(x, y - 5, 20, 10); });
   ly += 18; lx = mx;
   if (S.survey.points.size) item('現況點', (x, y) => { ctx.fillStyle = '#c2188e'; ctx.beginPath(); ctx.moveTo(x + 10, y - 5); ctx.lineTo(x + 15, y); ctx.lineTo(x + 10, y + 5); ctx.lineTo(x + 5, y); ctx.closePath(); ctx.fill(); });
@@ -1212,7 +1406,7 @@ function renderTimeline() {
   }).join('') : '<li style="display:block;text-align:center;padding:48px;color:var(--muted)">沒有符合的更新紀錄</li>';
 }
 function renderUpdate() {
-  const u = S.update, b = $('btnVer'); b.textContent = APP_VERSION + (u ? ' ↑' : ''); b.classList.toggle('primary', !!u); b.title = u ? `有新版本 ${u.tag}` : '版本歷程與更新';
+  const u = S.update, b = document.querySelector('[data-act="ver"]'); b.textContent = '版本歷程與更新　' + APP_VERSION + (u ? `　↑ 有新版 ${u.tag}` : '');
   const ban = $('updBanner'); ban.hidden = !u; if (!u) return;
   ban.innerHTML = `<b>有新版本 ${esc(u.tag)}</b>${u.name ? '：' + esc(u.name) : ''}　<button class="btn primary" id="btnApplyUpd">立即更新</button> <a href="${esc(u.url)}" target="_blank" rel="noopener">發行頁面</a>` +
     (u.body ? `<div class="notes">${esc(u.body.split('---')[0].split(NL).map(l => l.replace(/^#+\s*/, '')).join(NL).trim())}</div>` : '') + `<div class="muted small" style="margin-top:4px">更新會以新版覆寫你選取的檔案（Chrome／Edge）或下載新檔；請先輸出 D14／JSON，重新開啟後才生效。</div>`;
@@ -1241,7 +1435,7 @@ async function applyUpdate() {
   } catch (e) { if (e && e.name === 'AbortError') return; msg('更新失敗：' + (e.message || e)); }
 }
 const autoUpdOn = () => { try { return localStorage.getItem('cw.autoUpdate') !== '0'; } catch (e) { return true; } };
-$('btnVer').onclick = () => { $('chkAutoUpd').checked = autoUpdOn(); renderTimeline(); renderUpdate(); $('verDlg').showModal(); };
+ACTS.ver = () => { $('chkAutoUpd').checked = autoUpdOn(); renderTimeline(); renderUpdate(); $('verDlg').showModal(); };
 $('verClose').onclick = e => { e.preventDefault(); $('verDlg').close(); };
 $('verQ').oninput = () => { verState.q = $('verQ').value; renderTimeline(); };
 $('verTypes').onclick = e => { const t = e.target.dataset && e.target.dataset.t; if (!t) return; verState.type = t; document.querySelectorAll('#verTypes button').forEach(b => b.classList.toggle('on', b.dataset.t === t)); renderTimeline(); };
@@ -1320,6 +1514,17 @@ const api = {
   },
   removeImage: ({ name }) => { const im = S.img.find(q => q.name.toLowerCase() === String(name).toLowerCase()); if (!im) throw new Error('找不到影像 ' + name); removeImage(im); return api.listImages(); },
   exportWorldFile: ({ name }) => { const im = S.img.find(q => q.name.toLowerCase() === String(name).toLowerCase()); if (!im) throw new Error('找不到影像 ' + name); return Core.worldFileText(im.wf); },
+  // ── 界址點編修：addPoint（edge=[a,b] 加在該線並同步插入所有鄰接宗地；省略 edge＝孤立點）、deletePoints、cleanupPoints（preview 只算不改）──
+  addPoint: ({ edge = null, y, x, project = true } = {}) => { const r = addPoint({ edge, y, x, project }); refresh(); return r; },
+  deletePoints: ({ ids = [] } = {}) => { const r = deletePoints(ids); refresh(); return r; },
+  cleanupPoints: ({ preview = false, unused = true, collinear = true, ratio_permille = 1, max_abs_m = 0.05 } = {}) => {
+    if (!S.ds) throw new Error('尚未載入圖資'); const o = { unused, collinear, ratio: ratio_permille / 1000, maxAbs: max_abs_m }, r = Core.cleanupPoints(S.ds, o);
+    if (preview) Core.applyDelta(S.ds, r.delta, 'undo'); else if (r.unused.length || r.collinear.length) { pushStruct(r.delta, '清理多餘點'); pruneSel(); } else Core.applyDelta(S.ds, r.delta, 'undo');
+    refresh(); return { preview, unused: r.unused, collinear: r.collinear, skipped: r.skipped };
+  },
+  exportErrReport: () => { if (!S.ds) throw new Error('尚未載入圖資'); return errReportText(); },
+  exportD13: () => { if (!S.dbf.bnd) throw new Error('主要測區不是由 D13 載入'); const r = Core.exportD13(S.dbf.bnd, S.ds); let bin = ''; for (let i = 0; i < r.bytes.length; i += 8192) bin += String.fromCharCode.apply(null, r.bytes.subarray(i, i + 8192)); return { name: S.names.d13, base64: btoa(bin), parcels: r.parcels, rewritten: r.rewritten, appended: r.appended }; },
+  getStyle: () => cloneStyle(S.style), setStyle: (patch = {}) => { for (const k of Object.keys(patch)) if (S.style[k]) Object.assign(S.style[k], patch[k]); saveStyle(); draw(); return cloneStyle(S.style); },
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
   exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
 };
