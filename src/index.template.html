@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>地籍圖重測工作台</title>
+<title>地籍圖重測工作站</title>
 <style>
 :root{--bg:#f4f5f7;--panel:#fff;--ink:#1d2330;--muted:#69718a;--line:#d9dde6;--accent:#1f6feb;--accent-ink:#fff;
   --canvas:#fbfcfd;--edge:#2b3445;--ref:#9aa3b5;--sel:#1f6feb;--hover:#00a3a3;--changed:rgba(255,160,0,.22);--bad:#d1242f;--ok:#1a7f37;--survey:#c2188e}
@@ -40,6 +40,7 @@ select{border:1px solid var(--line);background:var(--bg);color:var(--ink);border
 label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
 table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
 th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+#ringList td,#ringList th{text-align:left;vertical-align:top}#ringList td:nth-child(3){white-space:normal;min-width:220px}
 th:first-child,td:first-child{text-align:left} th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
 tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-child{box-shadow:inset 3px 0 var(--sel)}
 .pos{color:var(--ok)} .neg{color:var(--bad)} .warn{background:rgba(209,36,47,.12)}
@@ -104,7 +105,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <div id="printArea"></div>
 <div id="app">
 <header>
-  <h1>地籍圖重測工作台</h1>
+  <h1>地籍圖重測工作站</h1>
   <input type="file" id="fileIn" multiple hidden>
   <input type="file" id="dirIn" webkitdirectory hidden>
   <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden>
@@ -115,7 +116,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <button data-act="out">輸出成果…<small>D14／D13／CSV</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
       <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
-      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><hr>
+      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><hr>
       <button data-act="move">移動／旋轉／對位…</button></div></div>
     <div class="menu"><button class="mbtn">檢視</button><div class="mlist">
       <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
@@ -220,7 +221,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     </div></dialog>
 <dialog class="fp" id="dlgOut"><div class="fphead"><b>輸出成果</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>調整成果</h2>
       <div id="outSummary" class="small" style="margin-bottom:8px"></div>
-      <div class="row"><button class="btn primary" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpD13" disabled title="新增／刪除界址點後，宗地界址串（D13）需同步輸出；尚未用 NECEXE 驗證匯入">輸出 D13</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div>
+      <div class="row"><button class="btn primary" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpD13" disabled title="新增／刪除界址點後，宗地界址串（D13）需同步輸出；尚未用 NECEXE 驗證匯入">輸出 D13</button><button class="btn" id="btnExpD12" disabled title="拆出或設定地中地後輸出；需案件已載入 D12；尚未用 NECEXE 驗證匯入">輸出 D12</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div>
       <div id="outHint" class="small muted" style="margin-top:6px"></div></section>
     <section><h2>宗地關係偵錯報表（.ERR）</h2>
       <div class="row"><button class="btn primary" id="btnErr" title="仿 NECEXE 的重測成果檢核報表，Big5 編碼、CRLF 換行">一鍵產出 .ERR</button></div>
@@ -250,6 +251,13 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="row small"><button class="btn" id="btnPtDel">刪除所選界址點（Del）</button><button class="btn" id="btnOpenClean">一鍵清理多餘點…</button></div>
   <div class="small muted" style="margin-top:4px">刪除會同時從所有含該點的宗地環移除；環不能少於 3 點，圓弧的弧端與中點不能刪。可復原。</div>
   <div id="ptEditInfo" class="small" style="margin-top:6px"></div></section></div></dialog>
+<dialog class="fp" id="dlgRing"><div class="fphead"><b>界址串檢查與編修</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
+  <div class="small muted">檢查每宗的界址串：<b>內含別宗整圈</b>（地中地被寫進外圈界址串，圖上多出跳線或細縫）、<b>自我接觸</b>（重複經過同一點）、<b>自我交錯</b>、<b>未設地中地</b>（別宗整個在環內，但 D12 沒有關係，面積沒扣）。</div>
+  <div class="row" style="margin-top:6px"><button class="btn" id="btnRingCheck">重新檢查</button><span id="ringSum" class="small"></span></div>
+  <div id="ringList" style="margin-top:6px;max-height:40vh;overflow:auto"></div></section>
+<section><h2>拆出地中地</h2><div class="small muted">把內圈的整圈與兩條跳線從外圈的界址串移除，並設定為地中地：外圈面積＝外圈 − 內圈。D12 已有關係時只改界址串。輸出 D13（有新增關係時再輸出 D12）。可復原。</div></section>
+<section><h2>重繪界址串</h2><div class="small muted">先選取一宗，再依序點選界址點（只能點既有的點），點回第一點或按 Enter 完成；Backspace 退一點、Esc 取消。圓弧中點只在前後鄰點不變時保留。</div>
+  <div class="row" style="margin-top:6px"><button class="btn" id="btnRedraw">重繪所選宗地</button></div></section></div></dialog>
 <dialog class="fp" id="dlgClean"><div class="fphead"><b>一鍵清理多餘界址點</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
   <label class="chk"><input type="checkbox" id="clUnused" checked><b>沒有宗地使用的界址點</b></label>
   <div class="small muted" style="margin:2px 0 8px 22px">不屬於任何宗地的點（只在點檔、沒出現在任何界址串）。</div>
