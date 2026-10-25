@@ -368,4 +368,29 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const r2 = Core.footsOnLine(ds, [3], 1, 2); assert.equal(r2.moved[0].out, false); const r3 = Core.footsOnLine(ds, [5], 3, 4); near(r3.entries[0][1], 2706100, 1e-9);
   assert.throws(() => Core.footsOnLine(ds, [5], 1, 1), /位置相同/);
 }
+// ── 刪除地中地併入外圈＋D11／D13／D21 輸出（仿 NECEXE：KC0336 刪 9012-5004 併入 76-17）──
+{
+  const F_D21 = ['LIN_TOP', 'LIN_MID', 'LIN_BOT'].map(name => ({ name, type: 'N', len: 5 })).concat(['L_SECTION', 'L_PARCEL', 'L_PARCEL_E', 'R_SECTION', 'R_PARCEL', 'R_PARCEL_E'].map(name => ({ name, type: 'N', len: 4 })), [{ name: 'LIN_MODE', type: 'N', len: 1 }, { name: 'R_EXAM', type: 'C', len: 20 }]);
+  const F_D11b = [...F_D11, { name: 'CENTER_Y', type: 'N', len: 12, dec: 3 }, { name: 'CENTER_X', type: 'N', len: 11, dec: 3 }, { name: 'LIMIT', type: 'N', len: 8, dec: 3 }];
+  const Y = 2700000, X = 200000, P = [[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0], [5, 40, 40], [6, 40, 50], [7, 50, 50]];
+  const pts = rd(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd = rd(F_D13, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [5, 6, 7])]), d12 = rd(F_D12, [{ O_SECTION: 1, O_PARCEL: 1, O_PARCEL_E: 0, I_SECTION: 1, I_PARCEL: 2, I_PARCEL_E: 0 }]);
+  const a11 = (m, ha) => ({ SECTION_O: 1, PAR_O_M: m, PAR_O_C: 0, PAR_N_M: m, PAR_N_C: 0, SECTION_N: 0, AREA_OLD: ha, AREA_NEW: ha, CENTER_Y: Y + 50, CENTER_X: X + 50, LIMIT: 1.5 });
+  const par = rd(F_D11b, [a11(1, 0.995), a11(2, 0.005)]);
+  const L = (t, b, l, r) => ({ LIN_TOP: t, LIN_MID: 0, LIN_BOT: b, L_SECTION: l ? 1 : 0, L_PARCEL: l, L_PARCEL_E: 0, R_SECTION: r ? 1 : 0, R_PARCEL: r, R_PARCEL_E: 0, LIN_MODE: 0, R_EXAM: '' });
+  const lin = rd(F_D21, [L(1, 2, 1, 0), L(2, 3, 1, 0), L(3, 4, 1, 0), L(4, 1, 1, 0), L(5, 6, 2, 1), L(6, 7, 2, 1), L(7, 5, 2, 1)]);
+  const ds = Core.datasetFromD({ pts, bnd, par, d12 }), dbf = { pts, bnd, par, d12, lin };
+  const u = Core.exportD21(lin, ds); assert.deepEqual([u.patched, u.cleared, u.added], [0, 0, 0], '未修改時 D21 與推得的一致');
+  near(ds.parcels[0].area, 9950, 1e-6); assert.throws(() => Core.deleteHoleParcel(ds, 0), /不是地中地/);
+  const r = Core.deleteHoleParcel(ds, 1); near(ds.parcels[0].area, 10000, 1e-6); assert.deepEqual(r.removedPoints, [5, 6, 7]); assert.equal(Core.structSummary(ds).deleted, 1);
+  const ch = Core.changedDFiles(ds, dbf); assert.deepEqual(Object.keys(ch.files).sort(), ['d11', 'd13', 'd21'], 'D12 照 NECEXE 保留');
+  const b13 = Core.parseDbf(ch.files.d13.bytes); assert.deepEqual([b13.rows[1].O_PARCEL, b13.rows[1].COORD_1], [0, 0], '刪除的宗地連地號鍵清成 0');
+  const b11 = Core.parseDbf(ch.files.d11.bytes); assert.deepEqual([b11.rows[1].AREA_NEW, b11.rows[1].CENTER_Y, b11.rows[1].LIMIT, b11.rows[1].AREA_OLD], [0, 0, 0, 0.005]);
+  const b21 = Core.parseDbf(ch.files.d21.bytes); assert.equal(b21.rows.filter(x => x.LIN_TOP).length, 4, '內圈的 3 條線清成 0');
+  const re = Core.datasetFromD({ pts, bnd: b13, par: b11, d12 }); assert.equal(re.parcels.length, 1); near(re.parcels[0].area, 10000, 1e-6); assert.equal(re.meta.noRing.length, 0, '已刪除的 D11 列不算無地號界址');
+  Core.applyDelta(ds, r.delta, 'undo'); near(ds.parcels[0].area, 9950, 1e-6); assert.ok(!ds.parcels[1].deleted && ds.points.has(5));
+  Core.applyDelta(ds, r.delta, 'redo'); Core.resetAll(ds); near(ds.parcels[0].area, 9950, 1e-6); assert.equal(ds.parcels[1].ids.length, 3);
+  // 新的界址線：在外圈加點 → D21 原線清成 0、附加兩條新線，左右地號正確
+  const ds2 = Core.datasetFromD({ pts, bnd, par, d12 }); Core.insertPoint(ds2, 1, 2, Y, X + 50); const v = Core.exportD21(lin, ds2), b = Core.parseDbf(v.bytes);
+  assert.deepEqual([v.cleared, v.added], [1, 2]); const nl = b.rows.slice(-2); assert.ok(nl.every(x => (x.LIN_TOP === 1 ? [x.L_PARCEL, x.R_PARCEL] : [x.R_PARCEL, x.L_PARCEL]).join() === '1,0'), '宗地在 1→8→2 的左側');
+}
 console.log('SYNTHETIC OK');

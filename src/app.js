@@ -666,6 +666,7 @@ function panel() {
   if (S.sel.pt.size === 1 && !S.sel.edge.size && !S.sel.par.size) { const p = ds.points.get([...S.sel.pt][0]); info += NL + `點 ${p.id}　N ${p.y.toFixed(3)}　E ${p.x.toFixed(3)}`; }
   if (S.sel.edge.size === 1 && !S.sel.pt.size && !S.sel.par.size) { const e = ds.edges.get([...S.sel.edge][0]), a = ds.points.get(e.a), b = ds.points.get(e.b); info += NL + `線 ${e.a}–${e.b}　長 ${Math.hypot(a.x - b.x, a.y - b.y).toFixed(3)} m`; }
   $('selInfo').innerHTML = info.split(NL).map(s => `<div>${s}</div>`).join('');
+  { const one = S.sel.par.size === 1 ? ds.parcels[[...S.sel.par][0]] : null; $('btnDelHole').hidden = !(one && !one.deleted && (one.containers || []).length); }
   $('pivotInfo').textContent = S.pivot ? `樞紐：N ${S.pivot.y.toFixed(3)}  E ${S.pivot.x.toFixed(3)}（自訂）` : '樞紐：移動對象的中心（Alt+點擊可自訂）';
   // 較差表
   const scope = document.querySelector('input[name=scope]:checked').value, tol = parseFloat($('tol').value) || 0;
@@ -677,7 +678,7 @@ function panel() {
   const cls = d => (Math.abs(d) > tol ? 'neg' : 'pos');
   $('tbody').innerHTML = rows.slice(0, 300).map(i => {
     const p = ds.parcels[i], d1 = p.area - p.areaOrig, d2 = p.areaReg == null ? null : p.area - p.areaReg;
-    return `<tr data-i="${i}" class="${S.sel.par.has(i) ? 'sel' : ''}${d2 != null && Math.abs(d2) > tol ? ' warn' : ''}"><td>${p.label}</td><td>${f2(p.areaReg)}</td><td>${f2(p.areaOrig)}</td><td>${f2(p.area)}</td>` +
+    return `<tr data-i="${i}" class="${S.sel.par.has(i) ? 'sel' : ''}${d2 != null && Math.abs(d2) > tol ? ' warn' : ''}"><td>${p.label}${p.deleted ? '（已刪除）' : ''}</td><td>${f2(p.areaReg)}</td><td>${f2(p.areaOrig)}</td><td>${f2(p.area)}</td>` +
       `<td class="${cls(d1)}">${sgn(d1)}</td><td class="${d2 == null ? '' : cls(d2)}">${d2 == null ? '—' : sgn(d2)}</td></tr>`;
   }).join('');
   const changed = ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6), tot = changed.reduce((s, p) => s + (p.area - p.areaOrig), 0);
@@ -753,6 +754,18 @@ function finishRedraw() {
   catch (err) { msg('無法完成：' + err.message); }
   if ($('dlgRing').open) ringPanel(); refresh();
 }
+// 刪除地中地、面積併入外圈（核心 Core.deleteHoleParcel；輸出時 D13／D11／D21 一併更新，D12 照 NECEXE 保留）
+function deleteHoleUI(pi) {
+  const ds = S.ds; if (!ds) return msg('請先載入圖資'); if (pi == null) { if (S.sel.par.size !== 1) return msg('請先選取一宗地中地'); pi = [...S.sel.par][0]; }
+  const h = ds.parcels[pi], outer = (h.containers || []).map(i => ds.parcels[i]);
+  if (!outer.length) return msg(`${h.label} 不是地中地（沒有外圈），目前只能刪除地中地並把面積併入外圈`);
+  if (!confirm(`刪除地中地 ${h.label}（${h.area.toFixed(2)} m²），面積併入 ${outer.map(o => o.label).join('、')}？\n只屬於它的界址點會一併刪除；可復原。`)) return;
+  try { const a0 = outer.map(o => o.area), r = Core.deleteHoleParcel(ds, pi); pushStruct(r.delta, `刪除地中地 ${h.label}`); clearSel(); outer.forEach(o => S.sel.par.add(o.idx));
+    msg(`已刪除地中地 ${h.label}，面積併入 ${outer.map((o, i) => `${o.label}（${a0[i].toFixed(2)} → ${o.area.toFixed(2)} m²）`).join('、')}` + (r.removedPoints.length ? `；刪除界址點 ${r.removedPoints.join('、')}` : '') + '。可復原；輸出完整案件資料夾時 D13、D11、D21 會一併更新');
+  } catch (err) { msg('無法刪除：' + err.message); }
+  if ($('dlgRing').open) ringPanel(); refresh();
+}
+$('btnDelHole').onclick = () => deleteHoleUI();
 $('btnRingCheck').onclick = ringPanel; $('btnRedraw').onclick = startRedraw;
 $('dlgRing').addEventListener('close', () => { S.ringMark = null; draw(); });
 
@@ -914,7 +927,7 @@ function openPanel(id) {
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
-  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), move: () => openPanel('dlgMove'),
+  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), delhole: () => deleteHoleUI(), move: () => openPanel('dlgMove'),
   fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
   help: () => $('help').showModal(),
 };
@@ -1052,7 +1065,7 @@ async function loadFiles(files) {
     if (IMG_RE.test(x) || WLD_RE.test(x)) { imgs.push(f); continue; }
     if (x === 'mac') { macs.push(f); continue; }
     if (/^(ctl|ct2|cen|l02)$/.test(x)) { ctlFiles.push(f); continue; }
-    if (!/^(d11|d12|d13|d14|d20|d2b|d2c|d2d|coa|bnp|par)$/.test(x)) continue; if (by[x]) dup.push(f.name); else by[x] = f;
+    if (!/^(d11|d12|d13|d14|d20|d21|d2b|d2c|d2d|coa|bnp|par)$/.test(x)) continue; if (by[x]) dup.push(f.name); else by[x] = f;
   }
   // 控制點／補點：CTL、CT2、CEN、L02、D20 —— 可在圖資之前或之後匯入
   let ctlMsg = '';
@@ -1066,15 +1079,15 @@ async function loadFiles(files) {
   const DL = async (cp, cl, extra = {}) => Core.datasetFromLines({ pts: Core.parseDbf(await readBuf(cp)), lin: Core.parseDbf(await readBuf(cl)), ...extra });
   if (has('d14', 'd13')) {
     const par = by.d11 ? Core.parseDbf(await readBuf(by.d11)) : null, d12 = by.d12 ? Core.parseDbf(await readBuf(by.d12)) : null;
-    ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.d12 = d12; S.dbf.pts = Core.parseDbf(await readBuf(by.d14)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d13));
+    ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.d12 = d12; S.dbf.par = par; S.dbf.lin = by.d21 ? Core.parseDbf(await readBuf(by.d21)) : null; if (by.d21) names.d21 = by.d21.name; S.dbf.pts = Core.parseDbf(await readBuf(by.d14)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d13));
     names.d14 = by.d14.name; names.d13 = by.d13.name; if (by.d11) names.d11 = by.d11.name; if (by.d12) names.d12 = by.d12.name;
     if (has('d2c', 'd2d')) { ref = await DL(by.d2c, by.d2d, { name: 'old', source: 'D2C/D2D 舊圖線' }); names.d2c = by.d2c.name; names.d2d = by.d2d.name; }
     else if (has('d2c', 'd2b')) { ref = await DS(by.d2c, by.d2b, { name: 'old', source: 'D2C/D2B 舊圖' }); names.d2c = by.d2c.name; names.d2b = by.d2b.name; }
   } else if (has('coa', 'bnp')) {
-    ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null; S.dbf.bnd = null; S.dbf.d12 = null;
+    ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null; S.dbf.bnd = null; S.dbf.d12 = null; S.dbf.par = null; S.dbf.lin = null;
     names.coa = by.coa.name; names.bnp = by.bnp.name; if (by.par) names.par = by.par.name;
   } else if (has('d2c', 'd2b')) {
-    ds = await DS(by.d2c, by.d2b, { name: by.d2c.name, source: 'D2C/D2B 舊圖' }); S.dbf.d12 = null; S.dbf.pts = Core.parseDbf(await readBuf(by.d2c)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d2b));
+    ds = await DS(by.d2c, by.d2b, { name: by.d2c.name, source: 'D2C/D2B 舊圖' }); S.dbf.d12 = null; S.dbf.par = null; S.dbf.lin = null; S.dbf.pts = Core.parseDbf(await readBuf(by.d2c)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d2b));
     names.d14 = by.d2c.name; names.d13 = by.d2b.name; names.d2c = by.d2c.name; names.d2b = by.d2b.name;
   }
   if (imgs.length) await loadImages(imgs);
@@ -1233,7 +1246,7 @@ $('imgOut').addEventListener('click', e => { if (!e.target.classList.contains('i
 $('btnGoOut').onclick = () => openPanel('dlgOut');
 // 輸出面板的摘要：說明目前有什麼可輸出、為何輸出鈕是灰的
 function outPanel() {
-  const ds = S.ds, moved = ds ? Core.movedPoints(ds).length : 0, changed = ds ? ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0, st = S.st || { added: 0, removed: 0, rings: 0, holes: 0 }, sEd = st.added + st.removed + st.rings + (st.holes || 0);
+  const ds = S.ds, moved = ds ? Core.movedPoints(ds).length : 0, changed = ds ? ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0, st = S.st || { added: 0, removed: 0, rings: 0, holes: 0, deleted: 0 }, sEd = st.added + st.removed + st.rings + (st.holes || 0) + (st.deleted || 0);
   $('btnExpMoved').disabled = !moved; $('btnGoOut').hidden = !(moved || sEd);
   let h = '', hint = '';
   if (!ds) h = '<span class="muted">尚未載入主要測區。</span>';
@@ -1710,6 +1723,7 @@ const api = {
   exportErrReport: () => { if (!S.ds) throw new Error('尚未載入圖資'); return errReportText(); },
   ringIssues: () => { if (!S.ds) throw new Error('尚未載入圖資'); return Core.ringIssues(S.ds).map(o => ({ kind: o.kind, parcel: S.ds.parcels[o.p].label, inner: o.h != null ? S.ds.parcels[o.h].label : null, text: Core.ringIssueLine(S.ds, o), jumps: o.jumps || null })); },
   splitHole: ({ outer, inner }) => { const f = l => { const p = S.ds.parcels.find(q => q.label === l || q.oldLabel === l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }; const pi = f(outer), r = Core.splitHole(S.ds, pi, f(inner)); pushStruct(r.delta, `拆出地中地 ${inner}`); return { area: S.ds.parcels[pi].area, jumps: r.jumps, linked: r.linked }; },
+  deleteHoleParcel: ({ parcel }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.deleteHoleParcel(S.ds, p.idx); pushStruct(r.delta, `刪除地中地 ${parcel}`); return { into: r.into, removedPoints: r.removedPoints }; },
   pointsToLine: ({ ids, a, b }) => { const r = pointsToLine(ids, a, b); return { moved: r.moved, skipped: r.skipped }; },
   setRing: ({ parcel, ids }) => { const p = S.ds.parcels.find(q => q.label === parcel || q.oldLabel === parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.setRing(S.ds, p.idx, ids); pushStruct(r.delta, `重繪界址串 ${parcel}`); return { area: p.area, points: p.ids.length }; },
   exportD13: () => { if (!S.dbf.bnd) throw new Error('主要測區不是由 D13 載入'); const r = Core.exportD13(S.dbf.bnd, S.ds); let bin = ''; for (let i = 0; i < r.bytes.length; i += 8192) bin += String.fromCharCode.apply(null, r.bytes.subarray(i, i + 8192)); return { name: S.names.d13, base64: btoa(bin), parcels: r.parcels, rewritten: r.rewritten, appended: r.appended }; },
