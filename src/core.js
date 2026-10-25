@@ -368,6 +368,19 @@ const Core = (() => {
     ds.points.set(id, np); d.added.push(np);
     return { id, delta: closeDelta(ds, d) };
   }
+  // 點移到直線 a–b 的垂足：回傳 {entries:[[id,y,x]], moved:[{id,d,out}], skipped:[{id,reason}]}（不修改資料，交給 setPoints）。out＝垂足在線段延長線上
+  function footsOnLine(ds, ids, a, b) {
+    const A = ds.points.get(a), B = ds.points.get(b); if (!A || !B) throw new Error('找不到線的端點');
+    const dx = B.x - A.x, dy = B.y - A.y, l2 = dx * dx + dy * dy; if (!l2) throw new Error(`${a} 與 ${b} 位置相同，無法定出直線`);
+    const entries = [], moved = [], skipped = [];
+    for (const id of ids) {
+      if (id === a || id === b) { skipped.push({ id, reason: '是線的端點' }); continue; }
+      const P = ds.points.get(id); if (!P) { skipped.push({ id, reason: '找不到此點' }); continue; }
+      const t = ((P.x - A.x) * dx + (P.y - A.y) * dy) / l2, x = A.x + t * dx, y = A.y + t * dy, d = Math.hypot(x - P.x, y - P.y);
+      entries.push([id, y, x]); moved.push({ id, d, out: t < 0 || t > 1 });
+    }
+    return { entries, moved, skipped };
+  }
   // 孤立點（不屬於任何宗地）：新增點位
   function addFreePoint(ds, y, x, id) {
     id = id != null ? id : nextPointId(ds); if (ds.points.has(id)) throw new Error(`點號 ${id} 已存在`);
@@ -1294,7 +1307,7 @@ const Core = (() => {
   }
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
-    buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
+    buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
