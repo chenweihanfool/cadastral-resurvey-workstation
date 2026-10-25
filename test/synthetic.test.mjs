@@ -359,4 +359,13 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   Core.movePoints(ds, [1], 1, 0); assert.deepEqual(Object.keys(Core.changedDFiles(ds, { pts, bnd, d12: null }).files), ['d14']);
   Core.setRing(ds, 0, [1, 2, 3]); assert.deepEqual(Object.keys(Core.changedDFiles(ds, { pts, bnd, d12: null }).files).sort(), ['d13', 'd14']);
 }
+// ── 點移到線上（垂足）──
+{
+  const pts = rd(F_D14, [pt(1, 2706000, 222000), pt(2, 2706000, 222100), pt(3, 2706100, 222100), pt(4, 2706100, 222000), pt(5, 2706003, 222050)]);
+  const ds = Core.datasetFromD({ pts, bnd: rd(F_D13, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [1, 5, 2, 6])]) });
+  const r = Core.footsOnLine(ds, [5, 1, 99], 1, 2); assert.deepEqual(r.skipped.map(q => q.id), [1, 99]); near(r.moved[0].d, 3, 1e-9); assert.equal(r.moved[0].out, false);
+  Core.setPoints(ds, r.entries); near(ds.points.get(5).y, 2706000, 1e-9); near(ds.points.get(5).x, 222050, 1e-9);
+  const r2 = Core.footsOnLine(ds, [3], 1, 2); assert.equal(r2.moved[0].out, false); const r3 = Core.footsOnLine(ds, [5], 3, 4); near(r3.entries[0][1], 2706100, 1e-9);
+  assert.throws(() => Core.footsOnLine(ds, [5], 1, 1), /位置相同/);
+}
 console.log('SYNTHETIC OK');

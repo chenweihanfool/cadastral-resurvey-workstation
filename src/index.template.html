@@ -116,7 +116,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
       <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
-      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><hr>
+      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="ptline">點移到線上…<small>垂足</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><hr>
       <button data-act="move">移動／旋轉／對位…</button></div></div>
     <div class="menu"><button class="mbtn">檢視</button><div class="mlist">
       <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
@@ -245,6 +245,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div id="ptInfo" class="small muted">尚未選取界址點（用「選取」工具點一個點）</div>
   <div class="row small" style="margin-top:6px"><label>北 N <input type="number" id="ptN" step="0.001" style="width:120px"></label><label>東 E <input type="number" id="ptE" step="0.001" style="width:110px"></label><button class="btn" id="btnPtSet">套用座標</button></div>
   <div class="small muted" style="margin-top:4px">修改座標＝移動該點；共用此點的宗地一起變動、面積即時更新。</div></section>
+<section><h2>點移到線上（垂足）</h2>
+  <div class="row small"><label>點號 <input type="text" id="plIds" placeholder="例 8536（可多個）" style="width:130px"></label><label>線 <input type="text" id="plA" placeholder="7157" style="width:64px"></label>–<input type="text" id="plB" placeholder="7158" style="width:64px"><button class="btn" id="btnPtLine">移到線上</button></div>
+  <div class="small muted" style="margin-top:4px">把點移到兩點連線的垂足（兩點不必是界址線，可以是任意兩個界址點）；共用此點的宗地一起變動、面積即時更新，可復原。先用「選取」工具點選要移的點，再 Shift＋點選一條界址線，欄位會自動帶入。</div></section>
 <section><h2>新增</h2>
   <div class="row small"><button class="btn" id="btnPtTool" title="切到「加點」工具 (A)">加點工具</button><span class="muted">在界址線上點一下＝在該線加點（所有以此線為界的宗地都會一併插入，面積不變）；Shift＋點空白處＝孤立點</span></div>
   <div class="row small" style="margin-top:8px"><label>北 N <input type="number" id="addN" step="0.001" style="width:120px"></label><label>東 E <input type="number" id="addE" step="0.001" style="width:110px"></label><button class="btn" id="btnPtAdd">依座標新增</button></div>

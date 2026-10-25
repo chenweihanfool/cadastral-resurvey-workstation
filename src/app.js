@@ -193,6 +193,22 @@ $('btnPtSet').onclick = () => {
   if (S.sel.pt.size !== 1) return msg('請先選取一個界址點'); const id = [...S.sel.pt][0], p = S.ds.points.get(id), y = parseFloat($('ptN').value), x = parseFloat($('ptE').value);
   if (!isFinite(y) || !isFinite(x)) return msg('座標格式不正確'); transformSelectionIds(new Set([id]), { dy: y - p.y, dx: x - p.x, angle: 0 }, '座標修改'); refresh();
 };
+// 點移到線上：把點移到直線 a–b 的垂足（a、b 為任意兩個界址點，不必是界址線）。共用此點的宗地一起變動，可復原
+const parseIds = t => String(t).split(/[\s,，、;；]+/).filter(Boolean).map(v => (S.ds.points.has(+v) ? +v : v));
+function pointsToLine(ids, a, b) {
+  const ds = S.ds; if (!ds) throw new Error('尚未載入圖資');
+  const A = ds.points.get(a), B = ds.points.get(b); if (!A || !B) throw new Error(`找不到界址點 ${!A ? a : b}`);
+  const r = Core.footsOnLine(ds, ids, a, b); if (!r.entries.length) throw new Error(r.skipped.length ? r.skipped.map(q => `${q.id}（${q.reason}）`).join('、') : '沒有要移動的點');
+  const before = snapshot(r.entries.map(e => e[0])); Core.setPoints(ds, r.entries); commit(before, snapshot(r.entries.map(e => e[0])), `點移到線 ${a}–${b}`); refresh();
+  return r;
+}
+$('btnPtLine').onclick = () => {
+  if (!S.ds) return msg('請先載入圖資');
+  const ids = parseIds($('plIds').value), a = parseIds($('plA').value)[0], b = parseIds($('plB').value)[0];
+  if (!ids.length || a == null || b == null) return msg('請輸入要移動的點號與線的兩端點號（或先選取點與一條界址線）');
+  try { const r = pointsToLine(ids, a, b); msg(`已把 ${r.moved.map(m => `${m.id}（移 ${m.d.toFixed(3)} m${m.out ? '，垂足在延長線上' : ''}）`).join('、')} 移到 ${a}–${b} 線上` + (r.skipped.length ? `；略過 ${r.skipped.map(q => `${q.id}（${q.reason}）`).join('、')}` : '') + '。可復原'); }
+  catch (err) { msg('無法移動：' + err.message); }
+};
 $('btnPtAdd').onclick = () => {
   if (!S.ds) return msg('請先載入圖資'); const y = parseFloat($('addN').value), x = parseFloat($('addE').value); if (!isFinite(y) || !isFinite(x)) return msg('請輸入 N、E 座標');
   try {
@@ -202,6 +218,11 @@ $('btnPtAdd').onclick = () => {
 };
 function ptPanel() {
   const ds = S.ds, st = S.st || { added: 0, removed: 0, rings: 0 };
+  if (ds) {   // 「點移到線上」：選了點與一條界址線時自動帶入
+    const key = [...S.sel.pt].join(',') + '|' + [...S.sel.edge].join(',');
+    if (key !== ptPanel.k) { ptPanel.k = key; if (S.sel.pt.size) $('plIds').value = [...S.sel.pt].join(', ');
+      if (S.sel.edge.size === 1) { const e = ds.edges.get([...S.sel.edge][0]); if (e) { $('plA').value = e.a; $('plB').value = e.b; } } }
+  }
   $('ptEditInfo').innerHTML = ds ? `結構異動：新增 <b>${st.added}</b> 點、刪除 <b>${st.removed}</b> 點、<b>${st.rings}</b> 宗地的界址串改變` + (st.added || st.removed || st.rings ? '<div class="muted">輸出時需同時輸出 D14 與 D13。</div>' : '') : '';
   if (S.sel.pt.size === 1 && ds) {
     const p = ds.points.get([...S.sel.pt][0]); if (!p) return;
@@ -742,8 +763,8 @@ function fit(box) {
     b = S.ds ? Core.bounds(S.ds) : null;
     for (const n of S.nb) { const q = Core.bounds(n.ds); b = b ? { x0: Math.min(b.x0, q.x0), x1: Math.max(b.x1, q.x1), y0: Math.min(b.y0, q.y0), y1: Math.max(b.y1, q.y1) } : q; }
     if (S.survey.points.size) { const s = surveyBounds(); b = b ? { x0: Math.min(b.x0, s.x0), x1: Math.max(b.x1, s.x1), y0: Math.min(b.y0, s.y0), y1: Math.max(b.y1, s.y1) } : s; }
+    for (const im of S.img) { const q = imgBox(im); b = b ? { x0: Math.min(b.x0, q.x0), x1: Math.max(b.x1, q.x1), y0: Math.min(b.y0, q.y0), y1: Math.max(b.y1, q.y1) } : q; }   // 只有「全圖」才併入影像範圍；指定範圍（跳至地號）不受影像影響
   }
-  for (const im of S.img) { const q = imgBox(im); b = b ? { x0: Math.min(b.x0, q.x0), x1: Math.max(b.x1, q.x1), y0: Math.min(b.y0, q.y0), y1: Math.max(b.y1, q.y1) } : q; }
   if (!b || !isFinite(b.x0)) return;
   const w = Math.max(b.x1 - b.x0, 1), h = Math.max(b.y1 - b.y0, 1);
   S.view.s = Math.min(W / w, H / h) * 0.9; S.view.cx = (b.x0 + b.x1) / 2; S.view.cy = (b.y0 + b.y1) / 2; draw();
@@ -893,7 +914,7 @@ function openPanel(id) {
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
-  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), move: () => openPanel('dlgMove'),
+  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), move: () => openPanel('dlgMove'),
   fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
   help: () => $('help').showModal(),
 };
@@ -1689,6 +1710,7 @@ const api = {
   exportErrReport: () => { if (!S.ds) throw new Error('尚未載入圖資'); return errReportText(); },
   ringIssues: () => { if (!S.ds) throw new Error('尚未載入圖資'); return Core.ringIssues(S.ds).map(o => ({ kind: o.kind, parcel: S.ds.parcels[o.p].label, inner: o.h != null ? S.ds.parcels[o.h].label : null, text: Core.ringIssueLine(S.ds, o), jumps: o.jumps || null })); },
   splitHole: ({ outer, inner }) => { const f = l => { const p = S.ds.parcels.find(q => q.label === l || q.oldLabel === l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }; const pi = f(outer), r = Core.splitHole(S.ds, pi, f(inner)); pushStruct(r.delta, `拆出地中地 ${inner}`); return { area: S.ds.parcels[pi].area, jumps: r.jumps, linked: r.linked }; },
+  pointsToLine: ({ ids, a, b }) => { const r = pointsToLine(ids, a, b); return { moved: r.moved, skipped: r.skipped }; },
   setRing: ({ parcel, ids }) => { const p = S.ds.parcels.find(q => q.label === parcel || q.oldLabel === parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.setRing(S.ds, p.idx, ids); pushStruct(r.delta, `重繪界址串 ${parcel}`); return { area: p.area, points: p.ids.length }; },
   exportD13: () => { if (!S.dbf.bnd) throw new Error('主要測區不是由 D13 載入'); const r = Core.exportD13(S.dbf.bnd, S.ds); let bin = ''; for (let i = 0; i < r.bytes.length; i += 8192) bin += String.fromCharCode.apply(null, r.bytes.subarray(i, i + 8192)); return { name: S.names.d13, base64: btoa(bin), parcels: r.parcels, rewritten: r.rewritten, appended: r.appended }; },
   getStyle: () => cloneStyle(S.style), setStyle: (patch = {}) => { for (const k of Object.keys(patch)) if (S.style[k]) Object.assign(S.style[k], patch[k]); saveStyle(); draw(); return cloneStyle(S.style); },
