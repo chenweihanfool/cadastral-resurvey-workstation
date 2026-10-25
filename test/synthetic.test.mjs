@@ -393,4 +393,43 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const ds2 = Core.datasetFromD({ pts, bnd, par, d12 }); Core.insertPoint(ds2, 1, 2, Y, X + 50); const v = Core.exportD21(lin, ds2), b = Core.parseDbf(v.bytes);
   assert.deepEqual([v.cleared, v.added], [1, 2]); const nl = b.rows.slice(-2); assert.ok(nl.every(x => (x.LIN_TOP === 1 ? [x.L_PARCEL, x.R_PARCEL] : [x.R_PARCEL, x.L_PARCEL]).join() === '1,0'), '宗地在 1→8→2 的左側');
 }
+// ── 未登記土地：分割（每筆 ≤ N 點）、合併、空隙／凹口建為新地號，D11／D13／D21 輸出 ──
+{
+  const Y = 2700000, X = 200000, F_D11c = [...F_D11, { name: 'AREA_DIG', type: 'N', len: 10, dec: 6 }, { name: 'CENTER_Y', type: 'N', len: 12, dec: 3 }, { name: 'CENTER_X', type: 'N', len: 11, dec: 3 }, { name: 'LIMIT', type: 'N', len: 8, dec: 3 }];
+  // 一條 2 m 寬、沿東西向 24 段的長條（9002-1，50 點），北側一筆 1，南側留空 → 外圍
+  const P = []; for (let k = 0; k <= 24; k++) { P.push([100 + k, 0, k * 10]); P.push([200 + k, 2, k * 10]); }
+  P.push([1, 50, 0], [2, 50, 240]);
+  const ring9 = [...Array.from({ length: 25 }, (_, k) => 100 + k), ...Array.from({ length: 25 }, (_, k) => 224 - k)];
+  const north = [...Array.from({ length: 25 }, (_, k) => 200 + k), 2, 1];
+  const rows = []; const put = (m, c, ids) => { for (let i = 0; i < ids.length; i += 8) rows.push(ring(1, m, c, ids.slice(i, i + 8))); };
+  put(9002, 1, ring9); put(5, 0, north.slice().reverse());
+  const pts = rd(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd = rd(F_D13, rows);
+  const par = rd(F_D11c, [{ SECTION_O: 1, PAR_O_M: 9002, PAR_O_C: 1, PAR_N_M: 9002, PAR_N_C: 1, SECTION_N: 0, AREA_OLD: 0, AREA_NEW: 0.048, AREA_DIG: 0.048, CENTER_Y: Y + 1, CENTER_X: X + 5, LIMIT: 200 }, { SECTION_O: 1, PAR_O_M: 5, PAR_O_C: 0, PAR_N_M: 5, PAR_N_C: 0, SECTION_N: 0, AREA_OLD: 1, AREA_NEW: 1, AREA_DIG: 1, CENTER_Y: Y + 20, CENTER_X: X + 100, LIMIT: 200 }]);
+  const ds = Core.datasetFromD({ pts, bnd, par }), a0 = ds.parcels[0].area; near(a0, 480, 1e-6);
+  const sm = Core.unregSummary(ds, 10); assert.equal(sm.parcels.length, 1); assert.ok(sm.parcels[0].over);
+  const r = Core.splitParcel(ds, 0, 10); assert.ok(r.pieces.length >= 5 && r.pieces[0] === '9002-2');
+  const live = ds.parcels.filter(p => !p.deleted && p.label.startsWith('9002-')); assert.ok(live.every(p => p.ids.length <= 10), '每筆 ≤ 10 點');
+  near(live.reduce((s, p) => s + p.area, 0), a0, 1e-6, '面積守恆'); assert.equal(Core.ringConflicts(ds).cross.length, 0); assert.equal(Core.freeRegions(ds).length, 0);
+  const lin = { ...rd([{ name: 'LIN_TOP', type: 'N', len: 5 }, { name: 'LIN_MID', type: 'N', len: 5 }, { name: 'LIN_BOT', type: 'N', len: 5 }, ...['L_SECTION', 'L_PARCEL', 'L_PARCEL_E', 'R_SECTION', 'R_PARCEL', 'R_PARCEL_E'].map(name => ({ name, type: 'N', len: 4 }))], []) };
+  const ch = Core.changedDFiles(ds, { pts, bnd, par, d12: null, lin }); assert.deepEqual(Object.keys(ch.files).sort(), ['d11', 'd13', 'd21']);
+  const re = Core.datasetFromD({ pts, bnd: Core.parseDbf(ch.files.d13.bytes), par: Core.parseDbf(ch.files.d11.bytes) }), rl = re.parcels.filter(p => p.label.startsWith('9002-'));
+  assert.equal(rl.length, live.length, '重讀筆數'); assert.ok(rl.every(p => Math.abs(p.areaRef - p.area) < 0.006), 'D11 新面積＝環面積'); const d11 = Core.parseDbf(ch.files.d11.bytes);
+  assert.ok(d11.rows.slice(2).every(x => x.AREA_OLD === 0 && x.AREA_DIG === x.AREA_NEW && x.LIMIT > 0 && x.PAR_N_M === 9002), '新宗地 D11');
+  for (const p of rl) assert.ok(Core.pointInRing(p.ids, re.points, d11.rows.find(x => x.PAR_N_C === +p.label.split('-')[1]).CENTER_Y, d11.rows.find(x => x.PAR_N_C === +p.label.split('-')[1]).CENTER_X), `${p.label} 中心在宗地內`);
+  Core.applyDelta(ds, r.delta, 'undo'); assert.equal(ds.parcels.filter(p => !p.deleted).length, 2); near(ds.parcels[0].area, a0, 1e-6);
+  Core.applyDelta(ds, r.delta, 'redo');
+  // 合併：全部 9002 併回一筆，再分割
+  const idx = ds.parcels.filter(p => !p.deleted && p.label.startsWith('9002-')).map(p => p.idx), m = Core.mergeParcels(ds, idx);
+  assert.equal(m.keep, '9002-1'); assert.equal(ds.parcels.filter(p => !p.deleted).length, 2); near(ds.parcels[0].area, a0, 1e-6); assert.equal(ds.parcels[0].ids.length, 50);
+  assert.throws(() => Core.mergeParcels(ds, [0]), /至少/);
+  Core.resetAll(ds); assert.equal(ds.parcels.filter(p => !p.deleted).length, 2); assert.equal(ds.parcels[0].ids.length, 50);
+  // 凹口：南側空白不是宗地 → 在 9002-1 兩端與另外兩點畫封口線不會穿過宗地；用外圍上兩點圍出長條本身以外不存在的範圍時要報錯
+  assert.throws(() => Core.pocketRegion(ds, [[100, 124]]), /交錯|穿過宗地內部|沒有圍出/);
+  // 真正的凹口：A、B 兩宗之間朝南開口的 10×10 空地，北邊由 C 封住；在 A、B 南側角點畫一條封口線 → 100 m²，建為 9001-1
+  const Q = [[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 0, 20], [6, 0, 30], [7, 10, 30], [8, 10, 20], [9, 20, 0], [10, 20, 30]];
+  const dsq = Core.datasetFromD({ pts: rd(F_D14, Q.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [5, 6, 7, 8]), ring(1, 3, 0, [4, 3, 8, 7, 10, 9])]) });
+  assert.equal(Core.freeRegions(dsq).length, 0, '凹口不是封閉空隙'); const g = Core.pocketRegion(dsq, [[2, 5]]); near(g.area, 100, 1e-6); assert.deepEqual([...g.ids].sort((a, b) => a - b), [2, 3, 5, 8]);
+  const fr = Core.fillRegion(dsq, g.ids, 9001); assert.equal(fr.label, '9001-1'); near(dsq.parcels[3].area, 100, 1e-6); assert.equal(Core.freeRegions(dsq).length, 0);
+  assert.throws(() => Core.pocketRegion(dsq, [[1, 9]]), /已是界址線|沒有圍出|穿過/);
+}
 console.log('SYNTHETIC OK');
