@@ -517,6 +517,20 @@ function render() {
     if (S.clean && !S.printing) {   // 清理預覽：將被刪的點（橘＝沒有宗地使用、紫＝直線多餘）
       ctx.lineWidth = 2; for (const q of S.clean.pts) { const sx = toSx(q.x), sy = toSy(q.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue; ctx.strokeStyle = q.add ? '#2f9e44' : q.u ? '#f08c00' : '#9c36b5'; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 7); if (q.add) { ctx.moveTo(sx - 5, sy); ctx.lineTo(sx + 5, sy); ctx.moveTo(sx, sy - 5); ctx.lineTo(sx, sy + 5); } else { ctx.moveTo(sx - 5, sy - 5); ctx.lineTo(sx + 5, sy + 5); ctx.moveTo(sx + 5, sy - 5); ctx.lineTo(sx - 5, sy + 5); } ctx.stroke(); }
     }
+    if ($('dlgUnreg').open && S.unreg && !S.printing) {   // 未登記地：黃＝未登記、橘＝超過點數、紅＝空隙
+      ctx.save(); const n = unN();
+      for (const u of S.unreg.parcels) { const p = ds.parcels[u.idx]; if (!p || p.deleted) continue; ctx.fillStyle = p.ids.length > n ? 'rgba(240,140,0,.35)' : 'rgba(250,210,0,.25)'; tracePoly(ds, p.ids); ctx.fill(); }
+      ctx.fillStyle = 'rgba(209,36,47,.45)'; for (const g of S.unreg.gaps) { tracePoly(ds, g.ids); ctx.fill(); }
+      ctx.restore();
+    }
+    if (S.pocket && !S.printing) {   // 封閉凹口：封口線（紫虛線）與圍出的範圍（綠）
+      ctx.save(); const k = S.pocket;
+      if (k.region) { ctx.fillStyle = 'rgba(47,158,68,.35)'; tracePoly(ds, k.region.ids); ctx.fill(); }
+      ctx.strokeStyle = '#9c36b5'; ctx.lineWidth = 3; ctx.setLineDash([7, 4]); ctx.beginPath();
+      for (const [a, b] of k.chords) { const p = ds.points.get(a), q = ds.points.get(b); ctx.moveTo(toSx(p.x), toSy(p.y)); ctx.lineTo(toSx(q.x), toSy(q.y)); }
+      if (k.pend != null && S.cursor) { const p = ds.points.get(k.pend); ctx.moveTo(toSx(p.x), toSy(p.y)); ctx.lineTo(toSx(S.cursor.x), toSy(S.cursor.y)); }
+      ctx.stroke(); ctx.restore();
+    }
     if (S.ringMark && !S.printing) {   // 界址串檢查：跳線（紅虛線）
       ctx.save(); ctx.strokeStyle = '#d1242f'; ctx.lineWidth = 4; ctx.setLineDash([8, 5]); ctx.beginPath();
       for (const [a, b] of S.ringMark) { const p = ds.points.get(a), q = ds.points.get(b); if (!p || !q) continue; ctx.moveTo(toSx(p.x), toSy(p.y)); ctx.lineTo(toSx(q.x), toSy(q.y)); }
@@ -651,7 +665,7 @@ function panel() {
   actDis('undo', !S.undo.length); actDis('redo', !S.redo.length); actDis('reset', !edited); actDis('delpt', !S.sel.pt.size); actDis('err', !ds);
   $('btnExpD14').disabled = !ds || !S.dbf.pts || !edited; $('btnExpD13').disabled = !ds || !S.dbf.bnd || !st.rings; $('btnExpD12').disabled = !ds || !st.holes; $('btnExpCase').disabled = !ds || !S.dbf.pts; $('btnErr').disabled = !ds;
   $('chkDeltaAll').checked = S.style.delta.all;
-  ptPanel(); if ($('dlgRing').open) { const k = S.undo.length + ':' + S.redo.length; if (k !== ringKey) { ringKey = k; ringPanel(); } } if ($('dlgClean').open) { const k = S.undo.length + ':' + S.redo.length + ':' + (S.ds && S.ds.points.size); if (k !== cleanKey) { cleanKey = k; cleanSoon(); } }
+  ptPanel(); if ($('dlgUnreg').open) { const k = S.undo.length + ':' + S.redo.length; if (k !== unKey) { unKey = k; unregPanel(); } } if ($('dlgRing').open) { const k = S.undo.length + ':' + S.redo.length; if (k !== ringKey) { ringKey = k; ringPanel(); } } if ($('dlgClean').open) { const k = S.undo.length + ':' + S.redo.length + ':' + (S.ds && S.ds.points.size); if (k !== cleanKey) { cleanKey = k; cleanSoon(); } }
   $('btnExpJson').disabled = !ds && !S.survey.points.size;
   $('drop').style.display = (ds || S.survey.points.size || S.nb.length || S.img.length) ? 'none' : 'flex';
   lineList(); nbPanel(); outPanel(); imgPanel();
@@ -702,7 +716,7 @@ $('lineList').addEventListener('change', e => {
 });
 
 // ── 界址串檢查與編修：核心在 Core.ringIssues／splitHole／setRing ──
-let ringKey = '';
+let ringKey = '', unKey = '';
 const RING_KIND = { embedded: '內含別宗整圈', repeat: '自我接觸', selfcross: '自我交錯', missinghole: '未設地中地' };
 function ringPanel() {
   const box = $('ringList'); if (!S.ds) { box.innerHTML = '<div class="small muted">尚未載入圖資</div>'; return; }
@@ -769,6 +783,83 @@ $('btnDelHole').onclick = () => deleteHoleUI();
 $('btnRingCheck').onclick = ringPanel; $('btnRedraw').onclick = startRedraw;
 $('dlgRing').addEventListener('close', () => { S.ringMark = null; draw(); });
 
+// ── 未登記土地（9000 號以上）：清單、合併、每筆 ≤ N 點分割、空隙與凹口建為新地號（核心在 Core.unregSummary／splitParcel／mergeParcels／fillRegion／pocketRegion）──
+const unN = () => Math.max(3, parseInt($('unN').value, 10) || 10), unMother = () => Math.max(9000, parseInt($('unMother').value, 10) || 9001);
+function pushMulti(deltas, label) {   // 多步驟的一鍵操作：一次復原
+  deltas = deltas.filter(Boolean); if (!deltas.length) return;
+  pushUndo({ undoFn: () => { for (const d of deltas.slice().reverse()) Core.applyDelta(S.ds, d, 'undo'); pruneSel(); }, redoFn: () => { for (const d of deltas) Core.applyDelta(S.ds, d, 'redo'); pruneSel(); }, label });
+}
+function unregPanel() {
+  const ds = S.ds; if (!ds) { $('unSum').textContent = '尚未載入圖資'; $('unList').innerHTML = ''; S.unreg = null; return; }
+  const n = unN(), r = S.unreg = Core.unregSummary(ds, n), over = r.parcels.filter(p => p.over);
+  $('unSum').innerHTML = `未登記地 <b>${r.parcels.length}</b> 筆（共 ${r.parcels.reduce((s, p) => s + p.area, 0).toFixed(2)} m²），其中超過 ${n} 點 <b class="${over.length ? 'neg' : ''}">${over.length}</b> 筆；宗地之間沒有地號的封閉空隙 <b>${r.gaps.length}</b> 處。` +
+    '<div class="muted">圖上：黃＝未登記地、橘＝超過點數、紅＝空隙。與段外相通的長條（凹口）請用下方「封閉凹口」畫封口線。</div>';
+  const rows = r.parcels.slice().sort((a, b) => (b.over - a.over) || String(a.label).localeCompare(String(b.label), 'zh-Hant', { numeric: true }));
+  $('unList').innerHTML = '<table><thead><tr><th></th><th>地號</th><th>點數</th><th>面積</th><th></th></tr></thead><tbody>' +
+    r.gaps.map((g, i) => `<tr data-gap="${i}" style="cursor:pointer"><td></td><td class="neg">空隙 ${i + 1}</td><td>${g.ids.length}</td><td>${g.area.toFixed(2)}</td><td><button class="btn" data-fillgap="${i}">建為新地號</button></td></tr>`).join('') +
+    rows.map(p => `<tr data-i="${p.idx}" style="cursor:pointer"><td><input type="checkbox" class="unchk" data-i="${p.idx}"${S.unSel && S.unSel.has(p.idx) ? ' checked' : ''}></td><td>${esc(p.label)}${p.nested ? '<span class="muted">（地中地）</span>' : ''}${p.arc ? '<span class="muted">（圓弧）</span>' : ''}</td><td class="${p.over ? 'neg' : ''}">${p.pts}</td><td>${p.area.toFixed(2)}</td><td></td></tr>`).join('') + '</tbody></table>';
+}
+S.unSel = new Set();
+$('unList').addEventListener('change', e => { const c = e.target.closest('.unchk'); if (!c) return; c.checked ? S.unSel.add(+c.dataset.i) : S.unSel.delete(+c.dataset.i); });
+$('unList').addEventListener('click', e => {
+  if (e.target.closest('.unchk')) return;
+  const fg = e.target.closest('[data-fillgap]'); if (fg) { const g = S.unreg.gaps[+fg.dataset.fillgap]; try { const r = Core.fillRegion(S.ds, g.ids, unMother()); pushStruct(r.delta, `空隙建為 ${r.label}`); msg(`空隙已建為新地號 ${r.label}（${g.area.toFixed(2)} m²、${g.ids.length} 點）。可復原`); } catch (err) { msg('無法建立：' + err.message); } unregPanel(); refresh(); return; }
+  const tg = e.target.closest('tr[data-gap]'); if (tg) { const g = S.unreg.gaps[+tg.dataset.gap]; let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const id of g.ids) { const q = S.ds.points.get(id); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } fit({ x0: x0 - 10, x1: x1 + 10, y0: y0 - 10, y1: y1 + 10 }); return; }
+  const tr = e.target.closest('tr[data-i]'); if (tr) { clearSel(); S.sel.par.add(+tr.dataset.i); zoomTo([+tr.dataset.i]); refresh(); }
+});
+const unChecked = () => [...S.unSel].filter(i => S.ds.parcels[i] && !S.ds.parcels[i].deleted);
+$('btnUnSplit').onclick = () => {   // 分割勾選的；沒勾選＝全部超過 N 點者
+  if (!S.ds) return; const n = unN(), list = unChecked().length ? unChecked() : S.unreg.parcels.filter(p => p.over).map(p => p.idx);
+  if (!list.length) return msg(`沒有超過 ${n} 點的未登記地`);
+  const deltas = [], made = [], fail = [];
+  for (const i of list) { const p = S.ds.parcels[i]; try { const r = Core.splitParcel(S.ds, i, n); if (r.delta) { deltas.push(r.delta); made.push(`${p.label}→${r.pieces.length + 1} 筆`); } } catch (err) { fail.push(`${p.label}（${err.message}）`); } }
+  pushMulti(deltas, `未登記地分割 ≤${n} 點`); S.unSel.clear();
+  msg((made.length ? `已分割 ${made.length} 筆：${made.slice(0, 8).join('、')}${made.length > 8 ? '…' : ''}` : '沒有分割任何宗地') + (fail.length ? `；未處理 ${fail.length} 筆：${fail.slice(0, 3).join('、')}` : '') + '。可一次復原'); unregPanel(); refresh();
+};
+$('btnUnMerge').onclick = () => {   // 合併勾選的；沒勾選＝同母號且相連者各併成一筆
+  if (!S.ds) return; const ds = S.ds, n = unN(), auto = $('unAutoSplit').checked, deltas = [], done = [], fail = [];
+  let groups;
+  if (unChecked().length) groups = [unChecked()];
+  else {   // 同母號、共用界址線者為一組
+    const un = S.unreg.parcels.filter(p => !p.nested && !p.arc).map(p => p.idx), set = new Set(un), parent = new Map(un.map(i => [i, i])), find = i => { while (parent.get(i) !== i) i = parent.get(i); return i; };
+    const mother = i => parseInt(String(ds.parcels[i].label), 10);
+    for (const e of ds.edges.values()) { const ps = e.parcels.filter(i => set.has(i)); for (let k = 1; k < ps.length; k++) if (mother(ps[0]) === mother(ps[k])) parent.set(find(ps[k]), find(ps[0])); }
+    const m = new Map(); for (const i of un) { const r = find(i); if (!m.has(r)) m.set(r, []); m.get(r).push(i); }
+    groups = [...m.values()].filter(g => g.length > 1);
+    if (!groups.length) return msg('沒有同母號且相連的未登記地可合併');
+    if (!confirm(`把同母號且相連的未登記地合併：共 ${groups.length} 組、${groups.reduce((s, g) => s + g.length, 0)} 筆` + (auto ? `，合併後再切成每筆 ≤ ${n} 點` : '') + '？可一次復原')) return;
+  }
+  for (const g of groups) {
+    try { const r = Core.mergeParcels(ds, g); deltas.push(r.delta); let t = `${r.keep}（併入 ${r.merged.length} 筆）`;
+      if (auto) { const k = ds.parcels.find(p => p.label === r.keep && !p.deleted); const s = Core.splitParcel(ds, k.idx, n); if (s.delta) { deltas.push(s.delta); t += `→再切成 ${s.pieces.length + 1} 筆`; } }
+      done.push(t); } catch (err) { fail.push(`${g.map(i => ds.parcels[i].label).slice(0, 3).join('、')}…（${err.message}）`); }
+  }
+  pushMulti(deltas, '未登記地合併'); S.unSel.clear();
+  msg((done.length ? `已合併 ${done.length} 組：${done.slice(0, 6).join('、')}${done.length > 6 ? '…' : ''}` : '沒有合併任何宗地') + (fail.length ? `；未處理 ${fail.length} 組：${fail.slice(0, 2).join('；')}` : '') + '。可一次復原'); unregPanel(); refresh();
+};
+// 封閉凹口：依序點兩個段外圍上的界址點＝一條封口線，可畫多條；Enter 建立
+function startPocket() { if (!S.ds) return msg('請先載入圖資'); S.pocket = { chords: [], pend: null, region: null, err: '' }; pocketHint(); draw(); }
+function pocketHint() {
+  const k = S.pocket; if (!k) return;
+  setHint(`封閉凹口：點兩個段外圍上的界址點畫一條封口線（已畫 ${k.chords.length} 條${k.pend != null ? `，起點 ${k.pend}` : ''}）。` + (k.region ? `圍出 ${k.region.area.toFixed(2)} m²、${k.region.ids.length} 點（綠色）；Enter 建為新地號 ${unMother()}-…` : k.err ? `⚠ ${k.err}` : '') + '　Backspace 退一步、Esc 取消');
+}
+function pocketPick(mx, my) {
+  const k = S.pocket, q = nearestPoint(S.ds.points, toWx(mx), toWy(my), 12 / S.view.s); if (!q) return msg('請點在界址點上');
+  if (k.pend == null) { k.pend = q.id; } else { if (q.id === k.pend) return; k.chords.push([k.pend, q.id]); k.pend = null;
+    try { k.region = Core.pocketRegion(S.ds, k.chords); k.err = ''; } catch (err) { k.region = null; k.err = err.message; } }
+  pocketHint(); draw();
+}
+function pocketBack() { const k = S.pocket; if (k.pend != null) k.pend = null; else k.chords.pop(); try { k.region = k.chords.length ? Core.pocketRegion(S.ds, k.chords) : null; k.err = ''; } catch (err) { k.region = null; k.err = err.message; } pocketHint(); draw(); }
+function cancelPocket() { S.pocket = null; setHint(''); draw(); }
+function finishPocket() {
+  const k = S.pocket; if (!k || !k.region) return msg(k && k.err ? k.err : '請先畫封口線');
+  try { const r = Core.fillRegion(S.ds, k.region.ids, unMother()); pushStruct(r.delta, `凹口建為 ${r.label}`); msg(`凹口已建為新地號 ${r.label}（${k.region.area.toFixed(2)} m²、${k.region.ids.length} 點）。點數超過 ${unN()} 可按「分割」；可復原`); cancelPocket(); }
+  catch (err) { msg('無法建立：' + err.message); }
+  if ($('dlgUnreg').open) unregPanel(); refresh();
+}
+$('btnUnPocket').onclick = startPocket; $('btnUnRefresh').onclick = unregPanel; $('unN').oninput = unregPanel;
+$('dlgUnreg').addEventListener('close', () => { cancelPocket(); });
+
 // ── 檢視 ───────────────────────────────────────────────────────────────────
 function fit(box) {
   let b = box;
@@ -808,6 +899,7 @@ cv.addEventListener('pointerdown', e => {
   }
   if (S.align) { alignPick(mx, my); return; }
   if (S.redraw) { redrawPick(mx, my); return; }
+  if (S.pocket) { pocketPick(mx, my); return; }
   if (S.tool === 'line') {
     const h = hitSurvey(mx, my); if (!h) return;
     if (!S.draft) S.draft = { names: [h.k] };
@@ -838,7 +930,7 @@ cv.addEventListener('pointermove', e => {
   if (!d) {
     const h = S.align ? null : S.tool === 'line' ? hitSurvey(mx, my) : S.tool === 'select' && S.ds ? hitTest(mx, my) : S.tool === 'addpt' && S.ds ? (e2 => e2 ? { t: 'edge', k: e2.key } : null)(hitEdgeAt(toWx(mx), toWy(my), 8 / S.view.s)) : null;
     if (JSON.stringify(h) !== JSON.stringify(S.hover)) { S.hover = h; draw(); }
-    tip(h, e); if (S.draft || S.align || S.redraw || S.tool === 'addpt') draw(); return;
+    tip(h, e); if (S.draft || S.align || S.redraw || S.pocket || S.tool === 'addpt') draw(); return;
   }
   if (d.kind === 'pan') { S.view.cx = d.cx - (mx - d.mx) / S.view.s; S.view.cy = d.cy + (my - d.my) / S.view.s; draw(); return; }
   if (d.kind === 'img') { setImgPos(d.im, d.c0 + (toWx(mx) - d.wx), d.f0 + (toWy(my) - d.wy)); return; }
@@ -885,8 +977,9 @@ addEventListener('keydown', e => {
   if (k === ' ') { S.space = true; e.preventDefault(); }
   else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'y') { e.preventDefault(); redo(); }
-  else if (k === 'Escape') { if (S.redraw) cancelRedraw(); else if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
-  else if (k === 'Enter') { if (S.redraw) finishRedraw(); else if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
+  else if (k === 'Escape') { if (S.pocket) cancelPocket(); else if (S.redraw) cancelRedraw(); else if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
+  else if (k === 'Enter') { if (S.pocket) finishPocket(); else if (S.redraw) finishRedraw(); else if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
+  else if (k === 'Backspace' && S.pocket) pocketBack();
   else if (k === 'Backspace' && S.redraw) { S.redraw.ids.pop(); redrawHint(); draw(); }
   else if (k === 'Backspace' && S.draft) { S.draft.names.pop(); if (!S.draft.names.length) { S.draft = null; setHint(''); } draw(); }
   else if (k === 'Delete' && S.ds && S.sel.pt.size) { e.preventDefault(); deleteSelectedPoints(); }
@@ -922,12 +1015,12 @@ const actDis = (n, v) => document.querySelectorAll(`[data-act="${n}"]`).forEach(
 function openPanel(id) {
   document.querySelectorAll('dialog.fp[open]').forEach(d => { if (d.id !== id) d.close(); });
   const d = $(id); if (!d.open) d.show();
-  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); refresh();
+  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); refresh();
 }
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
-  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), delhole: () => deleteHoleUI(), move: () => openPanel('dlgMove'),
+  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteHoleUI(), move: () => openPanel('dlgMove'),
   fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
   help: () => $('help').showModal(),
 };
@@ -1723,6 +1816,10 @@ const api = {
   exportErrReport: () => { if (!S.ds) throw new Error('尚未載入圖資'); return errReportText(); },
   ringIssues: () => { if (!S.ds) throw new Error('尚未載入圖資'); return Core.ringIssues(S.ds).map(o => ({ kind: o.kind, parcel: S.ds.parcels[o.p].label, inner: o.h != null ? S.ds.parcels[o.h].label : null, text: Core.ringIssueLine(S.ds, o), jumps: o.jumps || null })); },
   splitHole: ({ outer, inner }) => { const f = l => { const p = S.ds.parcels.find(q => q.label === l || q.oldLabel === l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }; const pi = f(outer), r = Core.splitHole(S.ds, pi, f(inner)); pushStruct(r.delta, `拆出地中地 ${inner}`); return { area: S.ds.parcels[pi].area, jumps: r.jumps, linked: r.linked }; },
+  unregSummary: ({ maxPts = 10 } = {}) => { const r = Core.unregSummary(S.ds, maxPts); return { parcels: r.parcels.map(p => ({ label: p.label, points: p.pts, area: p.area, over: p.over })), gaps: r.gaps.map(g => ({ points: g.ids, area: g.area })) }; },
+  splitParcel: ({ parcel, maxPts = 10 }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitParcel(S.ds, p.idx, maxPts); if (r.delta) pushStruct(r.delta, `分割 ${parcel}`); return { pieces: r.pieces }; },
+  mergeParcels: ({ parcels }) => { const idx = parcels.map(l => { const p = findPar(l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }); const r = Core.mergeParcels(S.ds, idx); pushStruct(r.delta, '合併 ' + parcels.join('、')); return { keep: r.keep, merged: r.merged }; },
+  closePocket: ({ chords, mother = 9001 }) => { const g = Core.pocketRegion(S.ds, chords), r = Core.fillRegion(S.ds, g.ids, mother); pushStruct(r.delta, `凹口建為 ${r.label}`); return { label: r.label, area: g.area, points: g.ids.length }; },
   deleteHoleParcel: ({ parcel }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.deleteHoleParcel(S.ds, p.idx); pushStruct(r.delta, `刪除地中地 ${parcel}`); return { into: r.into, removedPoints: r.removedPoints }; },
   pointsToLine: ({ ids, a, b }) => { const r = pointsToLine(ids, a, b); return { moved: r.moved, skipped: r.skipped }; },
   setRing: ({ parcel, ids }) => { const p = S.ds.parcels.find(q => q.label === parcel || q.oldLabel === parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.setRing(S.ds, p.idx, ids); pushStruct(r.delta, `重繪界址串 ${parcel}`); return { area: p.area, points: p.ids.length }; },

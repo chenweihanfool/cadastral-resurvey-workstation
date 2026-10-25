@@ -9,7 +9,7 @@ const Core = (() => {
 
   // ── DBF 讀取 ─────────────────────────────────────────────────────────────
   function parseDbf(buf) {
-    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    const u8 = buf instanceof Uint8Array ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) : new Uint8Array(buf);   // 一律轉成一般 Uint8Array：Node 的 Buffer.slice 是共用記憶體的視圖，樣板列會互相覆蓋
     const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
     const n = dv.getUint32(4, true), hl = dv.getUint16(8, true), rl = dv.getUint16(10, true);
     const fields = [];
@@ -314,9 +314,9 @@ const Core = (() => {
     const o = ds.orig, st = o && structSummary(ds);
     if (o && (st.added || st.removed || st.rings || st.holes || st.deleted)) {
       ds.points = new Map(o.points.map(q => [q.id, { ...q }]));
-      ds.parcels.forEach((p, i) => { p.ids = o.rings[i].ids.slice(); if (o.rings[i].mid) p.mid = o.rings[i].mid.slice(); });
-      for (const p of ds.parcels) { p.deleted = false; for (const hi of (p.holes || []).slice()) linkHole(ds, p.idx, hi, false); }
-      ds.parcels.forEach((p, i) => { for (const hi of o.rings[i].holes || []) linkHole(ds, i, hi, true); });
+      ds.parcels.forEach((p, i) => { if (!o.rings[i]) { p.ids = []; p.mid = []; p.deleted = true; return; } p.ids = o.rings[i].ids.slice(); if (o.rings[i].mid) p.mid = o.rings[i].mid.slice(); });
+      for (const p of ds.parcels) { p.deleted = !!p.created; for (const hi of (p.holes || []).slice()) linkHole(ds, p.idx, hi, false); }
+      ds.parcels.forEach((p, i) => { for (const hi of (o.rings[i] && o.rings[i].holes) || []) linkHole(ds, i, hi, true); });
       buildTopology(ds); buildArcs(ds);
     }
     for (const p of ds.points.values()) { p.y = p.y0; p.x = p.x0; }
@@ -345,6 +345,7 @@ const Core = (() => {
     for (const p of d.removed) undo ? ds.points.set(p.id, p) : ds.points.delete(p.id);
     for (const l of d.holes || []) linkHole(ds, l.p, l.h, undo ? !l.on : l.on);
     for (const i of d.deleted || []) ds.parcels[i].deleted = !undo;
+    for (const i of d.created || []) ds.parcels[i].deleted = undo;
     buildTopology(ds); buildArcs(ds); recalc(ds, new Set(d.parcels.keys()));
   }
   const nextPointId = ds => { let m = 0; for (const id of ds.points.keys()) if (id > m) m = id; return m + 1; };
@@ -525,14 +526,14 @@ const Core = (() => {
   }
   // 結構是否有異動（新增／刪除點、環改變）
   function structSummary(ds) {
-    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0, holes: 0, deleted: 0 };
+    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0, holes: 0, deleted: 0, created: 0 };
     const was = new Set(o.points.map(p => p.id)); let added = 0, removed = 0, rings = 0;
     for (const id of ds.points.keys()) if (!was.has(id)) added++;
     for (const id of was) if (!ds.points.has(id)) removed++;
-    ds.parcels.forEach((p, i) => { const r = o.rings[i]; if (!r || r.ids.length !== p.ids.length || r.ids.some((v, k) => v !== p.ids[k])) rings++; });
+    ds.parcels.forEach((p, i) => { const r = o.rings[i]; if (p.created && p.deleted) return; if (!r || r.ids.length !== p.ids.length || r.ids.some((v, k) => v !== p.ids[k])) rings++; });
     let holes = 0; ds.parcels.forEach((p, i) => { const a = (o.rings[i] && o.rings[i].holes) || [], b = p.holes || []; if (a.length !== b.length || a.some(v => !b.includes(v))) holes++; });
-    const deleted = ds.parcels.filter(p => p.deleted).length;
-    return { added, removed, rings, holes, deleted };
+    const deleted = ds.parcels.filter(p => p.deleted && !p.created).length, created = ds.parcels.filter(p => p.created && !p.deleted).length;
+    return { added, removed, rings, holes, deleted, created };
   }
 
   // ── 變換（平移＋旋轉）─────────────────────────────────────────────────────
@@ -1206,11 +1207,170 @@ const Core = (() => {
     const into = d.holes.map(l => ds.parcels[l.p].label);
     return { delta: closeDelta(ds, d), into, removedPoints: only };
   }
+  // ── 未登記土地（9000 號以上）：清單、合併、每筆 ≤ N 點分割、空隙與凹口建為新地號（v0.15.0）──────────
+  // 分割演算法移植自 116 倉庫 tools/kc0336_step4b_split.py（KC0336 當時把 23 筆 9000 系切成每塊 ≤10 點）：
+  // 反覆在環上取連續 m 個點（m 盡量 = N）以一條連接既有界址點的弦切下一塊；弦必須完全在宗地內、除兩端外不碰邊界，
+  // 以「弦長 / √(新塊面積)」最小者優先（避免細長薄片）。新塊編新子號（同母號、子號接續該母號已用最大子號），剩餘部分保留原地號。
+  const UNREG_MIN = 9000;
+  const mainNo = p => parseInt(String(p.label), 10), subNo = p => { const m = /-(\d+)$/.exec(String(p.label)); return m ? +m[1] : 0; };
+  const isUnreg = p => !p.deleted && mainNo(p) >= UNREG_MIN;
+  function unregSummary(ds, maxPts = 10) {
+    const parcels = ds.parcels.filter(isUnreg).map(p => ({ idx: p.idx, label: p.label, pts: p.ids.length, area: p.area, over: p.ids.length > maxPts, nested: !!((p.holes || []).length || (p.containers || []).length), arc: !!(p.mid && p.mid.some(Boolean)) }));
+    const gaps = freeRegions(ds).map(l => ({ ids: l.ids.slice().reverse(), area: Math.abs(l.area) }));   // 宗地之間封閉的空隙（逆時針）
+    return { parcels, gaps };
+  }
+  function nextSub(ds, mother) {
+    let m = 0; for (const p of ds.parcels) if (!(p.created && p.deleted) && mainNo(p) === mother) m = Math.max(m, subNo(p));
+    for (const r of ds.meta.noRing || []) { const q = /^(\d+)-(\d+)/.exec(r.label); if (q && +q[1] === mother) m = Math.max(m, +q[2]); }
+    return m + 1;
+  }
+  // 新宗地（未登記地）：附加到 ds.parcels，復原時標為已刪除
+  function createParcel(ds, d, mother, ids, like) {
+    const sec = like ? like.section : (ds.parcels.find(p => p.section) || {}).section || 0, c = nextSub(ds, mother), label = `${mother}-${c}`;
+    const p = { idx: ds.parcels.length, key: `${sec}|${mother}|${c}`, section: sec, label, oldLabel: label, ids: [], mid: [], hasArc: false, holeKeys: [], rows: [], ids0: [], mid0: [],
+      areaRef: null, areaReg: 0, attrRow: null, created: true, like: like ? like.idx : null, holes: [], containers: [], areaOrig: 0, area: 0, unregEdit: true };
+    ds.parcels.push(p); touchParcel(d, p); p.ids = ids.slice(); p.mid = ids.map(() => false); (d.created = d.created || []).push(p.idx);
+    return p;
+  }
+  const ccwIds = (ids, P) => (signedArea(ids, P) < 0 ? ids.slice().reverse() : ids.slice());
+  // 線段 a–b（ring 的第 i、j 點）是否為合格的切分弦：完全在環內、除兩端外不碰任何邊
+  function chordInside(ring, i, j, P) {
+    const A = P.get(ring[i]), B = P.get(ring[j]), L = Math.hypot(B.x - A.x, B.y - A.y); if (L < 0.05) return false;
+    const n = ring.length, cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x), eps = 1e-9 * Math.max(1, L * L);
+    const onSeg = (p, a, b) => Math.abs(cr(a, b, p)) <= eps && Math.min(a.x, b.x) - 1e-9 <= p.x && p.x <= Math.max(a.x, b.x) + 1e-9 && Math.min(a.y, b.y) - 1e-9 <= p.y && p.y <= Math.max(a.y, b.y) + 1e-9;
+    for (let k = 0; k < n; k++) {
+      const k2 = (k + 1) % n, C = P.get(ring[k]), D = P.get(ring[k2]);
+      if (k !== i && k !== j && onSeg(C, A, B)) return false;            // 別的界址點落在弦上
+      if (k === i || k === j || k2 === i || k2 === j) {                    // 與弦共端點的邊：不可與弦共線重疊
+        const o = (k === i || k2 === i) ? A : B, t = o === A ? B : A, q = (k === i || k === j) ? D : C;
+        if (Math.abs(cr(o, t, q)) <= eps && (q.x - o.x) * (t.x - o.x) + (q.y - o.y) * (t.y - o.y) > 0) return false;
+        continue;
+      }
+      const d1 = cr(A, B, C), d2 = cr(A, B, D), d3 = cr(C, D, A), d4 = cr(C, D, B);
+      if (((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps))) return false;
+      if (onSeg(A, C, D) || onSeg(B, C, D)) return false;
+    }
+    return pointInRing(ring, P, (A.y + B.y) / 2, (A.x + B.x) / 2);
+  }
+  // 把宗地切成每塊 ≤ maxPts 點。回傳 {delta, pieces:[地號…]}；地中地、圓弧、與地中地相關者不處理
+  function splitParcel(ds, pi, maxPts = 10) {
+    const p = ds.parcels[pi], P = ds.points; if (!p || p.deleted) throw new Error('宗地不存在');
+    if (maxPts < 3) throw new Error('每筆至少 3 點');
+    if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，尚未支援自動分割`);
+    if (p.mid && p.mid.some(Boolean)) throw new Error(`${p.label} 含圓弧，尚未支援自動分割`);
+    if (p.ids.length <= maxPts) return { delta: null, pieces: [] };
+    const d = newDelta(), pieces = []; touchParcel(d, p);
+    let cur = ccwIds(p.ids, P);
+    while (cur.length > maxPts) {
+      const n = cur.length; let best = null;
+      for (let m = maxPts; m > 2 && !best; m--) {
+        if (m >= n - 1) continue;
+        for (let i = 0; i < n; i++) {
+          const j = (i + m - 1) % n, u = cur[i], v = cur[j]; if (ds.edges.has(segKey(u, v))) continue;
+          if (!chordInside(cur, i, j, P)) continue;
+          const piece = []; for (let k = 0; k < m; k++) piece.push(cur[(i + k) % n]);
+          const area = signedArea(piece, P); if (area < 1) continue;
+          const a = P.get(u), b = P.get(v), sc = Math.hypot(a.x - b.x, a.y - b.y) / Math.sqrt(area);
+          if (!best || sc < best.sc) best = { sc, i, j, piece };
+        }
+      }
+      if (!best) { applyDelta(ds, closeDelta(ds, d), 'undo'); throw new Error(`${p.label} 找不到可用的切分弦（剩 ${n} 點）`); }
+      const q = createParcel(ds, d, mainNo(p), best.piece, p); pieces.push(q.label);
+      const rest = []; for (let k = 0; k <= (best.i - best.j + n) % n; k++) rest.push(cur[(best.j + k) % n]);
+      cur = rest;
+    }
+    p.ids = cur; p.mid = cur.map(() => false); p.unregEdit = true;
+    return { delta: closeDelta(ds, d), pieces };
+  }
+  // 合併相連的宗地成一筆：外圍必須是單一環、中間不可有空洞；保留 keep（預設子號最小、已有 D11 記錄者），其餘標為已刪除。
+  // 只屬於這些宗地、合併後不在外圍上的界址點一併刪除。
+  function mergeParcels(ds, idxs, keep) {
+    idxs = [...new Set(idxs)]; if (idxs.length < 2) throw new Error('至少選兩筆');
+    for (const i of idxs) { const p = ds.parcels[i]; if (!p || p.deleted) throw new Error('宗地不存在');
+      if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，尚未支援合併`);
+      if (p.mid && p.mid.some(Boolean)) throw new Error(`${p.label} 含圓弧，尚未支援合併`); }
+    const loops = outlineLoops(ds, idxs).filter(l => Math.abs(l.area) > 1e-6);
+    if (loops.length !== 1 || loops[0].area <= 0) throw new Error(loops.some(l => l.area < 0) ? '合併後中間會有空洞，請連空洞一起處理' : '選取的宗地沒有全部相連');
+    const order = idxs.map(i => ds.parcels[i]).sort((a, b) => (a.created - b.created) || (mainNo(a) - mainNo(b)) || (subNo(a) - subNo(b)));
+    const k = keep != null ? ds.parcels[keep] : order[0], d = newDelta(); d.deleted = [];
+    const inGroup = new Set(idxs), onLoop = new Set(loops[0].ids), drop = new Set();
+    for (const i of idxs) { const p = ds.parcels[i]; touchParcel(d, p); for (const id of p.ids) if (!onLoop.has(id) && (ds.pointParcels.get(id) || []).every(x => inGroup.has(x))) drop.add(id); }
+    for (const i of idxs) { const p = ds.parcels[i]; if (p === k) continue; p.ids = []; p.mid = []; p.deleted = true; d.deleted.push(i); }
+    k.ids = loops[0].ids.slice(); k.mid = k.ids.map(() => false); k.unregEdit = true;
+    for (const id of drop) { const q = ds.points.get(id); if (q) { ds.points.delete(id); d.removed.push(q); } }
+    return { delta: closeDelta(ds, d), keep: k.label, merged: idxs.filter(i => i !== k.idx).map(i => ds.parcels[i].label), removedPoints: [...drop] };
+  }
+  // 空隙或凹口建為新的未登記地
+  function fillRegion(ds, ids, mother) {
+    if (ids.length < 3) throw new Error('範圍至少 3 點'); const d = newDelta(), p = createParcel(ds, d, mother, ccwIds(ids, ds.points), null);
+    return { delta: closeDelta(ds, d), label: p.label };
+  }
+  // 凹口：在段外圍（測區邊界）上畫一條或多條封口線（每條連兩個既有界址點），圍出位於所有宗地之外、且每條封口線都在其邊上的最小範圍。
+  // 做法：段外圍的邊反向（段外在左）加上封口線的雙向邊，以「最左轉」追蹤出各個面；取面積為正（有界）且用到所有封口線者。回傳 {ids（逆時針）, area}，不修改資料
+  function pocketRegion(ds, chords) {
+    if (!chords.length) throw new Error('請至少畫一條封口線'); const P = ds.points;
+    const top = ds.parcels.filter(p => !p.deleted && !(p.containers && p.containers.length)).map(p => p.idx), loops = outlineLoops(ds, top).filter(l => l.area > 0), onOut = new Set(loops.flatMap(l => l.ids));
+    for (const [a, b] of chords) {
+      if (a === b) throw new Error('封口線的兩端不可相同'); if (!onOut.has(a) || !onOut.has(b)) throw new Error(`${!onOut.has(a) ? a : b} 不在段外圍（測區邊界）上`);
+      if (ds.edges.has(segKey(a, b))) throw new Error(`${a}–${b} 已是界址線`);
+      for (const f of ds.edges.values()) if (f.a !== a && f.a !== b && f.b !== a && f.b !== b && edgeRelation(ds, { a, b }, f) === 'cross') throw new Error(`封口線 ${a}–${b} 與界址線 ${f.a}–${f.b} 交錯`);
+      const A = P.get(a), B = P.get(b), my = (A.y + B.y) / 2, mx = (A.x + B.x) / 2; if (ds.parcels.some(p => !p.deleted && p.ids.length && pointInRing(p.ids, P, my, mx))) throw new Error(`封口線 ${a}–${b} 穿過宗地內部`);
+    }
+    const out = new Map(), add = (u, v) => { let l = out.get(u); if (!l) out.set(u, l = []); l.push({ v, used: false }); };
+    for (const l of loops) for (let k = 0; k < l.ids.length; k++) add(l.ids[(k + 1) % l.ids.length], l.ids[k]);   // 段外圍反向：段外在左
+    for (const [a, b] of chords) { add(a, b); add(b, a); }
+    const faces = [];
+    for (const [u0, list] of out) for (const e0 of list) {
+      if (e0.used) continue; e0.used = true; const ids = [u0]; let from = u0, cur = e0;
+      for (let g = 0; g < 1e6; g++) {
+        const to = cur.v; if (to === u0) break; ids.push(to);
+        const cand = (out.get(to) || []).filter(e => !e.used && e.v !== from || (!e.used && (out.get(to) || []).filter(x => !x.used).length === 1)); if (!cand.length) break;
+        const F = P.get(from), T = P.get(to), ux = T.x - F.x, uy = T.y - F.y; let best = null, ba = -Infinity;
+        for (const e of cand) { const V = P.get(e.v), vx = V.x - T.x, vy = V.y - T.y, ang = Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy); if (ang > ba) { ba = ang; best = e; } }
+        best.used = true; from = to; cur = best;
+      }
+      if (ids.length >= 3) faces.push({ ids, area: signedArea(ids, P) });
+    }
+    const uses = (ids, a, b) => ids.some((v, k) => { const w = ids[(k + 1) % ids.length]; return (v === a && w === b) || (v === b && w === a); });
+    const ok = faces.filter(f => f.area > 1e-6 && chords.every(([a, b]) => uses(f.ids, a, b))).sort((x, y) => x.area - y.area);
+    if (!ok.length) throw new Error('封口線沒有圍出位於宗地之外的範圍（兩端是否都在同一個凹口的兩岸？）');
+    return { ids: ok[0].ids, area: ok[0].area };
+  }
   // D11：已刪除的宗地，新面積、中心坐標、LIMIT 改 0（其餘欄位與記錄不動，同 NECEXE）
+  // 未登記地工具動過的宗地（新建、分割剩餘、合併保留者）：新面積（公頃 6 位）、LIMIT（中心到最遠界址點）重算，中心不在宗地內就移進來（比照 116 的 update_d11）。
+  // 新宗地附加一筆，沿用來源宗地（或任一 9000 號）的記錄當樣板，換上地號；登記面積 0、圖解面積＝新面積。
+  function interiorPoint(ids, P) {
+    const c = polyCentroid(ids, P); if (pointInRing(ids, P, c.y, c.x)) return c;
+    let y0 = Infinity, y1 = -Infinity; for (const id of ids) { const q = P.get(id); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
+    let best = null;
+    for (const f of [0.5, 0.3, 0.7, 0.2, 0.8]) { const y = y0 + (y1 - y0) * f, xs = [];
+      for (let i = 0; i < ids.length; i++) { const a = P.get(ids[i]), b = P.get(ids[(i + 1) % ids.length]); if ((a.y > y) !== (b.y > y)) xs.push(a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y)); }
+      xs.sort((u, v) => u - v); for (let k = 0; k + 1 < xs.length; k += 2) if (!best || xs[k + 1] - xs[k] > best.w) best = { w: xs[k + 1] - xs[k], x: (xs[k] + xs[k + 1]) / 2, y }; }
+    return best ? { x: best.x, y: best.y } : c;
+  }
+  function d11Targets(ds) {
+    const o = ds.orig; return ds.parcels.filter(p => !p.deleted && (p.created || (p.unregEdit && (() => { const r = o && o.rings[p.idx]; return !r || r.ids.length !== p.ids.length || r.ids.some((v, k) => v !== p.ids[k]); })())));
+  }
   function exportD11(par, ds) {
-    const out = new Uint8Array(par.u8); let n = 0;
-    for (const p of ds.parcels) if (p.deleted && p.attrRow != null) { for (const f of ['AREA_NEW', 'CENTER_Y', 'CENTER_X', 'LIMIT']) if (par.fields.some(x => x.name === f)) patchDbfNumber(out, par, p.attrRow, f, 0); n++; }
-    return { bytes: out, cleared: n };
+    let out = new Uint8Array(par.u8), n = 0, upd = 0; const recs = [], P = ds.points, has = f => par.fields.some(x => x.name === f);
+    for (const p of ds.parcels) if (p.deleted && !p.created && p.attrRow != null) { for (const f of ['AREA_NEW', 'CENTER_Y', 'CENTER_X', 'LIMIT']) if (has(f)) patchDbfNumber(out, par, p.attrRow, f, 0); n++; }
+    const fill = (u8, t, row, p, old) => {
+      const ha = Math.round(p.area / 1e4 * 1e6) / 1e6; let c = old && old.CENTER_Y ? { y: old.CENTER_Y, x: old.CENTER_X } : null;
+      if (!c || !pointInRing(p.ids, P, c.y, c.x)) { const q = interiorPoint(p.ids, P); c = { y: Math.round(q.y * 1000) / 1000, x: Math.round(q.x * 1000) / 1000 }; }
+      let lim = 0; for (const id of p.ids) { const q = P.get(id); lim = Math.max(lim, Math.hypot(q.x - c.x, q.y - c.y)); }
+      const set = (f, v) => { if (has(f)) patchDbfNumber(u8, t, row, f, v); };
+      set('AREA_NEW', ha); set('CENTER_Y', c.y); set('CENTER_X', c.x); set('LIMIT', Math.round(lim * 1000) / 1000); return ha;
+    };
+    for (const p of d11Targets(ds)) {
+      if (p.created) {
+        const lk = p.like != null ? ds.parcels[p.like] : null, tr = lk && lk.attrRow != null ? lk.attrRow : par.rows.findIndex(r => !r._deleted && r.PAR_N_M >= UNREG_MIN);
+        const rec = tr >= 0 ? par.u8.slice(par.hl + tr * par.rl, par.hl + (tr + 1) * par.rl) : blankRecord(par), t = { ...par, hl: 0 }; rec[0] = 0x20;
+        const [sec, m, c] = p.key.split('|').map(Number);
+        for (const [f, v] of [['PAR_O_M', m], ['PAR_O_C', c], ['PAR_N_M', m], ['PAR_N_C', c], ['SECTION_O', sec], ['AREA_OLD', 0]]) if (has(f)) patchDbfNumber(rec, t, 0, f, v);
+        const ha = fill(rec, t, 0, p, null); if (has('AREA_DIG')) patchDbfNumber(rec, t, 0, 'AREA_DIG', ha); recs.push(rec);
+      } else if (p.attrRow != null) { fill(out, par, p.attrRow, p, par.rows[p.attrRow]); upd++; }
+    }
+    return { bytes: appendRecords(out, par, recs), cleared: n, updated: upd, added: recs.length };
   }
   // D21（經界線）：由目前的界址串推出每條線的左右宗地（環逆時針＝內部在左；地中地的線另一側是外圈；段外＝0），與原檔比對：
   // 左右不同就改寫、已不存在的線把端點清成 0（NECEXE 自己也留這種列，讀取時忽略）、新的線附加在檔尾。圓弧（LIN_MID）的列不動。
@@ -1302,10 +1462,11 @@ const Core = (() => {
     // 先決定附加記錄的位置，再回頭寫入
     const jobs = [];
     for (const p of ds.parcels) {
-      if (!p.rows || !p.ids0) continue;
+      if (!p.rows || !p.ids0 || (p.created && p.deleted)) continue;
       const same = p.ids.length === p.ids0.length && p.ids.every((v, i) => v === p.ids0[i]); if (same) continue;
       const need = Math.ceil(p.ids.length / 8), have = p.rows.length, rowsUse = p.rows.slice(0, Math.min(need, have));
-      const extra = Math.max(0, need - have), tmpl = bnd.u8.slice(bnd.hl + p.rows[have - 1] * bnd.rl, bnd.hl + (p.rows[have - 1] + 1) * bnd.rl);
+      const extra = Math.max(0, need - have), tr = have ? p.rows[have - 1] : bnd.rows.findIndex(r => !r._deleted && r.O_PARCEL), tmpl = bnd.u8.slice(bnd.hl + tr * bnd.rl, bnd.hl + (tr + 1) * bnd.rl);
+      if (!have) { const [a, b, c] = p.key.split('|').map(Number), t = { ...bnd, hl: 0 }; patchDbfNumber(tmpl, t, 0, 'O_SECTION', a); patchDbfNumber(tmpl, t, 0, 'O_PARCEL', b); patchDbfNumber(tmpl, t, 0, 'O_PARCEL_E', c); }   // 新宗地：沿用任一列當樣板、換上地號
       jobs.push({ p, rowsUse, extra, tmpl, blank: p.rows.slice(need), dropKey: !!p.deleted });
     }
     for (const j of jobs) {
@@ -1345,10 +1506,10 @@ const Core = (() => {
   function changedDFiles(ds, dbf) {
     const out = {}, st = structSummary(ds);
     if (dbf.pts && (movedPoints(ds).length || st.added)) { const r = exportD14(dbf.pts, ds); out.d14 = { bytes: r.bytes, note: `改 ${r.changed} 點坐標` + (r.added ? `、附加 ${r.added} 點` : '') }; }
-    if (dbf.bnd && st.rings) { const r = exportD13(dbf.bnd, ds); out.d13 = { bytes: r.bytes, note: `改寫 ${r.parcels} 宗界址串` }; }
+    if (dbf.bnd && (st.rings || st.created)) { const r = exportD13(dbf.bnd, ds); out.d13 = { bytes: r.bytes, note: `改寫 ${r.parcels} 宗界址串` }; }
     if (dbf.d12 && st.holes) { const r = exportD12(dbf.d12, ds); if (r.added || r.cleared) out.d12 = { bytes: r.bytes, note: `地中地 +${r.added}` + (r.cleared ? ` −${r.cleared}` : '') }; }
-    if (dbf.par && st.deleted) { const r = exportD11(dbf.par, ds); out.d11 = { bytes: r.bytes, note: `刪除 ${r.cleared} 宗（新面積改 0）` }; }
-    if (dbf.lin && (st.rings || st.holes || st.deleted || st.added || st.removed)) { const r = exportD21(dbf.lin, ds); if (r.patched || r.cleared || r.added) out.d21 = { bytes: r.bytes, note: `經界線 改 ${r.patched}、移除 ${r.cleared}、新增 ${r.added}` }; }
+    if (dbf.par && (st.deleted || st.created || d11Targets(ds).length)) { const r = exportD11(dbf.par, ds); if (r.cleared || r.updated || r.added) out.d11 = { bytes: r.bytes, note: [r.cleared ? `刪除 ${r.cleared} 宗` : '', r.added ? `新增 ${r.added} 宗` : '', r.updated ? `更新 ${r.updated} 宗面積` : ''].filter(Boolean).join('、') }; }
+    if (dbf.lin && (st.rings || st.holes || st.deleted || st.created || st.added || st.removed)) { const r = exportD21(dbf.lin, ds); if (r.patched || r.cleared || r.added) out.d21 = { bytes: r.bytes, note: `經界線 改 ${r.patched}、移除 ${r.cleared}、新增 ${r.added}` }; }
     return { files: out, needD12: !dbf.d12 && st.holes > 0 };
   }
 
@@ -1371,7 +1532,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteHoleParcel, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteHoleParcel, unregSummary, splitParcel, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();

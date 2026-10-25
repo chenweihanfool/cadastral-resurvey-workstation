@@ -116,7 +116,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
       <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
-      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="ptline">點移到線上…<small>垂足</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><button data-act="delhole">刪除所選地中地<small>面積併入外圈</small></button><hr>
+      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="ptline">點移到線上…<small>垂足</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><button data-act="delhole">刪除所選地中地<small>面積併入外圈</small></button><button data-act="unreg">未登記土地分割合併…<small>9000 號以上</small></button><hr>
       <button data-act="move">移動／旋轉／對位…</button></div></div>
     <div class="menu"><button class="mbtn">檢視</button><div class="mlist">
       <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
@@ -256,6 +256,14 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="row small"><button class="btn" id="btnPtDel">刪除所選界址點（Del）</button><button class="btn" id="btnOpenClean">一鍵清理多餘點…</button></div>
   <div class="small muted" style="margin-top:4px">刪除會同時從所有含該點的宗地環移除；環不能少於 3 點，圓弧的弧端與中點不能刪。可復原。</div>
   <div id="ptEditInfo" class="small" style="margin-top:6px"></div></section></div></dialog>
+<dialog class="fp" id="dlgUnreg"><div class="fphead"><b>未登記土地（9000 號以上）分割合併</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
+  <div class="row small"><label>每筆界址點上限 <input type="number" id="unN" value="10" min="3" style="width:56px"> 點</label><label>新地號母號 <input type="number" id="unMother" value="9001" min="9000" style="width:70px"></label><button class="btn" id="btnUnRefresh">重新計算</button></div>
+  <div id="unSum" class="small" style="margin-top:6px"></div>
+  <div class="row" style="margin-top:6px"><button class="btn primary" id="btnUnSplit" title="沒勾選＝全部超過上限者">分割（每筆 ≤ 上限）</button><button class="btn" id="btnUnMerge" title="沒勾選＝同母號且相連者各併成一筆">合併</button><label class="chk small"><input type="checkbox" id="unAutoSplit" checked>合併後自動分割</label></div>
+  <div class="small muted" style="margin-top:4px">勾選表內的地號只處理勾選的；不勾選時，「分割」處理全部超過上限者，「合併」把同母號且相連的各併成一筆。分割以連接既有界址點的弦切下，新塊編新子號（同母號、接續最大子號），剩餘部分保留原地號。地中地與含圓弧者暫不處理。全部可一次復原。</div>
+  <div id="unList" style="margin-top:6px;max-height:36vh;overflow:auto"></div></section>
+<section><h2>封閉凹口（與段外相通的長條）</h2><div class="small muted">按下後，依序點兩個段外圍（測區邊界）上的界址點畫一條封口線；長條兩端都通到段外時就畫兩條。程式找出被封口線圍住、位於所有宗地之外的範圍（綠色預覽），按 Enter 建為新地號（母號見上）。</div>
+  <div class="row" style="margin-top:6px"><button class="btn" id="btnUnPocket">開始畫封口線</button></div></section></div></dialog>
 <dialog class="fp" id="dlgRing"><div class="fphead"><b>界址串檢查與編修</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
   <div class="small muted">檢查每宗的界址串：<b>內含別宗整圈</b>（地中地被寫進外圈界址串，圖上多出跳線或細縫）、<b>自我接觸</b>（重複經過同一點）、<b>自我交錯</b>、<b>未設地中地</b>（別宗整個在環內，但 D12 沒有關係，面積沒扣）。</div>
   <div class="row" style="margin-top:6px"><button class="btn" id="btnRingCheck">重新檢查</button><span id="ringSum" class="small"></span></div>
