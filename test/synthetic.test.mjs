@@ -333,5 +333,19 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.throws(() => Core.setRing(E.ds, 0, [1, 2, 3, 2]), /重複/); assert.throws(() => Core.setRing(E.ds, 0, [1, 2]), /3 點/);
   // (f) 自我交錯（8 字形）
   const F = mk([ring(1, 1, 0, [1, 2, 4, 3])], []); assert.ok(Core.ringIssues(F.ds).some(o => o.kind === 'selfcross'));
+  // (g) 通道端點（KC0336 的 1092-2：跳線接回外圈的 6159 只屬於本宗、離內圈 0.24 m）→ 一併移除，外圈直接接回真正的界址點
+  const Pg = [...P, [11, 51, 0], [12, 49, 0], [13, 40.1, 39.8]], d14g = Core.parseDbf(makeDbf(F_D14, Pg.map(([n, y, x]) => pt(n, Y + y, X + x))));
+  const G = Core.datasetFromD({ pts: d14g, bnd: Core.parseDbf(makeDbf(F_D13, [ring(1, 1, 0, [1, 2, 3, 4, 11, 8, 7, 6]), ring(1, 1, 0, [5, 13, 12]), inner])), d12: Core.parseDbf(makeDbf(F_D12, [])) });
+  const ig = Core.ringIssues(G).find(o => o.kind === 'embedded'); assert.deepEqual(ig.trimmed, [13]); near(ig.areaFixed, 9900, 1e-6);
+  const sg = Core.splitHole(G, 0, 1); assert.deepEqual(G.parcels[0].ids, [1, 2, 3, 4, 11, 12]); assert.ok(!G.points.has(13)); near(G.parcels[0].area, 9900, 1e-6);
+  Core.applyDelta(G, sg.delta, 'undo'); assert.ok(G.points.has(13)); assert.equal(G.parcels[0].ids.length, 11);
+  // (h) 段界上的凹口：鄰宗整圈貼著外圈（跳線只屬於本宗、鄰宗未走過的邊只屬於鄰宗）也不是地中地
+  const Ph = [[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0], [5, 60, 0], [6, 60, 10], [7, 40, 10], [8, 40, 0]], d14h = Core.parseDbf(makeDbf(F_D14, Ph.map(([n, y, x]) => pt(n, Y + y, X + x))));
+  const H = Core.datasetFromD({ pts: d14h, bnd: Core.parseDbf(makeDbf(F_D13, [ring(1, 1, 0, [1, 2, 3, 4, 5, 6, 7, 8]), ring(1, 2, 0, [8, 7, 6, 5])])) });
+  assert.equal(Core.ringIssues(H).length, 0, '凹口不報'); assert.throws(() => Core.splitHole(H, 0, 1), /已是|凹口|不在/);
+  // (i) 內部的凹口：鄰宗整圈貼著外圈、跳線與別宗共用 → 不報（KC0336 有 24 處）
+  const Pi = [...Ph, [9, 0, -50], [10, 100, -50]], d14i = Core.parseDbf(makeDbf(F_D14, Pi.map(([n, y, x]) => pt(n, Y + y, X + x))));
+  const I = Core.datasetFromD({ pts: d14i, bnd: Core.parseDbf(makeDbf(F_D13, [ring(1, 1, 0, [1, 2, 3, 4, 5, 6, 7, 8]), ring(1, 2, 0, [8, 7, 6, 5]), ring(1, 3, 0, [9, 1, 8, 5, 4, 10])])) });
+  assert.equal(Core.ringIssues(I).length, 0, '內部凹口不報');
 }
 console.log('SYNTHETIC OK');

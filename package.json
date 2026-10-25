@@ -1,6 +1,6 @@
 {
   "name": "cadastral-resurvey-workstation",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "地籍圖重測工作站：讀取 NECEXE 的 D 檔與 COA/BNP/PAR，點線面多選調整、面積較差即時顯示、套疊底圖、列印。單一 HTML，免安裝。",
   "private": true,
   "type": "commonjs",
