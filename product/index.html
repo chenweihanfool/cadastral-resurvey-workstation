@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>地籍圖調整工作台</title>
+<title>地籍圖重測工作台</title>
 <style>
 :root{--bg:#f4f5f7;--panel:#fff;--ink:#1d2330;--muted:#69718a;--line:#d9dde6;--accent:#1f6feb;--accent-ink:#fff;
   --canvas:#fbfcfd;--edge:#2b3445;--ref:#9aa3b5;--sel:#1f6feb;--hover:#00a3a3;--changed:rgba(255,160,0,.22);--bad:#d1242f;--ok:#1a7f37;--survey:#c2188e}
@@ -104,7 +104,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <div id="printArea"></div>
 <div id="app">
 <header>
-  <h1>地籍圖調整工作台</h1>
+  <h1>地籍圖重測工作台</h1>
   <input type="file" id="fileIn" multiple hidden>
   <input type="file" id="dirIn" webkitdirectory hidden>
   <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden>
@@ -131,6 +131,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <button data-f="pt" class="on">點</button><button data-f="edge" class="on">線</button><button data-f="par" class="on">面</button></div>
   <button class="btn" id="btnUndo" disabled>復原</button><button class="btn" id="btnRedo" disabled>重做</button>
   <button class="btn" id="btnFit">全圖</button>
+  <input type="search" id="findTop" list="parList" placeholder="跳至地號／點號 (Ctrl+F)" title="輸入地號（例 1092-2，可只打母號）或「點 123」後按 Enter" style="width:170px"><datalist id="parList"></datalist>
   <span style="flex:1"></span>
   <button class="btn" id="btnSide" title="顯示／隱藏右側欄">側欄</button>
 </header>
@@ -281,7 +282,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <p><b>旋轉與對位</b>：在「移圖」或已選取要素時，可輸入角度按「↺／↻」旋轉（樞紐預設為移動對象中心，Alt+點擊自訂）；「兩點對位」依序點新圖 A、目標 A′、新圖 B、目標 B′，自動算出旋轉與平移（不縮放，並回報兩對點距離比供檢查）。</p>
 <p><b>移圖（對照舊圖）</b>：切到「移圖」(<kbd>M</kbd>)，在圖上拖曳、用方向鍵或 ΔN/ΔE，整張新圖一起平移，舊圖不動；平移不改變面積，可復原。若已選取要素，則只移動選取的部分。</p>
 <p><b>平移／縮放</b>：滾輪縮放；中鍵或右鍵拖曳平移；或切到「平移」工具。</p>
-<p><b>快捷鍵</b>：<kbd>Ctrl+Z</kbd> 復原、<kbd>Ctrl+Y</kbd> 重做、<kbd>Esc</kbd> 取消選取、<kbd>V</kbd>/<kbd>H</kbd> 工具、<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切換點/線/面。</p>
+<p><b>快捷鍵</b>：<kbd>Ctrl+Z</kbd> 復原、<kbd>Ctrl+Y</kbd> 重做、<kbd>Ctrl+F</kbd> 跳至地號／點號、<kbd>Esc</kbd> 取消選取、<kbd>V</kbd>/<kbd>H</kbd> 工具、<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切換點/線/面。</p>
 <p><b>輸出</b>：「輸出 D14」只改動被移動點的坐標，其餘位元組與原檔完全相同；覆蓋進案件資料夾前請先備份。D11 的面積欄位不改，請在 NECEXE 內用「重算面積」更新。「輸出 JSON」含移動點與面積變化，方便 AI／其他程式讀取。</p>
 <p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（getState / select / move / undo / exportSession），網址加 <code>?bridge=ws://127.0.0.1:埠號</code> 可接 WebSocket 橋接（預留給 MCP）。</p>
 <form method="dialog"><button class="btn primary">關閉</button></form></dialog>
@@ -1434,6 +1435,16 @@ if (typeof module !== 'undefined') module.exports = Core;
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.10.0', date: '2026-10-25', type: 'minor',
+    title: '工具列新增「跳至地號／點號」（Ctrl+F）；首頁標題改為「地籍圖重測工作台」',
+    changes: [
+      '工具列新增搜尋框（Ctrl+F）：輸入地號按 Enter 即放大到該宗並選取，狀態列顯示面積與登記面積；可用新或舊地號、全形數字，「1092-0」視同「1092」；只打母號（如 1092）而無此宗時，選取所有子號；下拉清單列出全部地號',
+      '輸入「點 123」（或地號找不到而點號相符）時跳到該界址點',
+      '放大到宗地時四周保留約 25% 的鄰地當參考（原本只留 3 m）；右側面積較差表的「跳至地號」也套用同樣規則',
+      '首頁與視窗標題「地籍圖調整工作台」改為「地籍圖重測工作台」',
+    ],
+  },
+  {
     version: 'v0.9.3', date: '2026-10-20', type: 'patch',
     title: '修正：清理不可刪三叉點（各宗各自去點會在中間留縫，NECEXE 報「自由閉合區」）；報表與預覽新增自由閉合區偵測',
     changes: [
@@ -2272,7 +2283,8 @@ function fit(box) {
 function zoomTo(parIdx) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const i of parIdx) for (const id of S.ds.parcels[i].ids) { const p = S.ds.points.get(id); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
-  fit({ x0: x0 - 3, x1: x1 + 3, y0: y0 - 3, y1: y1 + 3 });
+  const m = Math.max(3, 0.25 * Math.max(x1 - x0, y1 - y0));   // 留四周鄰地當參考
+  fit({ x0: x0 - m, x1: x1 + m, y0: y0 - m, y1: y1 + m });
 }
 cv.addEventListener('wheel', e => {
   e.preventDefault(); const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
@@ -2433,11 +2445,32 @@ $('btnRotL').onclick = () => { const a = rotAngle(); if (a == null) return msg('
 $('btnRotR').onclick = () => { const a = rotAngle(); if (a == null) return msg('旋轉角度格式不正確（例 0.5 或 0-30-00）'); if (!rotateSelection(-a)) msg('請先選取要素，或切到「移圖」工具'); };
 $('btnPivotReset').onclick = () => { S.pivot = null; refresh(); };
 $('btnAlign').onclick = startAlign;
-$('find').addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || !S.ds) return; const q = $('find').value.trim();
-  const p = S.ds.parcels.find(p => p.label === q || p.oldLabel === q); if (!p) return msg(`找不到地號 ${q}`);
-  clearSel(); S.sel.par.add(p.idx); zoomTo([p.idx]); refresh();
-});
+// 跳至地號／點號：全形轉半形、「1092-0」＝「1092」；找不到完全相同的地號就找開頭相同的；「點 123」或只有點號相符時跳到界址點
+const normLabel = q => q.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[－—–‐]/g, '-').replace(/\s+/g, '').replace(/-0$/, '');
+function goTo(raw) {
+  if (!S.ds) return msg('請先載入案件');
+  let q = normLabel(String(raw || '')); if (!q) return;
+  const ptOnly = /^(點|#)/.test(q); q = q.replace(/^(點|#)/, '');
+  const pts = () => { const id = S.ds.points.has(+q) ? +q : S.ds.points.has(q) ? q : null; if (id == null) return false;
+    const p = S.ds.points.get(id); clearSel(); S.sel.pt.add(id); fit({ x0: p.x - 20, x1: p.x + 20, y0: p.y - 20, y1: p.y + 20 }); refresh(); msg(`界址點 ${id}`); return true; };
+  if (ptOnly) { if (!pts()) msg(`找不到界址點 ${q}`); return; }
+  const L = p => [normLabel(p.label), normLabel(p.oldLabel)];
+  let hit = S.ds.parcels.filter(p => L(p).includes(q));
+  if (!hit.length) hit = S.ds.parcels.filter(p => L(p).some(l => l.startsWith(q + '-')));
+  if (!hit.length && pts()) return;
+  if (!hit.length) return msg(`找不到地號 ${q}`);
+  clearSel(); hit.forEach(p => S.sel.par.add(p.idx)); zoomTo(hit.map(p => p.idx)); refresh();
+  const p = hit[0];
+  msg(hit.length > 1 ? `地號 ${q}：找到 ${hit.length} 宗（${hit.slice(0, 8).map(p => p.label).join('、')}${hit.length > 8 ? '…' : ''}），已全部選取` : `地號 ${p.label}` + (p.oldLabel !== p.label ? `（舊 ${p.oldLabel}）` : '') + `　面積 ${p.area.toFixed(2)} m²` + (p.areaReg != null ? `　登記 ${p.areaReg.toFixed(2)} m²` : ''));
+}
+function fillParList() { if (!S.ds) return; const set = new Set(); for (const p of S.ds.parcels) { set.add(p.label); set.add(p.oldLabel); }
+  $('parList').innerHTML = [...set].sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true })).map(l => `<option value="${esc(l)}">`).join(''); }
+for (const id of ['find', 'findTop']) {
+  $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { goTo($(id).value); } else if (e.key === 'Escape') $(id).blur(); });
+  $(id).addEventListener('focus', fillParList);
+}
+$('findTop').addEventListener('change', () => { if (S.ds && S.ds.parcels.some(p => p.label === $('findTop').value || p.oldLabel === $('findTop').value)) goTo($('findTop').value); });
+addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); $('findTop').focus(); $('findTop').select(); } });
 const msg = t => { $('stMsg').textContent = t; clearTimeout(msg.t); msg.t = setTimeout(() => $('stMsg').textContent = '', 9000); };
 
 // ── 輸出 ───────────────────────────────────────────────────────────────────
