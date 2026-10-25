@@ -113,7 +113,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <div class="menu"><button class="mbtn">檔案</button><div class="mlist">
       <button data-act="open">開啟檔案…</button><button data-act="folder">開啟資料夾…</button><hr>
       <button data-act="data">資料來源與匯入…<small>鄰段、影像、控制點</small></button><button data-act="imp">匯入現況點…</button><hr>
-      <button data-act="out">輸出成果…<small>D14／D13／CSV</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
+      <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
       <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
       <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><hr>
@@ -221,7 +221,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     </div></dialog>
 <dialog class="fp" id="dlgOut"><div class="fphead"><b>輸出成果</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>調整成果</h2>
       <div id="outSummary" class="small" style="margin-bottom:8px"></div>
-      <div class="row"><button class="btn primary" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpD13" disabled title="新增／刪除界址點後，宗地界址串（D13）需同步輸出；尚未用 NECEXE 驗證匯入">輸出 D13</button><button class="btn" id="btnExpD12" disabled title="拆出或設定地中地後輸出；需案件已載入 D12；尚未用 NECEXE 驗證匯入">輸出 D12</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div>
+      <div class="row"><button class="btn primary" id="btnExpCase" disabled title="原資料夾所有檔案原樣複製，只換掉有改動的 D 檔；建立新的資料夾，不覆寫原案件">輸出完整案件資料夾</button></div>
+      <div class="small muted" style="margin:4px 0 8px">一次輸出整個 NECEXE 案件資料夾：原資料夾的檔案全部複製，有改動的 D14／D13／D12 換成新版，可直接用 NECEXE 開啟。Chrome／Edge 會請你選一個存放位置，在裡面建立「案件名_調整_日期-時間」資料夾；其他瀏覽器下載同內容的 ZIP。原案件資料夾不會被改動。請用「開啟資料夾」載入案件，才能複製完整資料夾。</div>
+      <details class="small"><summary>單檔輸出與其他格式</summary><div class="row" style="margin-top:6px"><button class="btn" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpD13" disabled title="新增／刪除界址點後，宗地界址串（D13）需同步輸出">輸出 D13</button><button class="btn" id="btnExpD12" disabled title="拆出或設定地中地後輸出；需案件已載入 D12">輸出 D12</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div></details>
       <div id="outHint" class="small muted" style="margin-top:6px"></div></section>
     <section><h2>宗地關係偵錯報表（.ERR）</h2>
       <div class="row"><button class="btn primary" id="btnErr" title="仿 NECEXE 的重測成果檢核報表，Big5 編碼、CRLF 換行">一鍵產出 .ERR</button></div>
