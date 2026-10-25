@@ -1388,13 +1388,37 @@ const Core = (() => {
     return out;
   }
   // 把 run 從環中移除，回傳剩下的外圈（去掉連續重複點）；mid 同步。
-  function cutRun(p, run) {
-    const n = p.ids.length, drop = new Set(); for (let k = 0; k < run.len; k++) drop.add((run.start + k) % n);
-    let ids = [], mid = [];
-    for (let i = 0; i < n; i++) if (!drop.has(i)) { ids.push(p.ids[i]); mid.push(p.mid ? !!p.mid[i] : false); }
+  // 通道端點：跳線接回外圈的點若只屬於 p、且離內圈 ≤ tol（預設 1 m），表示它只是通道的一角（真實案件 KC0336 的 6159，離 1092-5 僅 0.24 m），
+  // 一併移除，讓外圈直接接回真正的界址點——與 NECEXE 中人工修正的結果相同。
+  function cutRun(ds, p, run, tol = 1) {
+    const n = p.ids.length, h = ds.parcels[run.h], P = ds.points, seq = [];
+    for (let k = 0; k < n - run.len; k++) { const i = (run.start + run.len + k) % n; seq.push([p.ids[i], p.mid ? !!p.mid[i] : false, i]); }
+    const dH = id => { const q = P.get(id); let m = Infinity; for (let i = 0; i < h.ids.length; i++) { const a = P.get(h.ids[i]), b = P.get(h.ids[(i + 1) % h.ids.length]); m = Math.min(m, distToSeg(q.x, q.y, a.x, a.y, b.x, b.y)); } return m; };
+    const corner = ([id, mid]) => !mid && (ds.pointParcels.get(id) || []).length === 1 && dH(id) <= tol, trimmed = [];
+    const jumps = [[seq[seq.length - 1][0], p.ids[run.start]], [p.ids[(run.start + run.len - 1) % n], seq[0][0]]];
+    while (seq.length > 3 && corner(seq[0])) { trimmed.push(seq[0][0]); jumps.push([seq[0][0], seq[1][0]]); seq.shift(); }
+    while (seq.length > 3 && corner(seq[seq.length - 1])) { trimmed.push(seq[seq.length - 1][0]); jumps.push([seq[seq.length - 2][0], seq[seq.length - 1][0]]); seq.pop(); }
+    seq.sort((u, v) => u[2] - v[2]);   // 維持原本的起點與順序（剩下的是連續的一段，依原索引排序即可）
+    const ids = seq.map(x => x[0]), mid = seq.map(x => x[1]);
     for (let i = ids.length - 1; i >= 0 && ids.length > 1; i--) { const j = (i + 1) % ids.length; if (ids[i] === ids[j]) { ids.splice(i, 1); mid.splice(i, 1); } }
-    const before = p.ids[(run.start - 1 + n) % n], after = p.ids[(run.start + run.len) % n];
-    return { ids, mid, jumps: [[before, p.ids[run.start]], [p.ids[(run.start + run.len - 1) % n], after]].filter(([a, b]) => a !== b) };
+    return { ids, mid, trimmed, jumps: jumps.filter(([a, b]) => a !== b) };
+  }
+  // run 是否真的是「地中地 + 跳線」：兩條跳線只屬於 p（不是與鄰地共用的界址線），且 h 沒被 p 走過的邊只屬於 h。
+  // 否則是相鄰宗地剛好整圈貼著 p 的凹口（KC0336 有 24 處這種情形，都不是錯誤）。
+  function isHoleRun(ds, p, run) {
+    const n = p.ids.length, h = ds.parcels[run.h], only = (a, b, who) => { const e = ds.edges.get(segKey(a, b)); return e && e.parcels.length === 1 && e.parcels[0] === who; };
+    const before = p.ids[(run.start - 1 + n) % n], after = p.ids[(run.start + run.len) % n], first = p.ids[run.start], last = p.ids[(run.start + run.len - 1) % n];
+    if ((before !== first && !only(before, first, p.idx)) || (after !== last && !only(last, after, p.idx))) return false;
+    const pe = new Set(); for (let i = 0; i < n; i++) pe.add(segKey(p.ids[i], p.ids[(i + 1) % n]));
+    for (let i = 0; i < h.ids.length; i++) { const a = h.ids[i], b = h.ids[(i + 1) % h.ids.length]; if (!pe.has(segKey(a, b)) && !only(a, b, h.idx)) return false; }
+    return true;
+  }
+  // h 是否「確實在」拆出後的外圈 ring 之內：形心在內，且 h 每一點離外圈邊界 ≥ margin（段界上的凹口，h 的點會落在外圈邊界上）
+  function holeInside(ds, ring, h, margin = 0.5) {
+    const P = ds.points, c = polyCentroid(h.ids, P); if (ring.length < 3 || !pointInRing(ring, P, c.y, c.x)) return 'outside';
+    for (const id of h.ids) { const q = P.get(id); if (!pointInRing(ring, P, q.y, q.x)) return 'edge';
+      for (let i = 0; i < ring.length; i++) { const a = P.get(ring[i]), b = P.get(ring[(i + 1) % ring.length]); if (distToSeg(q.x, q.y, a.x, a.y, b.x, b.y) < margin) return 'edge'; } }
+    return 'inside';
   }
   const polyCentroid = (ids, points) => {   // 多邊形形心（相對第一點，避免大數）
     const o = points.get(ids[0]); let a = 0, cx = 0, cy = 0;
@@ -1405,14 +1429,16 @@ const Core = (() => {
   function ringIssues(ds) {
     const out = [], P = ds.points;
     for (const p of ds.parcels) {
-      const runs = embeddedRuns(ds, p), inRun = new Set();
+      const runs = embeddedRuns(ds, p).filter(r => isHoleRun(ds, p, r)), inRun = new Set();
       for (const r of runs) {
-        const h = ds.parcels[r.h], c = cutRun(p, r); for (let k = 0; k < r.len; k++) inRun.add((r.start + k) % p.ids.length);
-        const inside = c.ids.length >= 3 && pointInRing(c.ids, P, polyCentroid(h.ids, P).y, polyCentroid(h.ids, P).x);
+        const h = ds.parcels[r.h], c = cutRun(ds, p, r), where = holeInside(ds, c.ids, h);
+        if (where === 'edge') continue;   // 段界上的凹口：h 貼在外圈邊界上，不是地中地
+        for (let k = 0; k < r.len; k++) inRun.add((r.start + k) % p.ids.length);
+        const inside = where === 'inside';
         const same = Math.sign(signedArea(c.ids, P)) === Math.sign(signedArea(h.ids, P)) * r.dir,   // 內圈在 p 環中的走向＝h 本身走向 × dir
           isHole = (p.holes || []).includes(h.idx);
         const fixed = inside ? ringAreaArc(c.ids, c.mid, P) - ringAreaArc(h.ids, h.mid, P) - (p.holes || []).filter(x => x !== h.idx).reduce((s, x) => s + ringAreaArc(ds.parcels[x].ids, ds.parcels[x].mid, P), 0) : null;
-        out.push({ kind: 'embedded', p: p.idx, h: h.idx, inside, sameDir: same, d12: isHole, jumps: c.jumps, areaNow: p.area, areaFixed: fixed });
+        out.push({ kind: 'embedded', p: p.idx, h: h.idx, inside, sameDir: same, d12: isHole, jumps: c.jumps, trimmed: c.trimmed, areaNow: p.area, areaFixed: fixed });
       }
       const cnt = new Map(); p.ids.forEach((id, i) => { if (!inRun.has(i)) cnt.set(id, (cnt.get(id) || 0) + 1); });
       const rep = [...cnt].filter(([, v]) => v > 1).map(([k]) => k); if (rep.length) out.push({ kind: 'repeat', p: p.idx, ids: rep });
@@ -1445,7 +1471,7 @@ const Core = (() => {
   // 給 .ERR 與面板用的一行說明
   function ringIssueLine(ds, o) {
     const p = ds.parcels[o.p], h = o.h != null ? ds.parcels[o.h] : null, f = parLabelFull;
-    if (o.kind === 'embedded') return `${f(p)} 的界址串內含 ${f(h)} 的整圈（${o.sameDir ? '與外圈同向，面積被加入' : '與外圈反向，面積被扣除'}${o.d12 ? '；D12 也已設為地中地，等於重複計算' : ''}${o.jumps.length ? '；跳線 ' + o.jumps.map(j => j.join('–')).join('、') : ''}）` + (o.inside ? `，拆出地中地後面積 ${o.areaFixed.toFixed(2)} ㎡（現 ${o.areaNow.toFixed(2)}）` : '，不在外圈內＝多部分宗地');
+    if (o.kind === 'embedded') return `${f(p)} 的界址串內含 ${f(h)} 的整圈（${o.sameDir ? '與外圈同向，面積被加入' : '與外圈反向，面積被扣除'}${o.d12 ? '；D12 也已設為地中地，等於重複計算' : ''}${o.jumps.length ? '；跳線 ' + o.jumps.map(j => j.join('–')).join('、') : ''}）` + (o.inside ? `，拆出地中地後面積 ${o.areaFixed.toFixed(2)} ㎡（現 ${o.areaNow.toFixed(2)}）；兩條跳線之間原本不屬於任何宗地的通道` + (o.sameDir || o.d12 ? '' : `（約 ${(o.areaFixed - o.areaNow).toFixed(2)} ㎡）`) + `會併入本宗` + (o.trimmed.length ? `，通道端點 ${o.trimmed.join('、')} 一併移除` : '') : '，不在外圈內＝多部分宗地');
     if (o.kind === 'repeat') return `${f(p)} 的界址串重複經過界址點 ${o.ids.slice(0, 8).join('、')}（環自我接觸）`;
     if (o.kind === 'selfcross') return `${f(p)} 的界址串自我交錯：${o.pairs.map(([a, b]) => `/${a.join(',')} 與 /${b.join(',')}`).join('；')}`;
     return `${f(h)} 位於 ${f(p)} 之內，但未設定為地中地（${f(p)} 面積未扣除 ${f(h)}）`;
@@ -1463,17 +1489,18 @@ const Core = (() => {
   // 沒有內含整圈時（只是未設定關係）只設定地中地關係。回傳 {delta, jumps, linked}
   function splitHole(ds, pi, hi) {
     const p = ds.parcels[pi], h = ds.parcels[hi]; if (!p || !h || p === h) throw new Error('宗地不正確');
-    const run = embeddedRuns(ds, p).find(r => r.h === hi), d = newDelta(); let jumps = [];
+    const run = embeddedRuns(ds, p).find(r => r.h === hi && isHoleRun(ds, p, r)), d = newDelta(); let jumps = [], trimmed = [];
     if (run) {
-      const c = cutRun(p, run); if (c.ids.length < 3) throw new Error(`拆出後 ${p.label} 剩不到 3 點`);
-      if (!pointInRing(c.ids, ds.points, polyCentroid(h.ids, ds.points).y, polyCentroid(h.ids, ds.points).x)) throw new Error(`${h.label} 不在 ${p.label} 外圈之內，不是地中地（可能是多部分宗地，請用「重繪界址串」）`);
+      const c = cutRun(ds, p, run); if (c.ids.length < 3) throw new Error(`拆出後 ${p.label} 剩不到 3 點`);
+      const where = holeInside(ds, c.ids, h); if (where !== 'inside') throw new Error(where === 'edge' ? `${h.label} 貼在 ${p.label} 的外圈邊界上（凹口），不是地中地` : `${h.label} 不在 ${p.label} 外圈之內，不是地中地（可能是多部分宗地，請用「重繪界址串」）`);
       const n = p.ids.length, nb = [(run.start - 1 + n) % n, (run.start + run.len) % n];
       if (p.mid && nb.some(i => p.mid[i] || p.mid[(i + n - 1) % n] || p.mid[(i + 1) % n])) throw new Error('跳線接在圓弧上，請用「重繪界址串」處理');
-      touchParcel(d, p); p.ids = c.ids; if (p.mid) p.mid = c.mid; jumps = c.jumps;
+      touchParcel(d, p); p.ids = c.ids; if (p.mid) p.mid = c.mid; jumps = c.jumps; trimmed = c.trimmed;
+      for (const id of trimmed) { const q = ds.points.get(id); if (q) { ds.points.delete(id); d.removed.push(q); } }   // 通道端點只屬於 p，移除後不再有宗地使用
     } else if ((p.holes || []).includes(hi)) throw new Error(`${h.label} 已是 ${p.label} 的地中地`);
     else touchParcel(d, p);
     const linked = !(p.holes || []).includes(hi); if (linked) { linkHole(ds, pi, hi, true); d.holes = [{ p: pi, h: hi, on: true }]; }
-    return { delta: closeDelta(ds, d), jumps, linked };
+    return { delta: closeDelta(ds, d), jumps, trimmed, linked };
   }
   // 重繪界址串：以使用者依序點選的既有界址點取代 p 的環。圓弧中點旗標只在前後鄰點與原本相同時保留。
   function setRing(ds, pi, ids) {
@@ -1504,11 +1531,11 @@ const Core = (() => {
   }
 
   // ── 輸出 ────────────────────────────────────────────────────────────────
-  // 在 DBF 尾端附加整筆記錄（recs＝每筆 rl 位元組），更新筆數與結尾 0x1A。
+  // 在 DBF 尾端附加整筆記錄（recs＝每筆 rl 位元組），更新筆數。結尾 0x1A 照原檔：原檔有才加（NECEXE 寫出的 D 檔沒有，KC0336 驗證 NECEXE 改後的 D12 與本程式輸出逐位元組相同）。
   function appendRecords(u8, dbf, recs) {
     if (!recs.length) return u8;
-    const end = dbf.hl + dbf.n * dbf.rl, out = new Uint8Array(end + recs.length * dbf.rl + 1);
-    out.set(u8.subarray(0, end)); recs.forEach((r, i) => out.set(r, end + i * dbf.rl)); out[out.length - 1] = 0x1a;
+    const end = dbf.hl + dbf.n * dbf.rl, eof = u8.length > end && u8[end] === 0x1a, out = new Uint8Array(end + recs.length * dbf.rl + (eof ? 1 : 0));
+    out.set(u8.subarray(0, end)); recs.forEach((r, i) => out.set(r, end + i * dbf.rl)); if (eof) out[out.length - 1] = 0x1a;
     new DataView(out.buffer).setUint32(4, dbf.n + recs.length, true); return out;
   }
   const blankRecord = dbf => { const r = new Uint8Array(dbf.rl).fill(0x20); return r; };
@@ -1587,6 +1614,16 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.11.1', date: '2026-10-25', type: 'patch',
+    title: '修正：界址串檢查不再把相鄰的凹口誤判為地中地；拆出地中地會一併移除通道端點，結果與 NECEXE 人工修正完全相同',
+    changes: [
+      '以真實案件 KC0336 的改前／改後資料驗證：1092-2 拆出 1092-5 後，界址串與 NECEXE 人工修正的結果逐點相同（面積 8002.07 ㎡、段外圍面積總和 2739578.83 ㎡），輸出的 D13、D12 與 NECEXE 寫出的檔案逐位元組相同',
+      '修正誤判：鄰宗整圈貼著外圈的凹口（相鄰宗地，不是錯誤）原本也被列為「內含別宗整圈」，KC0336 列出 26 項，其中 24 項是凹口。現在要符合三個條件才算地中地：兩條跳線只屬於本宗、內圈沒被走過的邊只屬於內圈、內圈每一點都在拆出後的外圈內部（離邊界至少 0.5 m）。KC0336 改前只剩 1092-2 與 1045-1（內含 1045-11，通道約 41 ㎡，與 1092-2 同類，請確認是否也要修正）',
+      '拆出地中地：跳線接回外圈的點若只屬於本宗、又貼著內圈（≤ 1 m），表示它只是通道的一角，一併從界址串與點檔移除（1092-2 的 6159，離 1092-5 僅 0.24 m；NECEXE 人工修正也刪了這一點）。說明欄會列出要刪的點與通道面積',
+      'DBF 附加記錄時，檔尾 0x1A 結束碼改為「原檔有才加」（NECEXE 寫出的 D 檔沒有），讓輸出與 NECEXE 的檔案一致',
+    ],
+  },
   {
     version: 'v0.11.0', date: '2026-10-25', type: 'minor',
     title: '界址串檢查與編修：偵測地中地被寫進外圈界址串（跳線／細縫）、一鍵拆出地中地、重繪界址串；新增輸出 D12；名稱統一為「地籍圖重測工作站」',
@@ -2474,7 +2511,7 @@ function splitHoleUI(pi, hi) {
   try {
     const r = Core.splitHole(S.ds, pi, hi); pushStruct(r.delta, `拆出地中地 ${h.label}`); S.ringMark = null; clearSel(); S.sel.par.add(pi);
     const cut = r.delta.parcels.get(pi).ids0.length !== p.ids.length;
-    msg(`${p.label}：` + (cut ? `已從界址串移除 ${h.label} 的整圈` + (r.jumps.length ? '與跳線 ' + r.jumps.map(j => j.join('–')).join('、') : '') + '；' : '') + (r.linked ? `已設 ${h.label} 為地中地；` : '') + `面積 ${a0.toFixed(2)} → ${p.area.toFixed(2)} m²。可復原；記得輸出 D13` + (r.linked ? '＋D12' : ''));
+    msg(`${p.label}：` + (cut ? `已從界址串移除 ${h.label} 的整圈` + (r.jumps.length ? '與跳線 ' + r.jumps.map(j => j.join('–')).join('、') : '') + (r.trimmed.length ? `（通道端點 ${r.trimmed.join('、')} 一併刪除）` : '') + '；' : '') + (r.linked ? `已設 ${h.label} 為地中地；` : '') + `面積 ${a0.toFixed(2)} → ${p.area.toFixed(2)} m²。可復原；記得輸出 D13` + (r.linked ? '＋D12' : '') + (r.trimmed.length ? '＋D14' : ''));
   } catch (err) { msg('無法拆出：' + err.message); }
   ringPanel(); refresh();
 }

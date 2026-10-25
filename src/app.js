@@ -706,7 +706,7 @@ function splitHoleUI(pi, hi) {
   try {
     const r = Core.splitHole(S.ds, pi, hi); pushStruct(r.delta, `拆出地中地 ${h.label}`); S.ringMark = null; clearSel(); S.sel.par.add(pi);
     const cut = r.delta.parcels.get(pi).ids0.length !== p.ids.length;
-    msg(`${p.label}：` + (cut ? `已從界址串移除 ${h.label} 的整圈` + (r.jumps.length ? '與跳線 ' + r.jumps.map(j => j.join('–')).join('、') : '') + '；' : '') + (r.linked ? `已設 ${h.label} 為地中地；` : '') + `面積 ${a0.toFixed(2)} → ${p.area.toFixed(2)} m²。可復原；記得輸出 D13` + (r.linked ? '＋D12' : ''));
+    msg(`${p.label}：` + (cut ? `已從界址串移除 ${h.label} 的整圈` + (r.jumps.length ? '與跳線 ' + r.jumps.map(j => j.join('–')).join('、') : '') + (r.trimmed.length ? `（通道端點 ${r.trimmed.join('、')} 一併刪除）` : '') + '；' : '') + (r.linked ? `已設 ${h.label} 為地中地；` : '') + `面積 ${a0.toFixed(2)} → ${p.area.toFixed(2)} m²。可復原；記得輸出 D13` + (r.linked ? '＋D12' : '') + (r.trimmed.length ? '＋D14' : ''));
   } catch (err) { msg('無法拆出：' + err.message); }
   ringPanel(); refresh();
 }
