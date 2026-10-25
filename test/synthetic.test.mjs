@@ -348,4 +348,15 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const I = Core.datasetFromD({ pts: d14i, bnd: Core.parseDbf(makeDbf(F_D13, [ring(1, 1, 0, [1, 2, 3, 4, 5, 6, 7, 8]), ring(1, 2, 0, [8, 7, 6, 5]), ring(1, 3, 0, [9, 1, 8, 5, 4, 10])])) });
   assert.equal(Core.ringIssues(I).length, 0, '內部凹口不報');
 }
+// ── ZIP（輸出完整案件資料夾的備援）與改動的 D 檔清單 ──
+{
+  const enc = new TextEncoder(); assert.equal(Core.crc32(enc.encode('123456789')), 0xcbf43926);
+  const z = Core.makeZip([{ name: 'KC/航照.jgw', data: enc.encode('abc') }, { name: 'KC/a.D14', data: new Uint8Array([1, 2, 3, 4]) }], new Date(2026, 9, 25, 9, 30, 0)), v = new DataView(z.buffer);
+  assert.equal(v.getUint32(0, true), 0x04034b50); const e = z.length - 22; assert.equal(v.getUint32(e, true), 0x06054b50); assert.equal(v.getUint16(e + 10, true), 2);
+  const cd = v.getUint32(e + 16, true), nl = v.getUint16(cd + 28, true); assert.equal(new TextDecoder().decode(z.subarray(cd + 46, cd + 46 + nl)), 'KC/航照.jgw'); assert.equal(v.getUint16(cd + 8, true) & 0x0800, 0x0800);
+  const pts = rd(F_D14, [pt(1, 2706000, 222000), pt(2, 2706000, 222100), pt(3, 2706100, 222100), pt(4, 2706100, 222000)]), bnd = rd(F_D13, [ring(1, 1, 0, [1, 2, 3, 4])]);
+  const ds = Core.datasetFromD({ pts, bnd }); assert.deepEqual(Object.keys(Core.changedDFiles(ds, { pts, bnd, d12: null }).files), []);
+  Core.movePoints(ds, [1], 1, 0); assert.deepEqual(Object.keys(Core.changedDFiles(ds, { pts, bnd, d12: null }).files), ['d14']);
+  Core.setRing(ds, 0, [1, 2, 3]); assert.deepEqual(Object.keys(Core.changedDFiles(ds, { pts, bnd, d12: null }).files).sort(), ['d13', 'd14']);
+}
 console.log('SYNTHETIC OK');

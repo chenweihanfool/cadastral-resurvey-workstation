@@ -113,7 +113,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <div class="menu"><button class="mbtn">檔案</button><div class="mlist">
       <button data-act="open">開啟檔案…</button><button data-act="folder">開啟資料夾…</button><hr>
       <button data-act="data">資料來源與匯入…<small>鄰段、影像、控制點</small></button><button data-act="imp">匯入現況點…</button><hr>
-      <button data-act="out">輸出成果…<small>D14／D13／CSV</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
+      <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
       <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
       <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><hr>
@@ -221,7 +221,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     </div></dialog>
 <dialog class="fp" id="dlgOut"><div class="fphead"><b>輸出成果</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>調整成果</h2>
       <div id="outSummary" class="small" style="margin-bottom:8px"></div>
-      <div class="row"><button class="btn primary" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpD13" disabled title="新增／刪除界址點後，宗地界址串（D13）需同步輸出；尚未用 NECEXE 驗證匯入">輸出 D13</button><button class="btn" id="btnExpD12" disabled title="拆出或設定地中地後輸出；需案件已載入 D12；尚未用 NECEXE 驗證匯入">輸出 D12</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div>
+      <div class="row"><button class="btn primary" id="btnExpCase" disabled title="原資料夾所有檔案原樣複製，只換掉有改動的 D 檔；建立新的資料夾，不覆寫原案件">輸出完整案件資料夾</button></div>
+      <div class="small muted" style="margin:4px 0 8px">一次輸出整個 NECEXE 案件資料夾：原資料夾的檔案全部複製，有改動的 D14／D13／D12 換成新版，可直接用 NECEXE 開啟。Chrome／Edge 會請你選一個存放位置，在裡面建立「案件名_調整_日期-時間」資料夾；其他瀏覽器下載同內容的 ZIP。原案件資料夾不會被改動。請用「開啟資料夾」載入案件，才能複製完整資料夾。</div>
+      <details class="small"><summary>單檔輸出與其他格式</summary><div class="row" style="margin-top:6px"><button class="btn" id="btnExpD14" disabled title="只修改被移動點的坐標，其餘位元組與原 D14 相同">輸出 D14</button><button class="btn" id="btnExpD13" disabled title="新增／刪除界址點後，宗地界址串（D13）需同步輸出">輸出 D13</button><button class="btn" id="btnExpD12" disabled title="拆出或設定地中地後輸出；需案件已載入 D12">輸出 D12</button><button class="btn" id="btnExpMoved" disabled title="異動點位：原坐標、新坐標、位移、原因">異動點位 CSV</button><button class="btn" id="btnExpJson" disabled>輸出 JSON</button></div></details>
       <div id="outHint" class="small muted" style="margin-top:6px"></div></section>
     <section><h2>宗地關係偵錯報表（.ERR）</h2>
       <div class="row"><button class="btn primary" id="btnErr" title="仿 NECEXE 的重測成果檢核報表，Big5 編碼、CRLF 換行">一鍵產出 .ERR</button></div>
@@ -1583,6 +1585,39 @@ const Core = (() => {
     out = appendRecords(out, bnd, recs);
     return { bytes: out, rewritten: patched, appended, parcels: jobs.length };
   }
+  // ── ZIP（不壓縮，store）：輸出完整案件資料夾的備援格式（瀏覽器不支援直接寫入資料夾時）──────────
+  // files: [{name:'KC0336/KC0336.D14', data:Uint8Array}]；檔名以 UTF-8 標記（bit 11），中文檔名在 Windows 10 以上的檔案總管可正確解開。
+  let crcTable = null;
+  function crc32(u8) {
+    if (!crcTable) { crcTable = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcTable[n] = c >>> 0; } }
+    let c = 0xffffffff; for (let i = 0; i < u8.length; i++) c = crcTable[(c ^ u8[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0;
+  }
+  function makeZip(files, date = new Date()) {
+    const enc = new TextEncoder(), dt = ((date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1)) & 0xffff,
+      dd = (((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()) & 0xffff;
+    const locals = [], central = []; let off = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name), data = f.data, crc = crc32(data), lh = new Uint8Array(30 + name.length), v = new DataView(lh.buffer);
+      v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(6, 0x0800, true); v.setUint16(8, 0, true); v.setUint16(10, dt, true); v.setUint16(12, dd, true);
+      v.setUint32(14, crc, true); v.setUint32(18, data.length, true); v.setUint32(22, data.length, true); v.setUint16(26, name.length, true); lh.set(name, 30);
+      const ch = new Uint8Array(46 + name.length), w = new DataView(ch.buffer);
+      w.setUint32(0, 0x02014b50, true); w.setUint16(4, 20, true); w.setUint16(6, 20, true); w.setUint16(8, 0x0800, true); w.setUint16(12, dt, true); w.setUint16(14, dd, true);
+      w.setUint32(16, crc, true); w.setUint32(20, data.length, true); w.setUint32(24, data.length, true); w.setUint16(28, name.length, true); w.setUint32(42, off, true); ch.set(name, 46);
+      locals.push(lh, data); central.push(ch); off += lh.length + data.length;
+    }
+    const cdSize = central.reduce((a, c) => a + c.length, 0), end = new Uint8Array(22), e = new DataView(end.buffer);
+    e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, cdSize, true); e.setUint32(16, off, true);
+    const out = new Uint8Array(off + cdSize + 22); let p = 0; for (const c of [...locals, ...central, end]) { out.set(c, p); p += c.length; } return out;
+  }
+  // 有改動的 D 檔：{ 副檔名: {bytes, note} }。dbf＝{pts, bnd, d12}（原檔解析結果）
+  function changedDFiles(ds, dbf) {
+    const out = {}, st = structSummary(ds);
+    if (dbf.pts && (movedPoints(ds).length || st.added)) { const r = exportD14(dbf.pts, ds); out.d14 = { bytes: r.bytes, note: `改 ${r.changed} 點坐標` + (r.added ? `、附加 ${r.added} 點` : '') }; }
+    if (dbf.bnd && st.rings) { const r = exportD13(dbf.bnd, ds); out.d13 = { bytes: r.bytes, note: `改寫 ${r.parcels} 宗界址串` }; }
+    if (dbf.d12 && st.holes) { const r = exportD12(dbf.d12, ds); out.d12 = { bytes: r.bytes, note: `地中地 +${r.added}` + (r.cleared ? ` −${r.cleared}` : '') }; }
+    return { files: out, needD12: !dbf.d12 && st.holes > 0 };
+  }
+
   // 供 AI/外部程式讀取的中繼資料（JSON，自帶欄位說明）
   function exportSession(ds, extra = {}, sv = null) {
     return {
@@ -1602,7 +1637,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();
@@ -1614,6 +1649,16 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.12.0', date: '2026-10-25', type: 'minor',
+    title: '一鍵「輸出完整案件資料夾」：原資料夾所有檔案原樣複製、只換掉有改動的 D 檔，NECEXE 可直接開啟',
+    changes: [
+      '檔案 → 輸出完整案件資料夾（輸出面板最上方同一顆鈕）：不再需要 D14、D13、D12 逐檔下載再手動取代。原案件資料夾內的所有檔案（含索引、影像、報表與子資料夾）原樣複製，有改動的 D14／D13／D12 換成新版',
+      'Chrome／Edge：選一個存放位置，在裡面建立「案件名_調整_日期-時間」新資料夾，直接用 NECEXE 開啟即可；同名資料夾已存在時自動加 (2)、(3)。其他瀏覽器：下載內容相同的 ZIP，解壓縮後即為完整資料夾（中文檔名以 UTF-8 標記）。原案件資料夾永遠不會被覆寫',
+      '要用「開啟資料夾」或把資料夾拖進來載入，才能複製完整資料夾；只用「開啟檔案」個別選的，輸出時會提醒',
+      '輸出面板說明會列出這次會換掉哪些 D 檔；單檔輸出 D14／D13／D12、CSV、JSON 收進「單檔輸出與其他格式」',
+    ],
+  },
   {
     version: 'v0.11.1', date: '2026-10-25', type: 'patch',
     title: '修正：界址串檢查不再把相鄰的凹口誤判為地中地；拆出地中地會一併移除通道端點，結果與 NECEXE 人工修正完全相同',
@@ -2433,7 +2478,7 @@ function panel() {
   const st = S.st = ds ? Core.structSummary(ds) : { added: 0, removed: 0, rings: 0 }, structEd = st.added + st.removed + st.rings > 0, edited = !!ds && (structEd || Core.movedPoints(ds).length > 0);
   $('btnUndo').disabled = !S.undo.length; $('btnRedo').disabled = !S.redo.length;
   actDis('undo', !S.undo.length); actDis('redo', !S.redo.length); actDis('reset', !edited); actDis('delpt', !S.sel.pt.size); actDis('err', !ds);
-  $('btnExpD14').disabled = !ds || !S.dbf.pts || !edited; $('btnExpD13').disabled = !ds || !S.dbf.bnd || !st.rings; $('btnExpD12').disabled = !ds || !st.holes; $('btnErr').disabled = !ds;
+  $('btnExpD14').disabled = !ds || !S.dbf.pts || !edited; $('btnExpD13').disabled = !ds || !S.dbf.bnd || !st.rings; $('btnExpD12').disabled = !ds || !st.holes; $('btnExpCase').disabled = !ds || !S.dbf.pts; $('btnErr').disabled = !ds;
   $('chkDeltaAll').checked = S.style.delta.all;
   ptPanel(); if ($('dlgRing').open) { const k = S.undo.length + ':' + S.redo.length; if (k !== ringKey) { ringKey = k; ringPanel(); } } if ($('dlgClean').open) { const k = S.undo.length + ':' + S.redo.length + ':' + (S.ds && S.ds.points.size); if (k !== cleanKey) { cleanKey = k; cleanSoon(); } }
   $('btnExpJson').disabled = !ds && !S.survey.points.size;
@@ -2697,7 +2742,7 @@ function openPanel(id) {
 }
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
-  open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
+  open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
   undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), move: () => openPanel('dlgMove'),
   fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
   help: () => $('help').showModal(),
@@ -2789,6 +2834,39 @@ $('btnExpD12').onclick = () => {
   const r = Core.exportD12(S.dbf.d12, S.ds); download(S.names.d12 || 'out.D12', r.bytes);
   msg(`已輸出 ${S.names.d12 || 'D12'}：新增地中地關係 ${r.added} 筆` + (r.cleared ? `、解除 ${r.cleared} 筆（欄位清成 0）` : '') + '。請與 D13 一併取代原檔；尚未用 NECEXE 驗證匯入，請先備份案件資料夾');
 };
+// 輸出完整案件資料夾：原資料夾所有檔案原樣複製，只換掉有改動的 D 檔（D14／D13／D12）。
+// 支援直接寫入資料夾的瀏覽器（Chrome、Edge）→ 選一個存放位置，建立新的子資料夾；其他瀏覽器 → 下載同內容的 ZIP。原資料夾永遠不覆寫。
+async function exportCaseFolder() {
+  if (!S.ds || !S.dbf.pts) return msg('請先用「開啟資料夾」載入 NECEXE 案件（D14＋D13）');
+  const cf = S.caseFiles || { name: caseBase(), list: [], partial: true }, ch = Core.changedDFiles(S.ds, S.dbf);
+  if (ch.needD12) return msg('設定了地中地但案件沒有 D12：請確認案件資料夾內有 D12 再重新開啟');
+  const rep = new Map(); for (const [x, v] of Object.entries(ch.files)) { const n = S.names[x] || `${caseBase()}.${x.toUpperCase()}`; rep.set(n.toLowerCase(), { name: n, ...v }); }
+  if (!rep.size && !confirm('沒有任何改動，仍要輸出一份與原案件相同的資料夾？')) return;
+  const d = new Date(), z = v => String(v).padStart(2, '0'), stamp = `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`, folder = `${cf.name}_調整_${stamp}`;
+  const items = []; const seen = new Set();
+  for (const { rel, file } of cf.list) { const r = !rel.includes('/') && rep.get(rel.toLowerCase()); items.push({ rel, get: r ? async () => r.bytes : () => readBuf(file) }); seen.add(rel.toLowerCase()); }
+  for (const [k, r] of rep) if (!seen.has(k)) items.push({ rel: r.name, get: async () => r.bytes });   // 只開了個別檔案時，至少放進改動的 D 檔
+  const what = rep.size ? [...rep.values()].map(r => `${r.name}（${r.note}）`).join('、') : '無改動';
+  const warn = cf.partial ? '。注意：目前是用「開啟檔案」個別選的，資料夾內只有選取的檔案；要完整資料夾請改用「開啟資料夾」載入' : '';
+  try {
+    if (window.showDirectoryPicker) {
+      const parent = await window.showDirectoryPicker({ id: 'necexe-out', mode: 'readwrite' });
+      const exist = new Set(); for await (const [k] of parent.entries()) exist.add(k.toLowerCase());   // 先列出現有名稱，同名就加 (2)、(3)…
+      let name = folder, n = 1; while (exist.has(name.toLowerCase())) name = `${folder}(${++n})`;
+      const root = await parent.getDirectoryHandle(name, { create: true });
+      for (const it of items) {
+        const parts = it.rel.split('/'); let dir = root; for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p, { create: true });
+        const w = await (await dir.getFileHandle(parts[parts.length - 1], { create: true })).createWritable(); await w.write(await it.get()); await w.close();
+      }
+      msg(`已建立資料夾「${parent.name}／${name}」：${items.length} 個檔案，改動的 D 檔：${what}。可直接用 NECEXE 開啟這個資料夾${warn}`);
+    } else {
+      const files = []; for (const it of items) files.push({ name: `${folder}/${it.rel}`, data: await it.get() });
+      download(folder + '.zip', Core.makeZip(files, d), 'application/zip');
+      msg(`已下載 ${folder}.zip：${items.length} 個檔案，改動的 D 檔：${what}。解壓縮後即為完整案件資料夾，可直接用 NECEXE 開啟${warn}`);
+    }
+  } catch (err) { if (err && err.name === 'AbortError') return; msg('輸出失敗：' + (err && err.message || err)); }
+}
+$('btnExpCase').onclick = exportCaseFolder;
 $('btnExpJson').onclick = () => download((S.names.d14 || 'session').replace(/\.\w+$/, '') + '.adjust.json', JSON.stringify(Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })) }, S.survey), null, 2), 'application/json');
 
 // ── 載入檔案 ───────────────────────────────────────────────────────────────
@@ -2836,10 +2914,17 @@ async function loadFiles(files) {
     if (ctlMsg) return true;
     msg('缺少必要檔案：需要 D14+D13，或 COA+BNP，或 D2C+D2B；控制點用 CTL/CT2/D20；現況點請用「匯入現況點」'); return false;
   }
+  S.caseFiles = caseFolderFiles(files, by.d14 || by.coa || by.d2c);
   S.seam = null; S.clean = null; S.ringMark = null; S.redraw = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
   fit(); refresh();
   msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
   return true;
+}
+// 案件資料夾：與主要 D 檔同一個資料夾（含子資料夾）的所有檔案，供「輸出完整案件資料夾」原樣複製。只選了個別檔案時 partial＝true
+function caseFolderFiles(files, main) {
+  const path = f => f.webkitRelativePath || f._path || f.name, mp = main ? path(main) : '', k = mp.lastIndexOf('/'), dir = k >= 0 ? mp.slice(0, k + 1) : '';
+  const list = files.filter(f => !dir || path(f).startsWith(dir)).map(f => ({ rel: path(f).slice(dir.length), file: f }));
+  return { name: dir ? dir.replace(/\/$/, '').split('/').pop() : caseBase(), list, partial: !dir };
 }
 $('btnOpen').onclick = () => $('fileIn').click(); $('btnFolder').onclick = () => $('dirIn').click();
 $('fileIn').onchange = e => { loadFiles([...e.target.files]); e.target.value = ''; };
@@ -2977,7 +3062,7 @@ $('imgOut').addEventListener('click', e => { if (!e.target.classList.contains('i
 $('btnGoOut').onclick = () => openPanel('dlgOut');
 // 輸出面板的摘要：說明目前有什麼可輸出、為何輸出鈕是灰的
 function outPanel() {
-  const ds = S.ds, moved = ds ? Core.movedPoints(ds).length : 0, changed = ds ? ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0, st = S.st || { added: 0, removed: 0, rings: 0 }, sEd = st.added + st.removed + st.rings;
+  const ds = S.ds, moved = ds ? Core.movedPoints(ds).length : 0, changed = ds ? ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > 1e-6).length : 0, st = S.st || { added: 0, removed: 0, rings: 0, holes: 0 }, sEd = st.added + st.removed + st.rings + (st.holes || 0);
   $('btnExpMoved').disabled = !moved; $('btnGoOut').hidden = !(moved || sEd);
   let h = '', hint = '';
   if (!ds) h = '<span class="muted">尚未載入主要測區。</span>';
@@ -2990,7 +3075,7 @@ function outPanel() {
         const un = j.unresolved, beyond = un.filter(u => u.reason === 'beyond_snap').length, conf = un.filter(u => u.reason === 'conflict').length;
         hint = '上次自動接合沒有移動任何點：' + [j.skipped.length ? `未勾選「以鄰段為準」的鄰段：${j.skipped.join('、')}` : '', beyond ? `${beyond} 點超出吸附上限（可到「處理」調高「吸附」）` : '', conf ? `${conf} 點與別點搶同一鄰段點` : ''].filter(Boolean).join('；') + '。';
       }
-    } else if (S.dbf.pts) hint = sEd ? '有新增／刪除界址點：D14 與 D13（界址串）都要輸出並一起取代原檔，再在 NECEXE 重開並重算面積。新增點附加在 D14 檔尾、D13 改寫受影響宗地的記錄——兩者尚未實際匯入 NECEXE 驗證，請先備份。' : '「輸出 D14」：取代案件資料夾內原 D14 後，在 NECEXE 重開並重算面積（尚未實際匯入 NECEXE 驗證）。D13／D11 不變。';
+    } else if (S.dbf.pts) { const ch = Core.changedDFiles(ds, S.dbf); hint = `「輸出完整案件資料夾」會換掉：${Object.keys(ch.files).map(x => S.names[x] || x.toUpperCase()).join('、') || '（無）'}，其餘檔案原樣複製；用 NECEXE 開啟新資料夾後重算面積。` + (S.caseFiles && S.caseFiles.partial ? '目前是個別開啟的檔案，資料夾只會有選取的檔案；要完整資料夾請改用「開啟資料夾」。' : ''); }
     else hint = '主要測區不是由 D14 載入（COA／BNP），無法輸出 D14；請用「異動點位 CSV」或「輸出 JSON」。';
   }
   $('outSummary').innerHTML = h; $('outHint').textContent = hint;
