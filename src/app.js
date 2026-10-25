@@ -681,7 +681,8 @@ function fit(box) {
 function zoomTo(parIdx) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const i of parIdx) for (const id of S.ds.parcels[i].ids) { const p = S.ds.points.get(id); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
-  fit({ x0: x0 - 3, x1: x1 + 3, y0: y0 - 3, y1: y1 + 3 });
+  const m = Math.max(3, 0.25 * Math.max(x1 - x0, y1 - y0));   // 留四周鄰地當參考
+  fit({ x0: x0 - m, x1: x1 + m, y0: y0 - m, y1: y1 + m });
 }
 cv.addEventListener('wheel', e => {
   e.preventDefault(); const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
@@ -842,11 +843,32 @@ $('btnRotL').onclick = () => { const a = rotAngle(); if (a == null) return msg('
 $('btnRotR').onclick = () => { const a = rotAngle(); if (a == null) return msg('旋轉角度格式不正確（例 0.5 或 0-30-00）'); if (!rotateSelection(-a)) msg('請先選取要素，或切到「移圖」工具'); };
 $('btnPivotReset').onclick = () => { S.pivot = null; refresh(); };
 $('btnAlign').onclick = startAlign;
-$('find').addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || !S.ds) return; const q = $('find').value.trim();
-  const p = S.ds.parcels.find(p => p.label === q || p.oldLabel === q); if (!p) return msg(`找不到地號 ${q}`);
-  clearSel(); S.sel.par.add(p.idx); zoomTo([p.idx]); refresh();
-});
+// 跳至地號／點號：全形轉半形、「1092-0」＝「1092」；找不到完全相同的地號就找開頭相同的；「點 123」或只有點號相符時跳到界址點
+const normLabel = q => q.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[－—–‐]/g, '-').replace(/\s+/g, '').replace(/-0$/, '');
+function goTo(raw) {
+  if (!S.ds) return msg('請先載入案件');
+  let q = normLabel(String(raw || '')); if (!q) return;
+  const ptOnly = /^(點|#)/.test(q); q = q.replace(/^(點|#)/, '');
+  const pts = () => { const id = S.ds.points.has(+q) ? +q : S.ds.points.has(q) ? q : null; if (id == null) return false;
+    const p = S.ds.points.get(id); clearSel(); S.sel.pt.add(id); fit({ x0: p.x - 20, x1: p.x + 20, y0: p.y - 20, y1: p.y + 20 }); refresh(); msg(`界址點 ${id}`); return true; };
+  if (ptOnly) { if (!pts()) msg(`找不到界址點 ${q}`); return; }
+  const L = p => [normLabel(p.label), normLabel(p.oldLabel)];
+  let hit = S.ds.parcels.filter(p => L(p).includes(q));
+  if (!hit.length) hit = S.ds.parcels.filter(p => L(p).some(l => l.startsWith(q + '-')));
+  if (!hit.length && pts()) return;
+  if (!hit.length) return msg(`找不到地號 ${q}`);
+  clearSel(); hit.forEach(p => S.sel.par.add(p.idx)); zoomTo(hit.map(p => p.idx)); refresh();
+  const p = hit[0];
+  msg(hit.length > 1 ? `地號 ${q}：找到 ${hit.length} 宗（${hit.slice(0, 8).map(p => p.label).join('、')}${hit.length > 8 ? '…' : ''}），已全部選取` : `地號 ${p.label}` + (p.oldLabel !== p.label ? `（舊 ${p.oldLabel}）` : '') + `　面積 ${p.area.toFixed(2)} m²` + (p.areaReg != null ? `　登記 ${p.areaReg.toFixed(2)} m²` : ''));
+}
+function fillParList() { if (!S.ds) return; const set = new Set(); for (const p of S.ds.parcels) { set.add(p.label); set.add(p.oldLabel); }
+  $('parList').innerHTML = [...set].sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true })).map(l => `<option value="${esc(l)}">`).join(''); }
+for (const id of ['find', 'findTop']) {
+  $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { goTo($(id).value); } else if (e.key === 'Escape') $(id).blur(); });
+  $(id).addEventListener('focus', fillParList);
+}
+$('findTop').addEventListener('change', () => { if (S.ds && S.ds.parcels.some(p => p.label === $('findTop').value || p.oldLabel === $('findTop').value)) goTo($('findTop').value); });
+addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); $('findTop').focus(); $('findTop').select(); } });
 const msg = t => { $('stMsg').textContent = t; clearTimeout(msg.t); msg.t = setTimeout(() => $('stMsg').textContent = '', 9000); };
 
 // ── 輸出 ───────────────────────────────────────────────────────────────────
