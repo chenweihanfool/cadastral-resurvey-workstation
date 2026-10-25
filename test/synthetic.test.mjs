@@ -447,4 +447,17 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const o13 = Core.parseDbf(Core.exportD13(bnd, ds).bytes); assert.ok(noMidJunk(o13, r => r.O_PARCEL || r.O_PARCEL_E), 'D13 沒有夾在中間的空列');
   const re = Core.datasetFromD({ pts: o14, bnd: o13, par: o11 }); assert.equal(re.parcels.length, ds.parcels.filter(p => !p.deleted).length);
 }
+// ── 已刪除的未登記地（9000 號以上）：D11 整筆移除，指向它的 D12 關係一併移除；一般地號仍保留記錄 ──
+{
+  const Y = 2700000, X = 200000, F_D11d = [...F_D11, { name: 'CENTER_Y', type: 'N', len: 12, dec: 3 }, { name: 'CENTER_X', type: 'N', len: 11, dec: 3 }, { name: 'LIMIT', type: 'N', len: 8, dec: 3 }];
+  const P = [[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0], [5, 40, 40], [6, 40, 50], [7, 50, 50]];
+  const pts = rd(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd = rd(F_D13, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 9012, 5, [5, 6, 7])]);
+  const d12 = rd(F_D12, [{ O_SECTION: 1, O_PARCEL: 1, O_PARCEL_E: 0, I_SECTION: 1, I_PARCEL: 9012, I_PARCEL_E: 5 }]);
+  const a = (m, c, ha, cy) => ({ SECTION_O: 1, PAR_O_M: m, PAR_O_C: c, PAR_N_M: m, PAR_N_C: c, AREA_NEW: ha, CENTER_Y: cy, CENTER_X: cy ? X + 1 : 0, LIMIT: 1 });
+  const par = rd(F_D11d, [a(1, 0, 0.995, Y + 1), a(9012, 5, 0.005, Y + 45), a(9012, 9, 0, 0)]);   // 9012-9＝先前在 NECEXE 刪掉、留下的記錄
+  const ds = Core.datasetFromD({ pts, bnd, par, d12 }); Core.deleteHoleParcel(ds, 1);
+  const ch = Core.changedDFiles(ds, { pts, bnd, par, d12, lin: null }), b11 = Core.parseDbf(ch.files.d11.bytes), b12 = Core.parseDbf(ch.files.d12.bytes);
+  assert.deepEqual(b11.rows.map(r => r.PAR_O_M), [1], '9012-5（本次刪除）與 9012-9（原本就刪掉的）都移除'); assert.equal(b12.n, 0, '指向已移除地號的地中地關係一併移除');
+  const re = Core.datasetFromD({ pts, bnd: Core.parseDbf(ch.files.d13.bytes), par: b11, d12: b12 }); near(re.parcels[0].area, 10000, 1e-6); assert.equal(re.meta.noRing.length, 0);
+}
 console.log('SYNTHETIC OK');

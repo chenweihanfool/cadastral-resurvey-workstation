@@ -1351,9 +1351,18 @@ const Core = (() => {
   function d11Targets(ds) {
     const o = ds.orig; return ds.parcels.filter(p => !p.deleted && (p.created || (p.unregEdit && (() => { const r = o && o.rings[p.idx]; return !r || r.ids.length !== p.ids.length || r.ids.some((v, k) => v !== p.ids[k]); })())));
   }
+  // 已刪除的未登記地（9000 號以上）：D11 整筆移除（116 倉庫「刪除無地號界址的 6 筆區外土地」同作法；保留記錄的話 NECEXE 每次報表都列「無地號界址」）。
+  // 包含本次刪除／合併掉的，以及檔案裡原本就有的「新面積 0、中心 0、沒有界址串」的 9000 號記錄（例如先前在 NECEXE 刪掉的）。一般地號仍照 NECEXE 保留記錄、新面積改 0。
+  function removedUnregKeys(ds, par) {
+    const live = new Set(ds.parcels.filter(p => !p.deleted).map(p => p.key)), out = new Set();
+    for (const p of ds.parcels) if (p.deleted && !p.created && mainNo(p) >= UNREG_MIN) out.add(p.key);
+    if (par) for (const r of par.rows) { const k = `${r.SECTION_O}|${r.PAR_O_M}|${r.PAR_O_C}`; if (!r._deleted && r.PAR_O_M >= UNREG_MIN && r.AREA_NEW === 0 && !r.CENTER_Y && !live.has(k)) out.add(k); }
+    return out;
+  }
   function exportD11(par, ds) {
     let out = new Uint8Array(par.u8), n = 0, upd = 0; const recs = [], P = ds.points, has = f => par.fields.some(x => x.name === f);
-    for (const p of ds.parcels) if (p.deleted && !p.created && p.attrRow != null) { for (const f of ['AREA_NEW', 'CENTER_Y', 'CENTER_X', 'LIMIT']) if (has(f)) patchDbfNumber(out, par, p.attrRow, f, 0); n++; }
+    const rmKeys = removedUnregKeys(ds, par), drop = new Set(); par.rows.forEach((r, i) => { if (!r._deleted && rmKeys.has(`${r.SECTION_O}|${r.PAR_O_M}|${r.PAR_O_C}`)) drop.add(i); });
+    for (const p of ds.parcels) if (p.deleted && !p.created && p.attrRow != null && !drop.has(p.attrRow)) { for (const f of ['AREA_NEW', 'CENTER_Y', 'CENTER_X', 'LIMIT']) if (has(f)) patchDbfNumber(out, par, p.attrRow, f, 0); n++; }
     const fill = (u8, t, row, p, old) => {
       const ha = Math.round(p.area / 1e4 * 1e6) / 1e6; let c = old && old.CENTER_Y ? { y: old.CENTER_Y, x: old.CENTER_X } : null;
       if (!c || !pointInRing(p.ids, P, c.y, c.x)) { const q = interiorPoint(p.ids, P); c = { y: Math.round(q.y * 1000) / 1000, x: Math.round(q.x * 1000) / 1000 }; }
@@ -1370,7 +1379,7 @@ const Core = (() => {
         const ha = fill(rec, t, 0, p, null); if (has('AREA_DIG')) patchDbfNumber(rec, t, 0, 'AREA_DIG', ha); recs.push(rec);
       } else if (p.attrRow != null) { fill(out, par, p.attrRow, p, par.rows[p.attrRow]); upd++; }
     }
-    return { bytes: layoutDbf(par, out, JUNK.d11, { append: recs }), cleared: n, updated: upd, added: recs.length };
+    return { bytes: layoutDbf(par, out, JUNK.d11, { drop, append: recs }), cleared: n, removed: drop.size, updated: upd, added: recs.length };
   }
   // D21（經界線）：由目前的界址串推出每條線的左右宗地（環逆時針＝內部在左；地中地的線另一側是外圈；段外＝0），與原檔比對：
   // 左右不同就改寫、已不存在的線把端點清成 0（NECEXE 自己也留這種列，讀取時忽略）、新的線附加在檔尾。圓弧（LIN_MID）的列不動。
@@ -1408,7 +1417,7 @@ const Core = (() => {
     return { bytes: layoutDbf(lin, out, JUNK.d21, { drop, append: recs, key: sorted ? b => [numAt(lin, b, 'LIN_TOP'), numAt(lin, b, 'LIN_BOT')] : null }), patched, cleared, added: recs.length };
   }
   // D12（地中地）：目前關係中檔案沒有的，附加記錄（沿用第一筆當樣板，只改 O_*／I_* 六欄）；檔案有而目前已解除的，六欄清成 0。
-  function exportD12(d12, ds) {
+  function exportD12(d12, ds, par) {
     const keyOf = r => `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}>${r.I_SECTION}|${r.I_PARCEL}|${r.I_PARCEL_E}`, have = new Map();
     d12.rows.forEach((r, i) => { if (!r._deleted) have.set(keyOf(r), i); });
     const want = new Map(); for (const p of ds.parcels) for (const hi of p.holes || []) { const h = ds.parcels[hi]; want.set(p.key + '>' + h.key, [p.key, h.key]); }
@@ -1418,7 +1427,8 @@ const Core = (() => {
     const six = (u8, base, ok, ik) => { const [a, b, c] = ok.split('|'), [e, f, g] = ik.split('|'); put(u8, base, 'O_SECTION', a); put(u8, base, 'O_PARCEL', b); put(u8, base, 'O_PARCEL_E', c); put(u8, base, 'I_SECTION', e); put(u8, base, 'I_PARCEL', f); put(u8, base, 'I_PARCEL_E', g); };
     let out = new Uint8Array(d12.u8), cleared = 0; const recs = [];
     const gone = new Set(ds.parcels.filter(p => p.deleted).map(p => p.key));   // 內圈已刪除：關係列照 NECEXE 保留不動
-    const drop = new Set(); for (const [k, i] of have) if (!want.has(k) && !gone.has(k.split('>')[1])) { drop.add(i); cleared++; }   // 解除的關係整列移除（不就地清 0）
+    const rmKeys = removedUnregKeys(ds, par);   // 內圈是已移除的未登記地：關係一併移除（不留指向不存在地號的列）
+    const drop = new Set(); for (const [k, i] of have) { const ik = k.split('>')[1]; if (!want.has(k) && (!gone.has(ik) || rmKeys.has(ik))) { drop.add(i); cleared++; } }   // 解除的關係整列移除（不就地清 0）
     const first = d12.rows.findIndex(r => !r._deleted), tmpl = first >= 0 ? d12.u8.slice(d12.hl + first * d12.rl, d12.hl + (first + 1) * d12.rl) : blankRecord(d12);
     for (const [k, [ok, ik]] of want) if (!have.has(k)) { const rec = new Uint8Array(tmpl); rec[0] = 0x20; six(rec, 0, ok, ik); recs.push(rec); }
     out = layoutDbf(d12, out, JUNK.d12, { drop, append: recs });
@@ -1526,8 +1536,9 @@ const Core = (() => {
     const out = {}, st = structSummary(ds);
     if (dbf.pts && (movedPoints(ds).length || st.added)) { const r = exportD14(dbf.pts, ds); out.d14 = { bytes: r.bytes, note: `改 ${r.changed} 點坐標` + (r.added ? `、附加 ${r.added} 點` : '') }; }
     if (dbf.bnd && (st.rings || st.created)) { const r = exportD13(dbf.bnd, ds); out.d13 = { bytes: r.bytes, note: `改寫 ${r.parcels} 宗界址串` }; }
-    if (dbf.d12 && st.holes) { const r = exportD12(dbf.d12, ds); if (r.added || r.cleared) out.d12 = { bytes: r.bytes, note: `地中地 +${r.added}` + (r.cleared ? ` −${r.cleared}` : '') }; }
-    if (dbf.par && (st.deleted || st.created || d11Targets(ds).length)) { const r = exportD11(dbf.par, ds); if (r.cleared || r.updated || r.added) out.d11 = { bytes: r.bytes, note: [r.cleared ? `刪除 ${r.cleared} 宗` : '', r.added ? `新增 ${r.added} 宗` : '', r.updated ? `更新 ${r.updated} 宗面積` : ''].filter(Boolean).join('、') }; }
+    const rmN = dbf.par ? removedUnregKeys(ds, dbf.par).size : 0;
+    if (dbf.d12 && (st.holes || rmN)) { const r = exportD12(dbf.d12, ds, dbf.par); if (r.added || r.cleared) out.d12 = { bytes: r.bytes, note: `地中地 +${r.added}` + (r.cleared ? ` −${r.cleared}` : '') }; }
+    if (dbf.par && (st.deleted || st.created || rmN || d11Targets(ds).length)) { const r = exportD11(dbf.par, ds); if (r.cleared || r.removed || r.updated || r.added) out.d11 = { bytes: r.bytes, note: [r.removed ? `移除 ${r.removed} 筆已刪除的未登記地` : '', r.cleared ? `刪除 ${r.cleared} 宗（新面積改 0）` : '', r.added ? `新增 ${r.added} 宗` : '', r.updated ? `更新 ${r.updated} 宗面積` : ''].filter(Boolean).join('、') }; }
     if (dbf.lin && (st.rings || st.holes || st.deleted || st.created || st.added || st.removed)) { const r = exportD21(dbf.lin, ds); if (r.patched || r.cleared || r.added) out.d21 = { bytes: r.bytes, note: `經界線 改 ${r.patched}、移除 ${r.cleared}、新增 ${r.added}` }; }
     return { files: out, needD12: !dbf.d12 && st.holes > 0 };
   }
