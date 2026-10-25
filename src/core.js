@@ -106,7 +106,7 @@ const Core = (() => {
       ds.points.set(r.COT_NUMBER, { id: r.COT_NUMBER, y: r.COT_Y, x: r.COT_X, y0: r.COT_Y, x0: r.COT_X, row: i });
     });
     const attr = new Map();
-    if (par) for (const r of par.rows) if (!r._deleted) attr.set(`${r.SECTION_O}|${r.PAR_O_M}|${r.PAR_O_C}`, r);
+    if (par) par.rows.forEach((r, i) => { if (!r._deleted) { r._row = i; attr.set(`${r.SECTION_O}|${r.PAR_O_M}|${r.PAR_O_C}`, r); } });
     const groups = new Map();
     bnd.rows.forEach((r, ri) => {
       if (r._deleted) return;
@@ -136,12 +136,13 @@ const Core = (() => {
       ds.parcels.push({
         key: k, section: g.sec, label: a ? fmt(a.PAR_N_M, a.PAR_N_C) : fmt(g.m, g.c), oldLabel: fmt(g.m, g.c),
         ids: g.ids, mid: g.mid, hasArc: g.arcs, holeKeys: holeMap.get(k), rows: g.rows, ids0: g.ids.slice(), mid0: g.mid.slice(),
+        attrRow: a ? a._row : null,                                    // D11 列索引（刪除宗地時改寫面積／中心）
         areaRef: a ? Math.round(a.AREA_NEW * 1e10) / 1e6 : null,      // AREA_NEW 公頃 → m²
         areaReg: a ? Math.round(a.AREA_OLD * 1e10) / 1e6 : null,      // AREA_OLD 登記面積 m²
       });
     }
     // D11 有、但 D13 沒有界址環的地號（NECEXE 報表「無地號界址」）
-    if (par) { const built = new Set(ds.parcels.map(p => p.key)); for (const [k, r] of attr) if (!built.has(k) && !ds.meta.badRing.some(b => b.label === fmtN(r)) && r.PAR_N_M > 0) ds.meta.noRing.push({ label: fmtN(r) }); }
+    if (par) { const built = new Set(ds.parcels.map(p => p.key)); for (const [k, r] of attr) if (!built.has(k) && !ds.meta.badRing.some(b => b.label === fmtN(r)) && r.PAR_N_M > 0 && !(r.AREA_NEW === 0 && !r.CENTER_Y)) ds.meta.noRing.push({ label: fmtN(r) }); }   // 新面積 0 且中心坐標 0＝已刪除的宗地（NECEXE 刪宗地後保留這種 D11 列）
     return finalize(ds);
   }
 
@@ -222,6 +223,7 @@ const Core = (() => {
   // ── 幾何 ────────────────────────────────────────────────────────────────
   // 有號面積（逆時針為正）。相對第一個頂點計算：座標 ~1e6 量級時，避免大數相減造成浮點誤差
   function signedArea(ids, points) {
+    if (ids.length < 3) return 0;   // 已刪除的宗地（環為空）面積 0
     let s = 0; const n = ids.length, o = points.get(ids[0]);
     for (let i = 0; i < n; i++) {
       const p = points.get(ids[i]), q = points.get(ids[(i + 1) % n]);
@@ -310,10 +312,10 @@ const Core = (() => {
   function setPoint(ds, id, y, x) { const p = ds.points.get(id); return movePoints(ds, [id], y - p.y, x - p.x); }
   function resetAll(ds) {
     const o = ds.orig, st = o && structSummary(ds);
-    if (o && (st.added || st.removed || st.rings || st.holes)) {
+    if (o && (st.added || st.removed || st.rings || st.holes || st.deleted)) {
       ds.points = new Map(o.points.map(q => [q.id, { ...q }]));
       ds.parcels.forEach((p, i) => { p.ids = o.rings[i].ids.slice(); if (o.rings[i].mid) p.mid = o.rings[i].mid.slice(); });
-      for (const p of ds.parcels) for (const hi of (p.holes || []).slice()) linkHole(ds, p.idx, hi, false);
+      for (const p of ds.parcels) { p.deleted = false; for (const hi of (p.holes || []).slice()) linkHole(ds, p.idx, hi, false); }
       ds.parcels.forEach((p, i) => { for (const hi of o.rings[i].holes || []) linkHole(ds, i, hi, true); });
       buildTopology(ds); buildArcs(ds);
     }
@@ -342,6 +344,7 @@ const Core = (() => {
     for (const p of d.added) undo ? ds.points.delete(p.id) : ds.points.set(p.id, p);
     for (const p of d.removed) undo ? ds.points.set(p.id, p) : ds.points.delete(p.id);
     for (const l of d.holes || []) linkHole(ds, l.p, l.h, undo ? !l.on : l.on);
+    for (const i of d.deleted || []) ds.parcels[i].deleted = !undo;
     buildTopology(ds); buildArcs(ds); recalc(ds, new Set(d.parcels.keys()));
   }
   const nextPointId = ds => { let m = 0; for (const id of ds.points.keys()) if (id > m) m = id; return m + 1; };
@@ -522,13 +525,14 @@ const Core = (() => {
   }
   // 結構是否有異動（新增／刪除點、環改變）
   function structSummary(ds) {
-    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0, holes: 0 };
+    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0, holes: 0, deleted: 0 };
     const was = new Set(o.points.map(p => p.id)); let added = 0, removed = 0, rings = 0;
     for (const id of ds.points.keys()) if (!was.has(id)) added++;
     for (const id of was) if (!ds.points.has(id)) removed++;
     ds.parcels.forEach((p, i) => { const r = o.rings[i]; if (!r || r.ids.length !== p.ids.length || r.ids.some((v, k) => v !== p.ids[k])) rings++; });
     let holes = 0; ds.parcels.forEach((p, i) => { const a = (o.rings[i] && o.rings[i].holes) || [], b = p.holes || []; if (a.length !== b.length || a.some(v => !b.includes(v))) holes++; });
-    return { added, removed, rings, holes };
+    const deleted = ds.parcels.filter(p => p.deleted).length;
+    return { added, removed, rings, holes, deleted };
   }
 
   // ── 變換（平移＋旋轉）─────────────────────────────────────────────────────
@@ -998,7 +1002,7 @@ const Core = (() => {
     const sumNew = ds.parcels.reduce((s, p) => s + p.area, 0), refs = ds.parcels.filter(p => p.areaRef != null);
     L.push(`各筆宗地實際新面積總和 = ${sumNew.toFixed(2)} ㎡`);
     // 宗地面積為 0、界址線交錯／重疊（NECEXE 同樣列在這裡）
-    for (const p of ds.parcels) if (p.area < 0.005 && !(p.areaRef === 0)) L.push(` ${parLabelFull(p)} 地號新面積為 0.00 且未設定合併關係`);
+    for (const p of ds.parcels) if (!p.deleted && p.area < 0.005 && !(p.areaRef === 0)) L.push(` ${parLabelFull(p)} 地號新面積為 0.00 且未設定合併關係`);
     const cf = ringConflicts(ds), pl = e => { const p = ds.parcels[e.parcels[0]]; return `${parLabelFull(p)} 地號 /${e.a},${e.b}`; };
     for (const [kind, word] of [['cross', '交錯'], ['overlap', '重疊']]) for (const [e1, e2] of cf[kind]) L.push(`${pl(e1)} 與 ${pl(e2)} ${word}`);
     L.push(refs.length ? `各筆宗地登記新面積總和 = ${refs.reduce((s, p) => s + p.areaRef, 0).toFixed(2)} ㎡` : '各筆宗地登記新面積總和 = （無 D11 新面積）');
@@ -1094,6 +1098,7 @@ const Core = (() => {
     return 'inside';
   }
   const polyCentroid = (ids, points) => {   // 多邊形形心（相對第一點，避免大數）
+    if (!ids.length) return { x: 0, y: 0 };
     const o = points.get(ids[0]); let a = 0, cx = 0, cy = 0;
     for (let i = 0; i < ids.length; i++) { const p = points.get(ids[i]), q = points.get(ids[(i + 1) % ids.length]); const px = p.x - o.x, py = p.y - o.y, qx = q.x - o.x, qy = q.y - o.y, c = px * qy - qx * py; a += c; cx += (px + qx) * c; cy += (py + qy) * c; }
     return Math.abs(a) < 1e-12 ? { x: o.x, y: o.y } : { x: o.x + cx / (3 * a), y: o.y + cy / (3 * a) };
@@ -1102,6 +1107,7 @@ const Core = (() => {
   function ringIssues(ds) {
     const out = [], P = ds.points;
     for (const p of ds.parcels) {
+      if (p.deleted) continue;
       const runs = embeddedRuns(ds, p).filter(r => isHoleRun(ds, p, r)), inRun = new Set();
       for (const r of runs) {
         const h = ds.parcels[r.h], c = cutRun(ds, p, r), where = holeInside(ds, c.ids, h);
@@ -1128,9 +1134,9 @@ const Core = (() => {
     // 疑似未設定的地中地：h 整個在 p 環內（只與 p 共用至多一點）、h 不是任何宗地的地中地、也沒被寫進 p 的環；同一個 h 只報最小的外圈
     const embeddedPair = new Set(out.filter(o => o.kind === 'embedded').map(o => o.p + '>' + o.h)), bb = ds.parcels.map(q => ringBox(q, P)), best = new Map();
     for (const h of ds.parcels) {
-      if ((h.containers || []).length) continue; const B = bb[h.idx], c = polyCentroid(h.ids, P);
+      if (h.deleted || (h.containers || []).length) continue; const B = bb[h.idx], c = polyCentroid(h.ids, P);
       for (const p of ds.parcels) {
-        if (h === p || embeddedPair.has(p.idx + '>' + h.idx)) continue;
+        if (h === p || p.deleted || embeddedPair.has(p.idx + '>' + h.idx)) continue;
         const A = bb[p.idx]; if (B.x0 < A.x0 || B.x1 > A.x1 || B.y0 < A.y0 || B.y1 > A.y1 || B.area >= A.area) continue;
         if (h.ids.filter(id => p.ids.includes(id)).length > 1) continue;   // 共邊＝相鄰，不是地中地
         if (!pointInRing(p.ids, P, c.y, c.x) || h.ids.some(id => !p.ids.includes(id) && !pointInRing(p.ids, P, P.get(id).y, P.get(id).x))) continue;
@@ -1186,6 +1192,60 @@ const Core = (() => {
     const d = newDelta(); touchParcel(d, p); p.ids = ids; p.mid = mid; p.hasArc = mid.some(Boolean);
     return { delta: closeDelta(ds, d) };
   }
+  // 刪除地中地、面積併入外圈（仿 NECEXE，KC0336 刪 9012-5004 併入 76-17 驗證）：清空內圈的界址串並標為已刪除，解除地中地關係（外圈面積＝外圈 − 其餘地中地），
+  // 只屬於它的界址點一併刪除。輸出時 D13 該宗的列清成 0（含地號鍵，NECEXE 不讀地號全 0 的列）、D11 新面積／中心坐標／LIMIT 改 0、D21 移除它的經界線；D12 的關係列照 NECEXE 保留。
+  function deleteHoleParcel(ds, hi) {
+    const h = ds.parcels[hi]; if (!h || h.deleted) throw new Error('宗地不存在或已刪除');
+    if (!(h.containers || []).length) throw new Error(`${h.label} 不是地中地（沒有外圈），目前只支援刪除地中地並把面積併入外圈`);
+    if ((h.holes || []).length) throw new Error(`${h.label} 本身還有地中地，請先處理內層`);
+    const d = newDelta(); touchParcel(d, h); d.holes = []; d.deleted = [hi];
+    for (const ci of h.containers.slice()) { touchParcel(d, ds.parcels[ci]); linkHole(ds, ci, hi, false); d.holes.push({ p: ci, h: hi, on: false }); }
+    const only = h.ids.filter((id, i, a) => a.indexOf(id) === i && (ds.pointParcels.get(id) || []).every(x => x === hi));
+    h.ids = []; h.mid = []; h.deleted = true;
+    for (const id of only) { const q = ds.points.get(id); if (q) { ds.points.delete(id); d.removed.push(q); } }
+    const into = d.holes.map(l => ds.parcels[l.p].label);
+    return { delta: closeDelta(ds, d), into, removedPoints: only };
+  }
+  // D11：已刪除的宗地，新面積、中心坐標、LIMIT 改 0（其餘欄位與記錄不動，同 NECEXE）
+  function exportD11(par, ds) {
+    const out = new Uint8Array(par.u8); let n = 0;
+    for (const p of ds.parcels) if (p.deleted && p.attrRow != null) { for (const f of ['AREA_NEW', 'CENTER_Y', 'CENTER_X', 'LIMIT']) if (par.fields.some(x => x.name === f)) patchDbfNumber(out, par, p.attrRow, f, 0); n++; }
+    return { bytes: out, cleared: n };
+  }
+  // D21（經界線）：由目前的界址串推出每條線的左右宗地（環逆時針＝內部在左；地中地的線另一側是外圈；段外＝0），與原檔比對：
+  // 左右不同就改寫、已不存在的線把端點清成 0（NECEXE 自己也留這種列，讀取時忽略）、新的線附加在檔尾。圓弧（LIN_MID）的列不動。
+  // KC0336 驗證：未修改時推得的 8712 條與 D21 全部一致。
+  function exportD21(lin, ds) {
+    const P = ds.points, side = new Map(), put = (k, L, who) => { let e = side.get(k); if (!e) side.set(k, e = { L: null, R: null }); if (L) { if (!e.L) e.L = who; } else if (!e.R) e.R = who; };
+    for (const p of ds.parcels) {
+      if (p.deleted || p.ids.length < 3) continue; const ccw = signedArea(p.ids, P) > 0, n = p.ids.length;
+      for (let i = 0; i < n; i++) { const a = p.ids[i], b = p.ids[(i + 1) % n]; if (a === b) continue; put(a + '>' + b, ccw, p); put(b + '>' + a, !ccw, p); }
+    }
+    for (const h of ds.parcels) for (const ci of h.deleted ? [] : h.containers || []) {
+      const c = ds.parcels[ci]; if (c.deleted) continue; const n = h.ids.length;
+      for (let i = 0; i < n; i++) for (const k of [h.ids[i] + '>' + h.ids[(i + 1) % n], h.ids[(i + 1) % n] + '>' + h.ids[i]]) { const e = side.get(k); if (!e) continue; if (e.L === h && !e.R) e.R = c; else if (e.R === h && !e.L) e.L = c; }
+    }
+    const kp = p => (p ? p.key.split('|').map(Number) : [0, 0, 0]), out = new Uint8Array(lin.u8), has = new Set(); let patched = 0, cleared = 0;
+    const setSide = (u8, row, S, p) => { const [a, b, c] = kp(p); patchDbfNumber(u8, { ...lin, u8 }, row, S + '_SECTION', a); patchDbfNumber(u8, { ...lin, u8 }, row, S + '_PARCEL', b); patchDbfNumber(u8, { ...lin, u8 }, row, S + '_PARCEL_E', c); };
+    lin.rows.forEach((r, i) => {
+      if (r._deleted || !r.LIN_TOP || !r.LIN_BOT || r.LIN_MID) return;
+      const e = side.get(r.LIN_TOP + '>' + r.LIN_BOT); has.add(segKey(r.LIN_TOP, r.LIN_BOT));
+      if (!e) { for (const f of ['LIN_TOP', 'LIN_MID', 'LIN_BOT']) patchDbfNumber(out, lin, i, f, 0); cleared++; return; }
+      const same = (S, p) => { const [a, b, c] = kp(p); return (r[S + '_PARCEL'] || 0) === b && (r[S + '_PARCEL_E'] || 0) === c && (!b || r[S + '_SECTION'] === a); };
+      if (!same('L', e.L) || !same('R', e.R)) { setSide(out, i, 'L', e.L); setSide(out, i, 'R', e.R); patched++; }
+    });
+    for (const r of lin.rows) if (!r._deleted && r.LIN_MID) { has.add(segKey(r.LIN_TOP, r.LIN_MID)); has.add(segKey(r.LIN_MID, r.LIN_BOT)); }
+    const tmpl = lin.rows.findIndex(r => !r._deleted && r.LIN_TOP && !r.LIN_MID), recs = [];
+    for (const e of ds.edges.values()) {
+      if (e.arcPart || has.has(e.key)) continue; const sd = side.get(e.a + '>' + e.b); if (!sd) continue;
+      const rec = tmpl >= 0 ? lin.u8.slice(lin.hl + tmpl * lin.rl, lin.hl + (tmpl + 1) * lin.rl) : blankRecord(lin); rec[0] = 0x20;
+      const tmp = { ...lin, hl: 0, u8: rec }; patchDbfNumber(rec, tmp, 0, 'LIN_TOP', e.a); patchDbfNumber(rec, tmp, 0, 'LIN_MID', 0); patchDbfNumber(rec, tmp, 0, 'LIN_BOT', e.b);
+      for (const [S, p] of [['L', sd.L], ['R', sd.R]]) { const [a, b, c] = kp(p); patchDbfNumber(rec, tmp, 0, S + '_SECTION', a); patchDbfNumber(rec, tmp, 0, S + '_PARCEL', b); patchDbfNumber(rec, tmp, 0, S + '_PARCEL_E', c); }
+      for (const f of lin.fields) if (f.type === 'C') for (let k = 0; k < f.len; k++) rec[f.off + k] = 0x20;   // 查註、識別欄位留白
+      recs.push(rec);
+    }
+    return { bytes: appendRecords(out, lin, recs), patched, cleared, added: recs.length };
+  }
   // D12（地中地）：目前關係中檔案沒有的，附加記錄（沿用第一筆當樣板，只改 O_*／I_* 六欄）；檔案有而目前已解除的，六欄清成 0。
   function exportD12(d12, ds) {
     const keyOf = r => `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}>${r.I_SECTION}|${r.I_PARCEL}|${r.I_PARCEL_E}`, have = new Map();
@@ -1196,7 +1256,8 @@ const Core = (() => {
       if (s.length > f.len) throw new Error(`${name} 值 ${v} 超出欄寬`); for (let i = 0; i < f.len; i++) u8[base + f.off + i] = s.charCodeAt(i); };
     const six = (u8, base, ok, ik) => { const [a, b, c] = ok.split('|'), [e, f, g] = ik.split('|'); put(u8, base, 'O_SECTION', a); put(u8, base, 'O_PARCEL', b); put(u8, base, 'O_PARCEL_E', c); put(u8, base, 'I_SECTION', e); put(u8, base, 'I_PARCEL', f); put(u8, base, 'I_PARCEL_E', g); };
     let out = new Uint8Array(d12.u8), cleared = 0; const recs = [];
-    for (const [k, i] of have) if (!want.has(k)) { six(out, d12.hl + i * d12.rl, '0|0|0', '0|0|0'); cleared++; }
+    const gone = new Set(ds.parcels.filter(p => p.deleted).map(p => p.key));   // 內圈已刪除：關係列照 NECEXE 保留不動
+    for (const [k, i] of have) if (!want.has(k) && !gone.has(k.split('>')[1])) { six(out, d12.hl + i * d12.rl, '0|0|0', '0|0|0'); cleared++; }
     const first = d12.rows.findIndex(r => !r._deleted), tmpl = first >= 0 ? d12.u8.slice(d12.hl + first * d12.rl, d12.hl + (first + 1) * d12.rl) : blankRecord(d12);
     for (const [k, [ok, ik]] of want) if (!have.has(k)) { const rec = new Uint8Array(tmpl); rec[0] = 0x20; six(rec, 0, ok, ik); recs.push(rec); }
     out = appendRecords(out, d12, recs);
@@ -1245,12 +1306,12 @@ const Core = (() => {
       const same = p.ids.length === p.ids0.length && p.ids.every((v, i) => v === p.ids0[i]); if (same) continue;
       const need = Math.ceil(p.ids.length / 8), have = p.rows.length, rowsUse = p.rows.slice(0, Math.min(need, have));
       const extra = Math.max(0, need - have), tmpl = bnd.u8.slice(bnd.hl + p.rows[have - 1] * bnd.rl, bnd.hl + (p.rows[have - 1] + 1) * bnd.rl);
-      jobs.push({ p, rowsUse, extra, tmpl, blank: p.rows.slice(need) });
+      jobs.push({ p, rowsUse, extra, tmpl, blank: p.rows.slice(need), dropKey: !!p.deleted });
     }
     for (const j of jobs) {
       const n = j.p.ids.length;
       j.rowsUse.forEach((ri, r) => { const base = bnd.hl + ri * bnd.rl; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(out, base, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } patched++; });
-      for (const ri of j.blank) { const base = bnd.hl + ri * bnd.rl; for (let k = 1; k <= 8; k++) setRec(out, base, k, 0, false); patched++; }   // 多出的整列清成 0（保留記錄與地號鍵，索引不變）；不用刪除旗標——NECEXE 讀取時不看旗標，舊點號會被讀回環裡
+      for (const ri of j.blank) { const base = bnd.hl + ri * bnd.rl; for (let k = 1; k <= 8; k++) setRec(out, base, k, 0, false); if (j.dropKey) for (const f of ['O_SECTION', 'O_PARCEL', 'O_PARCEL_E']) patchDbfNumber(out, bnd, ri, f, 0); patched++; }   // 已刪除的宗地連地號鍵也清成 0：NECEXE 不讀地號全 0 的列（它刪宗地後自己也留下這種列）   // 多出的整列清成 0（保留記錄與地號鍵，索引不變）；不用刪除旗標——NECEXE 讀取時不看旗標，舊點號會被讀回環裡
       for (let e = 0; e < j.extra; e++) { const rec = new Uint8Array(j.tmpl), r = j.rowsUse.length + e; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(rec, 0, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } rec[0] = 0x20; recs.push(rec); appended++; }
     }
     out = appendRecords(out, bnd, recs);
@@ -1285,7 +1346,9 @@ const Core = (() => {
     const out = {}, st = structSummary(ds);
     if (dbf.pts && (movedPoints(ds).length || st.added)) { const r = exportD14(dbf.pts, ds); out.d14 = { bytes: r.bytes, note: `改 ${r.changed} 點坐標` + (r.added ? `、附加 ${r.added} 點` : '') }; }
     if (dbf.bnd && st.rings) { const r = exportD13(dbf.bnd, ds); out.d13 = { bytes: r.bytes, note: `改寫 ${r.parcels} 宗界址串` }; }
-    if (dbf.d12 && st.holes) { const r = exportD12(dbf.d12, ds); out.d12 = { bytes: r.bytes, note: `地中地 +${r.added}` + (r.cleared ? ` −${r.cleared}` : '') }; }
+    if (dbf.d12 && st.holes) { const r = exportD12(dbf.d12, ds); if (r.added || r.cleared) out.d12 = { bytes: r.bytes, note: `地中地 +${r.added}` + (r.cleared ? ` −${r.cleared}` : '') }; }
+    if (dbf.par && st.deleted) { const r = exportD11(dbf.par, ds); out.d11 = { bytes: r.bytes, note: `刪除 ${r.cleared} 宗（新面積改 0）` }; }
+    if (dbf.lin && (st.rings || st.holes || st.deleted || st.added || st.removed)) { const r = exportD21(dbf.lin, ds); if (r.patched || r.cleared || r.added) out.d21 = { bytes: r.bytes, note: `經界線 改 ${r.patched}、移除 ${r.cleared}、新增 ${r.added}` }; }
     return { files: out, needD12: !dbf.d12 && st.holes > 0 };
   }
 
@@ -1308,7 +1371,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteHoleParcel, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();
