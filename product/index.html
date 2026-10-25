@@ -1723,7 +1723,7 @@ const Core = (() => {
         const ha = fill(rec, t, 0, p, null); if (has('AREA_DIG')) patchDbfNumber(rec, t, 0, 'AREA_DIG', ha); recs.push(rec);
       } else if (p.attrRow != null) { fill(out, par, p.attrRow, p, par.rows[p.attrRow]); upd++; }
     }
-    return { bytes: appendRecords(out, par, recs), cleared: n, updated: upd, added: recs.length };
+    return { bytes: layoutDbf(par, out, JUNK.d11, { append: recs }), cleared: n, updated: upd, added: recs.length };
   }
   // D21（經界線）：由目前的界址串推出每條線的左右宗地（環逆時針＝內部在左；地中地的線另一側是外圈；段外＝0），與原檔比對：
   // 左右不同就改寫、已不存在的線把端點清成 0（NECEXE 自己也留這種列，讀取時忽略）、新的線附加在檔尾。圓弧（LIN_MID）的列不動。
@@ -1738,12 +1738,12 @@ const Core = (() => {
       const c = ds.parcels[ci]; if (c.deleted) continue; const n = h.ids.length;
       for (let i = 0; i < n; i++) for (const k of [h.ids[i] + '>' + h.ids[(i + 1) % n], h.ids[(i + 1) % n] + '>' + h.ids[i]]) { const e = side.get(k); if (!e) continue; if (e.L === h && !e.R) e.R = c; else if (e.R === h && !e.L) e.L = c; }
     }
-    const kp = p => (p ? p.key.split('|').map(Number) : [0, 0, 0]), out = new Uint8Array(lin.u8), has = new Set(); let patched = 0, cleared = 0;
+    const kp = p => (p ? p.key.split('|').map(Number) : [0, 0, 0]), out = new Uint8Array(lin.u8), has = new Set(), drop = new Set(); let patched = 0, cleared = 0;
     const setSide = (u8, row, S, p) => { const [a, b, c] = kp(p); patchDbfNumber(u8, { ...lin, u8 }, row, S + '_SECTION', a); patchDbfNumber(u8, { ...lin, u8 }, row, S + '_PARCEL', b); patchDbfNumber(u8, { ...lin, u8 }, row, S + '_PARCEL_E', c); };
     lin.rows.forEach((r, i) => {
       if (r._deleted || !r.LIN_TOP || !r.LIN_BOT || r.LIN_MID) return;
       const e = side.get(r.LIN_TOP + '>' + r.LIN_BOT); has.add(segKey(r.LIN_TOP, r.LIN_BOT));
-      if (!e) { for (const f of ['LIN_TOP', 'LIN_MID', 'LIN_BOT']) patchDbfNumber(out, lin, i, f, 0); cleared++; return; }
+      if (!e) { drop.add(i); cleared++; return; }   // 已不存在的線整列移除（不就地清 0）
       const same = (S, p) => { const [a, b, c] = kp(p); return (r[S + '_PARCEL'] || 0) === b && (r[S + '_PARCEL_E'] || 0) === c && (!b || r[S + '_SECTION'] === a); };
       if (!same('L', e.L) || !same('R', e.R)) { setSide(out, i, 'L', e.L); setSide(out, i, 'R', e.R); patched++; }
     });
@@ -1757,7 +1757,8 @@ const Core = (() => {
       for (const f of lin.fields) if (f.type === 'C') for (let k = 0; k < f.len; k++) rec[f.off + k] = 0x20;   // 查註、識別欄位留白
       recs.push(rec);
     }
-    return { bytes: appendRecords(out, lin, recs), patched, cleared, added: recs.length };
+    let sorted = true, pk = null; for (const r of lin.rows) { if (JUNK.d21(r)) continue; const k = [r.LIN_TOP, r.LIN_BOT]; if (pk && (k[0] < pk[0] || (k[0] === pk[0] && k[1] < pk[1]))) { sorted = false; break; } pk = k; }   // 原檔依端點排序（NECEXE 寫出的是）就保持排序
+    return { bytes: layoutDbf(lin, out, JUNK.d21, { drop, append: recs, key: sorted ? b => [numAt(lin, b, 'LIN_TOP'), numAt(lin, b, 'LIN_BOT')] : null }), patched, cleared, added: recs.length };
   }
   // D12（地中地）：目前關係中檔案沒有的，附加記錄（沿用第一筆當樣板，只改 O_*／I_* 六欄）；檔案有而目前已解除的，六欄清成 0。
   function exportD12(d12, ds) {
@@ -1770,10 +1771,10 @@ const Core = (() => {
     const six = (u8, base, ok, ik) => { const [a, b, c] = ok.split('|'), [e, f, g] = ik.split('|'); put(u8, base, 'O_SECTION', a); put(u8, base, 'O_PARCEL', b); put(u8, base, 'O_PARCEL_E', c); put(u8, base, 'I_SECTION', e); put(u8, base, 'I_PARCEL', f); put(u8, base, 'I_PARCEL_E', g); };
     let out = new Uint8Array(d12.u8), cleared = 0; const recs = [];
     const gone = new Set(ds.parcels.filter(p => p.deleted).map(p => p.key));   // 內圈已刪除：關係列照 NECEXE 保留不動
-    for (const [k, i] of have) if (!want.has(k) && !gone.has(k.split('>')[1])) { six(out, d12.hl + i * d12.rl, '0|0|0', '0|0|0'); cleared++; }
+    const drop = new Set(); for (const [k, i] of have) if (!want.has(k) && !gone.has(k.split('>')[1])) { drop.add(i); cleared++; }   // 解除的關係整列移除（不就地清 0）
     const first = d12.rows.findIndex(r => !r._deleted), tmpl = first >= 0 ? d12.u8.slice(d12.hl + first * d12.rl, d12.hl + (first + 1) * d12.rl) : blankRecord(d12);
     for (const [k, [ok, ik]] of want) if (!have.has(k)) { const rec = new Uint8Array(tmpl); rec[0] = 0x20; six(rec, 0, ok, ik); recs.push(rec); }
-    out = appendRecords(out, d12, recs);
+    out = layoutDbf(d12, out, JUNK.d12, { drop, append: recs });
     return { bytes: out, added: recs.length, cleared };
   }
 
@@ -1786,6 +1787,25 @@ const Core = (() => {
     new DataView(out.buffer).setUint32(4, dbf.n + recs.length, true); return out;
   }
   const blankRecord = dbf => { const r = new Uint8Array(dbf.rl).fill(0x20); return r; };
+  // 重排 DBF 記錄（比照 NECEXE 自己寫出的 D 檔）：鍵值為 0 的空列一律留在檔尾、不可夾在有效記錄之間——
+  // KC0336 實測：D13 中間留了地號 0 的列（刪除宗地時就地清 0），NECEXE 載入時把它刪掉往前遞補，但內部記的列位置沒跟著改，
+  // 經界線左右地號整批錯位（1022-0 被讀成 1021-8），數百宗變成「無地號界址」。D11／D14 原本檔尾就有空列，新記錄也必須插在空列之前。
+  // opt：drop＝要移除的列、replace＝某列換成多筆（宗地點數變多時連續寫入）、append＝新記錄（放在最後一筆有效記錄之後）、key＝有效記錄排序鍵（原檔有排序時保持排序）
+  function layoutDbf(dbf, u8, isJunk, opt = {}) {
+    const drop = opt.drop || new Set(), rep = opt.replace || new Map(), live = [], junk = [];
+    for (let i = 0; i < dbf.n; i++) {
+      if (drop.has(i)) continue;
+      if (rep.has(i)) { live.push(...rep.get(i)); continue; }
+      const b = u8.slice(dbf.hl + i * dbf.rl, dbf.hl + (i + 1) * dbf.rl); (isJunk(dbf.rows[i]) ? junk : live).push(b);
+    }
+    live.push(...(opt.append || []));
+    if (opt.key) { const k = live.map((b, i) => [opt.key(b), i]); k.sort((x, y) => (x[0][0] - y[0][0]) || (x[0][1] - y[0][1]) || (x[1] - y[1])); const l2 = k.map(([, i]) => live[i]); live.length = 0; live.push(...l2); }
+    const recs = [...live, ...junk], end = dbf.hl + dbf.n * dbf.rl, eof = u8.length > end && u8[end] === 0x1a, out = new Uint8Array(dbf.hl + recs.length * dbf.rl + (eof ? 1 : 0));
+    out.set(u8.subarray(0, dbf.hl)); recs.forEach((r, i) => out.set(r, dbf.hl + i * dbf.rl)); if (eof) out[out.length - 1] = 0x1a;
+    new DataView(out.buffer).setUint32(4, recs.length, true); return out;
+  }
+  const numAt = (dbf, rec, name) => { const f = dbf.fields.find(x => x.name === name); return Number(String.fromCharCode(...rec.subarray(f.off, f.off + f.len)).trim()) || 0; };
+  const JUNK = { d11: r => !r.PAR_O_M && !r.PAR_N_M, d12: r => !r.O_PARCEL && !r.I_PARCEL, d13: r => !r.O_PARCEL && !r.O_PARCEL_E, d14: r => !r.COT_NUMBER, d21: r => !r.LIN_TOP || !r.LIN_BOT };
   // 回傳新的 D14 位元組：被移動點只改 COT_Y/COT_X（其餘位元組不動）；新增的點附加在檔尾（REF=0）。
   // 刪除的點不從檔案移除（保留孤立記錄，避免索引不一致），數量見 orphans。
   function exportD14(pts, ds) {
@@ -1795,41 +1815,40 @@ const Core = (() => {
       patchDbfNumber(out, pts, p.row, 'COT_Y', p.y); patchDbfNumber(out, pts, p.row, 'COT_X', p.x); n++;
     }
     const add = [...ds.points.values()].filter(p => p.row == null && p.added);
-    if (add.length) {
-      const recs = add.map(() => blankRecord(pts)); out = appendRecords(out, pts, recs);
-      add.forEach((p, i) => { const f = { ...pts, u8: out };
-        patchDbfNumber(out, f, pts.n + i, 'COT_NUMBER', p.id); patchDbfNumber(out, f, pts.n + i, 'COT_REF', 0);
-        patchDbfNumber(out, f, pts.n + i, 'COT_Y', p.y); patchDbfNumber(out, f, pts.n + i, 'COT_X', p.x); });
+    if (add.length) {   // 新增點插在檔尾空列之前
+      const t = { ...pts, hl: 0 }, recs = add.map(p => { const r = blankRecord(pts); patchDbfNumber(r, t, 0, 'COT_NUMBER', p.id); patchDbfNumber(r, t, 0, 'COT_REF', 0); patchDbfNumber(r, t, 0, 'COT_Y', p.y); patchDbfNumber(r, t, 0, 'COT_X', p.x); return r; });
+      out = layoutDbf(pts, out, JUNK.d14, { append: recs });
     }
     const orphans = structSummary(ds).removed;
     return { bytes: out, changed: n, added: add.length, orphans };
   }
-  // D13（界址串）：環有增減點的宗地，依序改寫其記錄的 COORD_1..8／MIDARC_n；不夠放就在檔尾附加（沿用該宗地最後一筆當樣板），多出的整列清成 0（不用刪除旗標：真實案件驗證 NECEXE 不看旗標，舊點號會被讀回環造成「交錯」與面積 0）。
-  // 縮短後的結果尚未用 NECEXE 重新驗證。
+  // D13（界址串）：環有增減點的宗地，依序改寫其記錄的 COORD_1..8／MIDARC_n；點數變多時在該宗原有記錄後面接著寫（同一宗的記錄保持連續），
+  // 縮短時多出的列把 COORD 清成 0、保留地號鍵（與 NECEXE 寫出的相同：1092-2 驗證逐位元組一致；不用刪除旗標，NECEXE 不看旗標）。
+  // 已刪除的宗地整宗移除記錄（不可就地清 0，見 layoutDbf）；新宗地接在最後一筆有效記錄之後。
   function exportD13(bnd, ds) {
-    let out = new Uint8Array(bnd.u8), patched = 0, appended = 0; const recs = [], setRec = (u8, base, k, id, mid) => {
+    const out = new Uint8Array(bnd.u8); let patched = 0, appended = 0, parcels = 0; const setRec = (u8, base, k, id, mid) => {
       const fc = bnd.fields.find(f => f.name === 'COORD_' + k), fm = bnd.fields.find(f => f.name === 'MIDARC_' + k);
       const s = String(id).padStart(fc.len, ' '); for (let i = 0; i < fc.len; i++) u8[base + fc.off + i] = s.charCodeAt(i);
       if (fm) { const t = (mid ? 'T' : 'F').padEnd(fm.len, ' '); for (let i = 0; i < fm.len; i++) u8[base + fm.off + i] = t.charCodeAt(i); }
     };
-    // 先決定附加記錄的位置，再回頭寫入
-    const jobs = [];
+    const drop = new Set(), replace = new Map(), append = [], row = i => out.slice(bnd.hl + i * bnd.rl, bnd.hl + (i + 1) * bnd.rl);
+    const tmplRow = bnd.rows.findIndex(r => !r._deleted && r.O_PARCEL);
     for (const p of ds.parcels) {
       if (!p.rows || !p.ids0 || (p.created && p.deleted)) continue;
-      const same = p.ids.length === p.ids0.length && p.ids.every((v, i) => v === p.ids0[i]); if (same) continue;
-      const need = Math.ceil(p.ids.length / 8), have = p.rows.length, rowsUse = p.rows.slice(0, Math.min(need, have));
-      const extra = Math.max(0, need - have), tr = have ? p.rows[have - 1] : bnd.rows.findIndex(r => !r._deleted && r.O_PARCEL), tmpl = bnd.u8.slice(bnd.hl + tr * bnd.rl, bnd.hl + (tr + 1) * bnd.rl);
-      if (!have) { const [a, b, c] = p.key.split('|').map(Number), t = { ...bnd, hl: 0 }; patchDbfNumber(tmpl, t, 0, 'O_SECTION', a); patchDbfNumber(tmpl, t, 0, 'O_PARCEL', b); patchDbfNumber(tmpl, t, 0, 'O_PARCEL_E', c); }   // 新宗地：沿用任一列當樣板、換上地號
-      jobs.push({ p, rowsUse, extra, tmpl, blank: p.rows.slice(need), dropKey: !!p.deleted });
+      const same = p.ids.length === p.ids0.length && p.ids.every((v, i) => v === p.ids0[i]); if (same) continue; parcels++;
+      if (p.deleted) { for (const ri of p.rows) drop.add(ri); continue; }
+      const n = p.ids.length, need = Math.ceil(n / 8), have = p.rows.length, recs = [];
+      for (let r = 0; r < Math.max(need, have); r++) {
+        let rec;
+        if (r < have) { rec = row(p.rows[r]); patched++; }
+        else { rec = have ? row(p.rows[have - 1]) : row(tmplRow); rec[0] = 0x20; appended++;
+          if (!have) { const [a, b, c] = p.key.split('|').map(Number), t = { ...bnd, hl: 0 }; patchDbfNumber(rec, t, 0, 'O_SECTION', a); patchDbfNumber(rec, t, 0, 'O_PARCEL', b); patchDbfNumber(rec, t, 0, 'O_PARCEL_E', c); } }
+        for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(rec, 0, k + 1, i < n ? p.ids[i] : 0, i < n && p.mid ? p.mid[i] : false); }
+        recs.push(rec);
+      }
+      if (!have) append.push(...recs); else { replace.set(p.rows[0], recs); for (const ri of p.rows.slice(1)) drop.add(ri); }
     }
-    for (const j of jobs) {
-      const n = j.p.ids.length;
-      j.rowsUse.forEach((ri, r) => { const base = bnd.hl + ri * bnd.rl; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(out, base, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } patched++; });
-      for (const ri of j.blank) { const base = bnd.hl + ri * bnd.rl; for (let k = 1; k <= 8; k++) setRec(out, base, k, 0, false); if (j.dropKey) for (const f of ['O_SECTION', 'O_PARCEL', 'O_PARCEL_E']) patchDbfNumber(out, bnd, ri, f, 0); patched++; }   // 已刪除的宗地連地號鍵也清成 0：NECEXE 不讀地號全 0 的列（它刪宗地後自己也留下這種列）   // 多出的整列清成 0（保留記錄與地號鍵，索引不變）；不用刪除旗標——NECEXE 讀取時不看旗標，舊點號會被讀回環裡
-      for (let e = 0; e < j.extra; e++) { const rec = new Uint8Array(j.tmpl), r = j.rowsUse.length + e; for (let k = 0; k < 8; k++) { const i = r * 8 + k; setRec(rec, 0, k + 1, i < n ? j.p.ids[i] : 0, i < n && j.p.mid ? j.p.mid[i] : false); } rec[0] = 0x20; recs.push(rec); appended++; }
-    }
-    out = appendRecords(out, bnd, recs);
-    return { bytes: out, rewritten: patched, appended, parcels: jobs.length };
+    return { bytes: layoutDbf(bnd, out, JUNK.d13, { drop, replace, append }), rewritten: patched, appended, parcels };
   }
   // ── ZIP（不壓縮，store）：輸出完整案件資料夾的備援格式（瀏覽器不支援直接寫入資料夾時）──────────
   // files: [{name:'KC0336/KC0336.D14', data:Uint8Array}]；檔名以 UTF-8 標記（bit 11），中文檔名在 Windows 10 以上的檔案總管可正確解開。
@@ -1897,6 +1916,16 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.15.1', date: '2026-10-25', type: 'patch',
+    title: '修正：合併／分割未登記地（以及刪除地中地、新增界址點）後輸出的 D 檔，NECEXE 載入後出現大量「無地號界址」「交錯」「新面積 0」',
+    changes: [
+      '原因：被合併或刪除的宗地，D13 記錄原本就地清成地號 0；消失的經界線，D21 端點就地清 0；新增的 D11 宗地、D14 點則附加在原檔尾既有的空列之後。結果有效記錄之間夾著鍵值為 0 的空列。NECEXE 載入時把這些空列刪掉往前遞補，但內部記錄位置沒跟著調整，經界線的左右地號整批錯位（例如 1022-0 被讀成 1021-8），上百宗被判為沒有界址。檢查使用者提供的 KC0336 與 NECEXE 寫出的所有 D 檔：空列一律只在檔尾',
+      '改為比照 NECEXE：被刪除的宗地、解除的地中地關係、消失的經界線整列移除；新記錄插在最後一筆有效記錄之後、檔尾空列之前；宗地點數變多時，新列接在該宗原有記錄後面（同一宗保持連續）；D21 依端點排序（原檔有排序時）',
+      '先前與 NECEXE 的對照照樣成立：1092-2 拆出地中地的 D13、D12 仍與 NECEXE 逐位元組相同，D21 相同；刪除 9012-5004 的 D13 界址串、D21 經界線、D11 該列與 NECEXE 相同',
+      '請用合併／分割「之前」的案件資料夾重新操作並輸出；已被 NECEXE 載入過的錯誤成果不要再用',
+    ],
+  },
   {
     version: 'v0.15.0', date: '2026-10-25', type: 'minor',
     title: '未登記土地（9000 號以上）分割合併：自動列出未登記地與空隙、每筆 ≤ N 點自動分割、一鍵合併、封閉凹口建為新地號',

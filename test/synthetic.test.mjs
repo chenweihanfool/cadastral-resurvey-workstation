@@ -383,15 +383,15 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   near(ds.parcels[0].area, 9950, 1e-6); assert.throws(() => Core.deleteHoleParcel(ds, 0), /不是地中地/);
   const r = Core.deleteHoleParcel(ds, 1); near(ds.parcels[0].area, 10000, 1e-6); assert.deepEqual(r.removedPoints, [5, 6, 7]); assert.equal(Core.structSummary(ds).deleted, 1);
   const ch = Core.changedDFiles(ds, dbf); assert.deepEqual(Object.keys(ch.files).sort(), ['d11', 'd13', 'd21'], 'D12 照 NECEXE 保留');
-  const b13 = Core.parseDbf(ch.files.d13.bytes); assert.deepEqual([b13.rows[1].O_PARCEL, b13.rows[1].COORD_1], [0, 0], '刪除的宗地連地號鍵清成 0');
+  const b13 = Core.parseDbf(ch.files.d13.bytes); assert.equal(b13.n, 1, '刪除的宗地整宗移除記錄（不就地清 0）');
   const b11 = Core.parseDbf(ch.files.d11.bytes); assert.deepEqual([b11.rows[1].AREA_NEW, b11.rows[1].CENTER_Y, b11.rows[1].LIMIT, b11.rows[1].AREA_OLD], [0, 0, 0, 0.005]);
-  const b21 = Core.parseDbf(ch.files.d21.bytes); assert.equal(b21.rows.filter(x => x.LIN_TOP).length, 4, '內圈的 3 條線清成 0');
+  const b21 = Core.parseDbf(ch.files.d21.bytes); assert.equal(b21.n, 4, '內圈的 3 條線整列移除');
   const re = Core.datasetFromD({ pts, bnd: b13, par: b11, d12 }); assert.equal(re.parcels.length, 1); near(re.parcels[0].area, 10000, 1e-6); assert.equal(re.meta.noRing.length, 0, '已刪除的 D11 列不算無地號界址');
   Core.applyDelta(ds, r.delta, 'undo'); near(ds.parcels[0].area, 9950, 1e-6); assert.ok(!ds.parcels[1].deleted && ds.points.has(5));
   Core.applyDelta(ds, r.delta, 'redo'); Core.resetAll(ds); near(ds.parcels[0].area, 9950, 1e-6); assert.equal(ds.parcels[1].ids.length, 3);
   // 新的界址線：在外圈加點 → D21 原線清成 0、附加兩條新線，左右地號正確
   const ds2 = Core.datasetFromD({ pts, bnd, par, d12 }); Core.insertPoint(ds2, 1, 2, Y, X + 50); const v = Core.exportD21(lin, ds2), b = Core.parseDbf(v.bytes);
-  assert.deepEqual([v.cleared, v.added], [1, 2]); const nl = b.rows.slice(-2); assert.ok(nl.every(x => (x.LIN_TOP === 1 ? [x.L_PARCEL, x.R_PARCEL] : [x.R_PARCEL, x.L_PARCEL]).join() === '1,0'), '宗地在 1→8→2 的左側');
+  assert.deepEqual([v.cleared, v.added], [1, 2]); const nl = b.rows.filter(x => x.LIN_BOT === 8 && (x.LIN_TOP === 1 || x.LIN_TOP === 2)); assert.equal(nl.length, 2); assert.ok(nl.every(x => (x.LIN_TOP === 1 ? [x.L_PARCEL, x.R_PARCEL] : [x.R_PARCEL, x.L_PARCEL]).join() === '1,0'), '宗地在 1→8→2 的左側');
 }
 // ── 未登記土地：分割（每筆 ≤ N 點）、合併、空隙／凹口建為新地號，D11／D13／D21 輸出 ──
 {
@@ -431,5 +431,20 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.equal(Core.freeRegions(dsq).length, 0, '凹口不是封閉空隙'); const g = Core.pocketRegion(dsq, [[2, 5]]); near(g.area, 100, 1e-6); assert.deepEqual([...g.ids].sort((a, b) => a - b), [2, 3, 5, 8]);
   const fr = Core.fillRegion(dsq, g.ids, 9001); assert.equal(fr.label, '9001-1'); near(dsq.parcels[3].area, 100, 1e-6); assert.equal(Core.freeRegions(dsq).length, 0);
   assert.throws(() => Core.pocketRegion(dsq, [[1, 9]]), /已是界址線|沒有圍出|穿過/);
+}
+// ── 輸出不可在有效記錄之間留下鍵值為 0 的空列（KC0336：NECEXE 會刪掉它並往前遞補，經界線左右地號整批錯位）──
+{
+  const noMidJunk = (dbf, isLive) => { let seen = false; for (let i = dbf.n - 1; i >= 0; i--) { if (isLive(dbf.rows[i])) seen = true; else if (seen) return false; } return true; };
+  const Y = 2700000, X = 200000;
+  // D14 原檔尾有 2 筆空列、D11 原檔尾有 1 筆空列（NECEXE 常見）：新增點、新宗地必須插在空列之前
+  const pts = rd(F_D14, [pt(1, Y, X), pt(2, Y, X + 10), pt(3, Y + 10, X + 10), pt(4, Y + 10, X), pt(9, Y, X + 20), pt(10, Y + 10, X + 20), { COT_NUMBER: 0, COT_REF: 0, COT_Y: 0, COT_X: 0 }, { COT_NUMBER: 0, COT_REF: 0, COT_Y: 0, COT_X: 0 }]);
+  const bnd = rd(F_D13, [ring(1, 9002, 1, [1, 2, 3, 4]), ring(1, 7, 0, [2, 9, 10, 3])]);
+  const par = rd(F_D11, [{ SECTION_O: 1, PAR_O_M: 9002, PAR_O_C: 1, PAR_N_M: 9002, PAR_N_C: 1, AREA_NEW: 0.01 }, { SECTION_O: 1, PAR_O_M: 7, PAR_O_C: 0, PAR_N_M: 7, PAR_N_C: 0, AREA_NEW: 0.005 }, { SECTION_O: 0, PAR_O_M: 0, PAR_O_C: 0, PAR_N_M: 0, PAR_N_C: 0, AREA_NEW: 0 }]);
+  const ds = Core.datasetFromD({ pts, bnd, par });
+  Core.insertPoint(ds, 1, 2, Y, X + 5); const o14 = Core.parseDbf(Core.exportD14(pts, ds).bytes); assert.ok(noMidJunk(o14, r => r.COT_NUMBER), 'D14 新增點在空列之前'); assert.equal(o14.rows[6].COT_NUMBER, 11);
+  const sp = Core.splitParcel(ds, 0, 4); assert.ok(sp.pieces.length >= 1);
+  const o11 = Core.parseDbf(Core.exportD11(par, ds).bytes); assert.ok(noMidJunk(o11, r => r.PAR_O_M || r.PAR_N_M), 'D11 新宗地在空列之前');
+  const o13 = Core.parseDbf(Core.exportD13(bnd, ds).bytes); assert.ok(noMidJunk(o13, r => r.O_PARCEL || r.O_PARCEL_E), 'D13 沒有夾在中間的空列');
+  const re = Core.datasetFromD({ pts: o14, bnd: o13, par: o11 }); assert.equal(re.parcels.length, ds.parcels.filter(p => !p.deleted).length);
 }
 console.log('SYNTHETIC OK');
