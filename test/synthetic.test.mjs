@@ -296,4 +296,42 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const bad = mk(P, [ring(1, 1, 0, [3, 2, 5, 6]), ring(1, 2, 0, [4, 2, 7, 8]), ring(1, 4, 0, [9, 10, 4, 3])]), fr = Core.freeRegions(bad);
   assert.equal(fr.length, 1); near(Math.abs(fr[0].area), 20, 1e-6); assert.ok(Core.errReport(bad, { name: 'X' }).includes('自由閉合區面積 = 20.00 ㎡'));
 }
+// ── 界址串檢查與編修（v0.11.0）：地中地被寫進外圈界址串（跳線）、拆出地中地、重繪界址串、D12 輸出 ──
+{
+  const Y = 2700000, X = 200000, P = [[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0], [5, 40, 40], [6, 40, 50], [7, 50, 50], [8, 50, 40]];
+  const d14 = Core.parseDbf(makeDbf(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x))));
+  const mk = (rows, d12rows) => { const bnd = Core.parseDbf(makeDbf(F_D13, rows)), d12 = d12rows ? Core.parseDbf(makeDbf(F_D12, d12rows)) : null; return { ds: Core.datasetFromD({ pts: d14, bnd, d12 }), bnd, d12 }; };
+  const inner = ring(1, 2, 0, [5, 6, 7, 8]), rel = { O_SECTION: 1, O_PARCEL: 1, O_PARCEL_E: 0, I_SECTION: 1, I_PARCEL: 2, I_PARCEL_E: 0 };
+  // (a) 同向內圈接在外圈後面（兩列 D13）＋ D12 也設了地中地 → 面積被加回又扣掉
+  const A = mk([ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 1, 0, [5, 6, 7, 8]), inner], [rel]);
+  const ia = Core.ringIssues(A.ds).filter(o => o.kind === 'embedded'); assert.equal(ia.length, 1);
+  assert.ok(ia[0].sameDir && ia[0].d12 && ia[0].inside); near(ia[0].areaFixed, 9900, 1e-6); assert.deepEqual(ia[0].jumps, [[4, 5], [8, 1]]);
+  const a0 = A.ds.parcels[0].area; assert.ok(Math.abs(a0 - 9900) > 1, '拆出前面積不對');
+  assert.ok(Core.errReport(A.ds, { name: 'X' }).includes('的界址串內含'));
+  const sa = Core.splitHole(A.ds, 0, 1); assert.equal(sa.linked, false); assert.deepEqual(A.ds.parcels[0].ids, [1, 2, 3, 4]); near(A.ds.parcels[0].area, 9900, 1e-6);
+  assert.equal(Core.ringIssues(A.ds).length, 0, '拆出後沒有問題');
+  Core.applyDelta(A.ds, sa.delta, 'undo'); near(A.ds.parcels[0].area, a0, 1e-9); Core.applyDelta(A.ds, sa.delta, 'redo'); near(A.ds.parcels[0].area, 9900, 1e-6);
+  const o13 = Core.exportD13(A.bnd, A.ds), re = Core.datasetFromD({ pts: d14, bnd: Core.parseDbf(o13.bytes), d12: A.d12 }); near(re.parcels[0].area, 9900, 1e-6, '重讀 D13');
+  // (b) 反向內圈、D12 沒有關係 → 拆出後補上地中地，輸出 D12 附加一筆；復原／還原全部要拿掉關係
+  const B = mk([ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 1, 0, [8, 7, 6, 5]), inner], []);
+  const ib = Core.ringIssues(B.ds).find(o => o.kind === 'embedded'); assert.ok(!ib.sameDir && !ib.d12); near(ib.areaFixed, 9900, 1e-6);
+  const sb = Core.splitHole(B.ds, 0, 1); assert.equal(sb.linked, true); near(B.ds.parcels[0].area, 9900, 1e-6); assert.deepEqual(B.ds.parcels[0].holes, [1]); assert.equal(Core.structSummary(B.ds).holes, 1);
+  const o12 = Core.exportD12(B.d12, B.ds), r12 = Core.parseDbf(o12.bytes); assert.equal(o12.added, 1); assert.deepEqual([r12.rows[0].O_PARCEL, r12.rows[0].I_PARCEL, r12.rows[0].I_SECTION], [1, 2, 1]);
+  const reB = Core.datasetFromD({ pts: d14, bnd: Core.parseDbf(Core.exportD13(B.bnd, B.ds).bytes), d12: r12 }); near(reB.parcels[0].area, 9900, 1e-6, '重讀 D13＋D12');
+  Core.applyDelta(B.ds, sb.delta, 'undo'); assert.deepEqual(B.ds.parcels[0].holes, []); Core.applyDelta(B.ds, sb.delta, 'redo'); Core.resetAll(B.ds); assert.deepEqual(B.ds.parcels[0].holes, []); assert.equal(B.ds.parcels[0].ids.length, 8);
+  const o12b = Core.exportD12(Core.parseDbf(o12.bytes), B.ds); assert.equal(o12b.cleared, 1, '解除的關係清成 0');
+  // (c) 一點進出的細縫（…4, 5,6,7,8,5, 4…）
+  const C = mk([ring(1, 1, 0, [1, 2, 3, 4, 5, 8, 7, 6]), ring(1, 1, 0, [5, 4]), inner], []);
+  assert.ok(Core.ringIssues(C.ds).some(o => o.kind === 'embedded')); Core.splitHole(C.ds, 0, 1); assert.deepEqual(C.ds.parcels[0].ids, [1, 2, 3, 4]); near(C.ds.parcels[0].area, 9900, 1e-6);
+  // (d) 內圈在環內但沒有任何關係 → 疑似未設定地中地；splitHole 只補關係
+  const D = mk([ring(1, 1, 0, [1, 2, 3, 4]), inner], []), id = Core.ringIssues(D.ds); assert.deepEqual(id.map(o => o.kind), ['missinghole']);
+  Core.splitHole(D.ds, 0, 1); near(D.ds.parcels[0].area, 9900, 1e-6); assert.equal(Core.ringIssues(D.ds).length, 0);
+  assert.throws(() => Core.splitHole(D.ds, 0, 1), /已是/);
+  // (e) 重繪界址串
+  const E = mk([ring(1, 1, 0, [1, 2, 3, 4]), inner], []), se = Core.setRing(E.ds, 0, [1, 2, 3]); near(E.ds.parcels[0].area, 5000, 1e-6);
+  Core.applyDelta(E.ds, se.delta, 'undo'); near(E.ds.parcels[0].area, 10000, 1e-6);
+  assert.throws(() => Core.setRing(E.ds, 0, [1, 2, 3, 2]), /重複/); assert.throws(() => Core.setRing(E.ds, 0, [1, 2]), /3 點/);
+  // (f) 自我交錯（8 字形）
+  const F = mk([ring(1, 1, 0, [1, 2, 4, 3])], []); assert.ok(Core.ringIssues(F.ds).some(o => o.kind === 'selfcross'));
+}
 console.log('SYNTHETIC OK');

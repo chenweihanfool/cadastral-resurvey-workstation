@@ -94,7 +94,7 @@ const Core = (() => {
     for (const p of ds.parcels) { p.areaOrig = parcelArea(ds, p); p.area = p.areaOrig; }
     buildArcs(ds);
     // 載入時的原貌：「還原全部」用（點位、各宗地的環）
-    if (!ds.orig) ds.orig = { points: [...ds.points.values()].map(q => ({ ...q })), rings: ds.parcels.map(p => ({ ids: p.ids.slice(), mid: p.mid ? p.mid.slice() : null })) };
+    if (!ds.orig) ds.orig = { points: [...ds.points.values()].map(q => ({ ...q })), rings: ds.parcels.map(p => ({ ids: p.ids.slice(), mid: p.mid ? p.mid.slice() : null, holes: p.holes.slice() })) };
     return ds;
   }
 
@@ -310,9 +310,11 @@ const Core = (() => {
   function setPoint(ds, id, y, x) { const p = ds.points.get(id); return movePoints(ds, [id], y - p.y, x - p.x); }
   function resetAll(ds) {
     const o = ds.orig, st = o && structSummary(ds);
-    if (o && (st.added || st.removed || st.rings)) {
+    if (o && (st.added || st.removed || st.rings || st.holes)) {
       ds.points = new Map(o.points.map(q => [q.id, { ...q }]));
       ds.parcels.forEach((p, i) => { p.ids = o.rings[i].ids.slice(); if (o.rings[i].mid) p.mid = o.rings[i].mid.slice(); });
+      for (const p of ds.parcels) for (const hi of (p.holes || []).slice()) linkHole(ds, p.idx, hi, false);
+      ds.parcels.forEach((p, i) => { for (const hi of o.rings[i].holes || []) linkHole(ds, i, hi, true); });
       buildTopology(ds); buildArcs(ds);
     }
     for (const p of ds.points.values()) { p.y = p.y0; p.x = p.x0; }
@@ -339,6 +341,7 @@ const Core = (() => {
     for (const [i, t] of d.parcels) { const p = ds.parcels[i]; p.ids = (undo ? t.ids0 : t.ids1).slice(); const m = undo ? t.mid0 : t.mid1; if (m) p.mid = m.slice(); }
     for (const p of d.added) undo ? ds.points.delete(p.id) : ds.points.set(p.id, p);
     for (const p of d.removed) undo ? ds.points.set(p.id, p) : ds.points.delete(p.id);
+    for (const l of d.holes || []) linkHole(ds, l.p, l.h, undo ? !l.on : l.on);
     buildTopology(ds); buildArcs(ds); recalc(ds, new Set(d.parcels.keys()));
   }
   const nextPointId = ds => { let m = 0; for (const id of ds.points.keys()) if (id > m) m = id; return m + 1; };
@@ -506,12 +509,13 @@ const Core = (() => {
   }
   // 結構是否有異動（新增／刪除點、環改變）
   function structSummary(ds) {
-    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0 };
+    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0, holes: 0 };
     const was = new Set(o.points.map(p => p.id)); let added = 0, removed = 0, rings = 0;
     for (const id of ds.points.keys()) if (!was.has(id)) added++;
     for (const id of was) if (!ds.points.has(id)) removed++;
     ds.parcels.forEach((p, i) => { const r = o.rings[i]; if (!r || r.ids.length !== p.ids.length || r.ids.some((v, k) => v !== p.ids[k])) rings++; });
-    return { added, removed, rings };
+    let holes = 0; ds.parcels.forEach((p, i) => { const a = (o.rings[i] && o.rings[i].holes) || [], b = p.holes || []; if (a.length !== b.length || a.some(v => !b.includes(v))) holes++; });
+    return { added, removed, rings, holes };
   }
 
   // ── 變換（平移＋旋轉）─────────────────────────────────────────────────────
@@ -1013,9 +1017,150 @@ const Core = (() => {
     const col = collinearCandidates(ds); L.push(`直線上疑似多餘的點 ${col.length} 個（三角形高不超過最長邊的千分之 ${COLLINEAR_DEFAULT.ratio * 1000}，且不超過 ${COLLINEAR_DEFAULT.maxAbs} m）`);
     const big = ds.parcels.filter(p => p.areaRef != null && Math.abs(p.area - p.areaRef) > 0.2);
     L.push(`實際面積與 D11 新面積相差超過 0.20 ㎡ 者 ${big.length} 宗`); for (const p of big.slice(0, 200)) L.push(`  ${pad(parLabelFull(p), 14)} 實際 ${p.area.toFixed(2)}  登記 ${p.areaRef.toFixed(2)}  差 ${(p.area - p.areaRef >= 0 ? '+' : '') + (p.area - p.areaRef).toFixed(2)}`);
+    for (const t of ringIssueText(ds)) L.push(t);
     const dupIn = ds.parcels.filter(p => new Set(p.ids).size !== p.ids.length); L.push(`界址環內有重複點號的宗地 ${dupIn.length} 宗` + (dupIn.length ? '：' + dupIn.slice(0, 10).map(parLabelFull).join('、') : ''));
     L.push(eq(`${name} (END)`)); L.push('');
     return L.join('\n');
+  }
+
+  // ── 界址串檢查與編修（v0.11.0）：地中地被寫進外圈的界址串、環自我接觸／交錯、疑似未設定的地中地 ──────────
+  // 典型情形：外圈地號的界址串依序接著「外圈 … 跳到內圈 … 繞內圈一圈 … 跳回外圈」，圖上多出兩條跳線（或一點進出的細縫）。
+  // embeddedRuns 找出 p 的環中「另一宗地 h 的整圈」連續出現的位置（可旋轉、可反向，可含回到起點的重複點）。
+  function embeddedRuns(ds, p) {
+    const n = p.ids.length, pset = new Set(p.ids), out = [], seen = new Set();
+    for (const id of pset) for (const hi of ds.pointParcels.get(id) || []) {
+      if (hi === p.idx || seen.has(hi)) continue; seen.add(hi);
+      const h = ds.parcels[hi], hs = h.ids, m = hs.length; if (m < 3 || n - m < 3 || !hs.every(q => pset.has(q))) continue;
+      const pos = new Map(hs.map((q, j) => [q, j])); let found = null;
+      for (let i = 0; i < n && !found; i++) {
+        const j = pos.get(p.ids[i]); if (j == null) continue;
+        for (const dir of [1, -1]) {
+          let k = 0; while (k < m && p.ids[(i + k) % n] === hs[(((j + dir * k) % m) + m) % m]) k++;
+          if (k < m) continue;
+          let s = i, len = m;   // 往前延伸到真正的起點，再看是否有回到起點的重複點
+          while (len <= m && p.ids[(s - 1 + n) % n] === hs[(((pos.get(p.ids[s]) - dir) % m) + m) % m]) { s = (s - 1 + n) % n; len++; }
+          if (len === m && p.ids[(s + m) % n] === p.ids[s]) len++;
+          found = { h: hi, start: s, len: Math.min(len, m + 1), dir }; break;
+        }
+      }
+      if (found) out.push(found);
+    }
+    return out;
+  }
+  // 把 run 從環中移除，回傳剩下的外圈（去掉連續重複點）；mid 同步。
+  function cutRun(p, run) {
+    const n = p.ids.length, drop = new Set(); for (let k = 0; k < run.len; k++) drop.add((run.start + k) % n);
+    let ids = [], mid = [];
+    for (let i = 0; i < n; i++) if (!drop.has(i)) { ids.push(p.ids[i]); mid.push(p.mid ? !!p.mid[i] : false); }
+    for (let i = ids.length - 1; i >= 0 && ids.length > 1; i--) { const j = (i + 1) % ids.length; if (ids[i] === ids[j]) { ids.splice(i, 1); mid.splice(i, 1); } }
+    const before = p.ids[(run.start - 1 + n) % n], after = p.ids[(run.start + run.len) % n];
+    return { ids, mid, jumps: [[before, p.ids[run.start]], [p.ids[(run.start + run.len - 1) % n], after]].filter(([a, b]) => a !== b) };
+  }
+  const polyCentroid = (ids, points) => {   // 多邊形形心（相對第一點，避免大數）
+    const o = points.get(ids[0]); let a = 0, cx = 0, cy = 0;
+    for (let i = 0; i < ids.length; i++) { const p = points.get(ids[i]), q = points.get(ids[(i + 1) % ids.length]); const px = p.x - o.x, py = p.y - o.y, qx = q.x - o.x, qy = q.y - o.y, c = px * qy - qx * py; a += c; cx += (px + qx) * c; cy += (py + qy) * c; }
+    return Math.abs(a) < 1e-12 ? { x: o.x, y: o.y } : { x: o.x + cx / (3 * a), y: o.y + cy / (3 * a) };
+  };
+  // 回傳 [{kind, p, ...}]：kind＝embedded（內含別宗的整圈）、repeat（環重複經過同一點）、selfcross（環自己的邊相交）、missinghole（別宗整個在環內但未設地中地）
+  function ringIssues(ds) {
+    const out = [], P = ds.points;
+    for (const p of ds.parcels) {
+      const runs = embeddedRuns(ds, p), inRun = new Set();
+      for (const r of runs) {
+        const h = ds.parcels[r.h], c = cutRun(p, r); for (let k = 0; k < r.len; k++) inRun.add((r.start + k) % p.ids.length);
+        const inside = c.ids.length >= 3 && pointInRing(c.ids, P, polyCentroid(h.ids, P).y, polyCentroid(h.ids, P).x);
+        const same = Math.sign(signedArea(c.ids, P)) === Math.sign(signedArea(h.ids, P)) * r.dir,   // 內圈在 p 環中的走向＝h 本身走向 × dir
+          isHole = (p.holes || []).includes(h.idx);
+        const fixed = inside ? ringAreaArc(c.ids, c.mid, P) - ringAreaArc(h.ids, h.mid, P) - (p.holes || []).filter(x => x !== h.idx).reduce((s, x) => s + ringAreaArc(ds.parcels[x].ids, ds.parcels[x].mid, P), 0) : null;
+        out.push({ kind: 'embedded', p: p.idx, h: h.idx, inside, sameDir: same, d12: isHole, jumps: c.jumps, areaNow: p.area, areaFixed: fixed });
+      }
+      const cnt = new Map(); p.ids.forEach((id, i) => { if (!inRun.has(i)) cnt.set(id, (cnt.get(id) || 0) + 1); });
+      const rep = [...cnt].filter(([, v]) => v > 1).map(([k]) => k); if (rep.length) out.push({ kind: 'repeat', p: p.idx, ids: rep });
+      if (!runs.length) {   // 環自己的邊相交（不相鄰的兩邊）
+        const n = p.ids.length, xs = [];
+        if (n <= 400) for (let i = 0; i < n && xs.length < 5; i++) for (let j = i + 2; j < n && xs.length < 5; j++) {
+          if (i === 0 && j === n - 1) continue;
+          const e1 = { a: p.ids[i], b: p.ids[(i + 1) % n] }, e2 = { a: p.ids[j], b: p.ids[(j + 1) % n] };
+          if (e1.a === e1.b || e2.a === e2.b) continue; if (edgeRelation(ds, e1, e2) === 'cross') xs.push([e1, e2]);
+        }
+        if (xs.length) out.push({ kind: 'selfcross', p: p.idx, pairs: xs.map(([a, b]) => [[a.a, a.b], [b.a, b.b]]) });
+      }
+    }
+    // 疑似未設定的地中地：h 整個在 p 環內（只與 p 共用至多一點）、h 不是任何宗地的地中地、也沒被寫進 p 的環；同一個 h 只報最小的外圈
+    const embeddedPair = new Set(out.filter(o => o.kind === 'embedded').map(o => o.p + '>' + o.h)), bb = ds.parcels.map(q => ringBox(q, P)), best = new Map();
+    for (const h of ds.parcels) {
+      if ((h.containers || []).length) continue; const B = bb[h.idx], c = polyCentroid(h.ids, P);
+      for (const p of ds.parcels) {
+        if (h === p || embeddedPair.has(p.idx + '>' + h.idx)) continue;
+        const A = bb[p.idx]; if (B.x0 < A.x0 || B.x1 > A.x1 || B.y0 < A.y0 || B.y1 > A.y1 || B.area >= A.area) continue;
+        if (h.ids.filter(id => p.ids.includes(id)).length > 1) continue;   // 共邊＝相鄰，不是地中地
+        if (!pointInRing(p.ids, P, c.y, c.x) || h.ids.some(id => !p.ids.includes(id) && !pointInRing(p.ids, P, P.get(id).y, P.get(id).x))) continue;
+        if ((p.holes || []).some(x => pointInRing(ds.parcels[x].ids, P, c.y, c.x))) continue;   // 在 p 的地中地裡面，不屬於 p
+        const cur = best.get(h.idx); if (!cur || A.area < bb[cur].area) best.set(h.idx, p.idx);
+      }
+    }
+    for (const [hi, pi] of best) out.push({ kind: 'missinghole', p: pi, h: hi });
+    return out;
+  }
+  // 給 .ERR 與面板用的一行說明
+  function ringIssueLine(ds, o) {
+    const p = ds.parcels[o.p], h = o.h != null ? ds.parcels[o.h] : null, f = parLabelFull;
+    if (o.kind === 'embedded') return `${f(p)} 的界址串內含 ${f(h)} 的整圈（${o.sameDir ? '與外圈同向，面積被加入' : '與外圈反向，面積被扣除'}${o.d12 ? '；D12 也已設為地中地，等於重複計算' : ''}${o.jumps.length ? '；跳線 ' + o.jumps.map(j => j.join('–')).join('、') : ''}）` + (o.inside ? `，拆出地中地後面積 ${o.areaFixed.toFixed(2)} ㎡（現 ${o.areaNow.toFixed(2)}）` : '，不在外圈內＝多部分宗地');
+    if (o.kind === 'repeat') return `${f(p)} 的界址串重複經過界址點 ${o.ids.slice(0, 8).join('、')}（環自我接觸）`;
+    if (o.kind === 'selfcross') return `${f(p)} 的界址串自我交錯：${o.pairs.map(([a, b]) => `/${a.join(',')} 與 /${b.join(',')}`).join('；')}`;
+    return `${f(h)} 位於 ${f(p)} 之內，但未設定為地中地（${f(p)} 面積未扣除 ${f(h)}）`;
+  }
+  const ringIssueText = ds => { const r = ringIssues(ds); return [`界址串問題 ${r.length} 項（內含別宗整圈、自我接觸、自我交錯、未設定的地中地）`, ...r.slice(0, 200).map(o => '  ' + ringIssueLine(ds, o))]; };
+  function ringBox(p, P) { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const id of p.ids) { const q = P.get(id); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } return { x0, x1, y0, y1, area: ringArea(p.ids, P) }; }
+  // 地中地關係的增減（供 delta 與復原）
+  function linkHole(ds, pi, hi, on) {
+    const p = ds.parcels[pi], h = ds.parcels[hi]; p.holes = p.holes || []; h.containers = h.containers || []; p.holeKeys = p.holeKeys || [];
+    const rm = (a, v) => { const k = a.indexOf(v); if (k >= 0) a.splice(k, 1); };
+    if (on) { if (!p.holes.includes(hi)) p.holes.push(hi); if (!h.containers.includes(pi)) h.containers.push(pi); if (!p.holeKeys.includes(h.key)) p.holeKeys.push(h.key); }
+    else { rm(p.holes, hi); rm(h.containers, pi); rm(p.holeKeys, h.key); }
+  }
+  // 拆出地中地：把 h 的整圈與兩條跳線從 p 的環移除，並設定 h 為 p 的地中地（p 面積＝外圈 − h）。
+  // 沒有內含整圈時（只是未設定關係）只設定地中地關係。回傳 {delta, jumps, linked}
+  function splitHole(ds, pi, hi) {
+    const p = ds.parcels[pi], h = ds.parcels[hi]; if (!p || !h || p === h) throw new Error('宗地不正確');
+    const run = embeddedRuns(ds, p).find(r => r.h === hi), d = newDelta(); let jumps = [];
+    if (run) {
+      const c = cutRun(p, run); if (c.ids.length < 3) throw new Error(`拆出後 ${p.label} 剩不到 3 點`);
+      if (!pointInRing(c.ids, ds.points, polyCentroid(h.ids, ds.points).y, polyCentroid(h.ids, ds.points).x)) throw new Error(`${h.label} 不在 ${p.label} 外圈之內，不是地中地（可能是多部分宗地，請用「重繪界址串」）`);
+      const n = p.ids.length, nb = [(run.start - 1 + n) % n, (run.start + run.len) % n];
+      if (p.mid && nb.some(i => p.mid[i] || p.mid[(i + n - 1) % n] || p.mid[(i + 1) % n])) throw new Error('跳線接在圓弧上，請用「重繪界址串」處理');
+      touchParcel(d, p); p.ids = c.ids; if (p.mid) p.mid = c.mid; jumps = c.jumps;
+    } else if ((p.holes || []).includes(hi)) throw new Error(`${h.label} 已是 ${p.label} 的地中地`);
+    else touchParcel(d, p);
+    const linked = !(p.holes || []).includes(hi); if (linked) { linkHole(ds, pi, hi, true); d.holes = [{ p: pi, h: hi, on: true }]; }
+    return { delta: closeDelta(ds, d), jumps, linked };
+  }
+  // 重繪界址串：以使用者依序點選的既有界址點取代 p 的環。圓弧中點旗標只在前後鄰點與原本相同時保留。
+  function setRing(ds, pi, ids) {
+    const p = ds.parcels[pi]; if (!p) throw new Error('宗地不正確');
+    ids = ids.filter((id, i) => id !== ids[(i + 1) % ids.length]);
+    if (ids.length < 3) throw new Error('界址串至少要 3 點'); const miss = ids.filter(id => !ds.points.has(id)); if (miss.length) throw new Error('找不到界址點 ' + miss.join('、'));
+    if (new Set(ids).size !== ids.length) throw new Error('同一點不可重複點選（地中地請用「拆出地中地」）');
+    const old = new Map(); if (p.mid) p.ids.forEach((id, i) => { if (p.mid[i]) old.set(id, p.ids[(i - 1 + p.ids.length) % p.ids.length] + '|' + p.ids[(i + 1) % p.ids.length]); });
+    const n = ids.length, mid = ids.map((id, i) => { const k = old.get(id), a = ids[(i - 1 + n) % n], b = ids[(i + 1) % n]; return !!k && (k === a + '|' + b || k === b + '|' + a); });
+    const d = newDelta(); touchParcel(d, p); p.ids = ids; p.mid = mid; p.hasArc = mid.some(Boolean);
+    return { delta: closeDelta(ds, d) };
+  }
+  // D12（地中地）：目前關係中檔案沒有的，附加記錄（沿用第一筆當樣板，只改 O_*／I_* 六欄）；檔案有而目前已解除的，六欄清成 0。
+  function exportD12(d12, ds) {
+    const keyOf = r => `${r.O_SECTION}|${r.O_PARCEL}|${r.O_PARCEL_E}>${r.I_SECTION}|${r.I_PARCEL}|${r.I_PARCEL_E}`, have = new Map();
+    d12.rows.forEach((r, i) => { if (!r._deleted) have.set(keyOf(r), i); });
+    const want = new Map(); for (const p of ds.parcels) for (const hi of p.holes || []) { const h = ds.parcels[hi]; want.set(p.key + '>' + h.key, [p.key, h.key]); }
+    const put = (u8, base, name, v) => { const f = d12.fields.find(x => x.name === name); if (!f) throw new Error('D12 缺欄位 ' + name);
+      const s = f.type === 'N' || f.type === 'F' ? Number(v || 0).toFixed(f.dec).padStart(f.len, ' ') : String(v ?? '').padEnd(f.len, ' ');
+      if (s.length > f.len) throw new Error(`${name} 值 ${v} 超出欄寬`); for (let i = 0; i < f.len; i++) u8[base + f.off + i] = s.charCodeAt(i); };
+    const six = (u8, base, ok, ik) => { const [a, b, c] = ok.split('|'), [e, f, g] = ik.split('|'); put(u8, base, 'O_SECTION', a); put(u8, base, 'O_PARCEL', b); put(u8, base, 'O_PARCEL_E', c); put(u8, base, 'I_SECTION', e); put(u8, base, 'I_PARCEL', f); put(u8, base, 'I_PARCEL_E', g); };
+    let out = new Uint8Array(d12.u8), cleared = 0; const recs = [];
+    for (const [k, i] of have) if (!want.has(k)) { six(out, d12.hl + i * d12.rl, '0|0|0', '0|0|0'); cleared++; }
+    const first = d12.rows.findIndex(r => !r._deleted), tmpl = first >= 0 ? d12.u8.slice(d12.hl + first * d12.rl, d12.hl + (first + 1) * d12.rl) : blankRecord(d12);
+    for (const [k, [ok, ik]] of want) if (!have.has(k)) { const rec = new Uint8Array(tmpl); rec[0] = 0x20; six(rec, 0, ok, ik); recs.push(rec); }
+    out = appendRecords(out, d12, recs);
+    return { bytes: out, added: recs.length, cleared };
   }
 
   // ── 輸出 ────────────────────────────────────────────────────────────────
@@ -1090,7 +1235,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();
