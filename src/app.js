@@ -1120,6 +1120,12 @@ $('btnExpD12').onclick = () => {
 };
 // 輸出完整案件資料夾：原資料夾所有檔案原樣複製，只換掉有改動的 D 檔（D14／D13／D12）。
 // 支援直接寫入資料夾的瀏覽器（Chrome、Edge）→ 選一個存放位置，建立新的子資料夾；其他瀏覽器 → 下載同內容的 ZIP。原資料夾永遠不覆寫。
+// 讀取來源檔。開啟資料夾後原檔被改動或移走（其他程式存檔、同步軟體、搬移），瀏覽器會拒絕讀取（NotReadableError）。
+// 這些都是原樣複製的檔案（改動的 D 檔在記憶體裡，不必讀原檔），所以略過並列出，請使用者自行從原資料夾複製，不讓整個輸出失敗、調整白做。
+async function readItem(it, skipped) {
+  try { return await it.get(); }
+  catch (e) { skipped.push(`${it.rel}（${e && e.name === 'NotReadableError' ? '開啟後已被改動或移走' : e && e.message || e}）`); return null; }
+}
 async function exportCaseFolder() {
   if (!S.ds || !S.dbf.pts) return msg('請先用「開啟資料夾」載入 NECEXE 案件（D14＋D13）');
   const cf = S.caseFiles || { name: caseBase(), list: [], partial: true }, ch = Core.changedDFiles(S.ds, S.dbf);
@@ -1131,6 +1137,7 @@ async function exportCaseFolder() {
   for (const { rel, file } of cf.list) { const r = !rel.includes('/') && rep.get(rel.toLowerCase()); items.push({ rel, get: r ? async () => r.bytes : () => readBuf(file) }); seen.add(rel.toLowerCase()); }
   for (const [k, r] of rep) if (!seen.has(k)) items.push({ rel: r.name, get: async () => r.bytes });   // 只開了個別檔案時，至少放進改動的 D 檔
   const what = rep.size ? [...rep.values()].map(r => `${r.name}（${r.note}）`).join('、') : '無改動';
+  const skipped = [], skipMsg = () => skipped.length ? `。⚠ ${skipped.length} 個原檔讀不到、沒有複製，請自行從原資料夾複製（未改動）：${skipped.slice(0, 5).join('、')}${skipped.length > 5 ? '…' : ''}` : '';
   const warn = cf.partial ? '。注意：目前是用「開啟檔案」個別選的，資料夾內只有選取的檔案；要完整資料夾請改用「開啟資料夾」載入' : '';
   try {
     if (window.showDirectoryPicker) {
@@ -1138,15 +1145,19 @@ async function exportCaseFolder() {
       const exist = new Set(); for await (const [k] of parent.entries()) exist.add(k.toLowerCase());   // 先列出現有名稱，同名就加 (2)、(3)…
       let name = folder, n = 1; while (exist.has(name.toLowerCase())) name = `${folder}(${++n})`;
       const root = await parent.getDirectoryHandle(name, { create: true });
-      for (const it of items) {
-        const parts = it.rel.split('/'); let dir = root; for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p, { create: true });
-        const w = await (await dir.getFileHandle(parts[parts.length - 1], { create: true })).createWritable(); await w.write(await it.get()); await w.close();
-      }
-      msg(`已建立資料夾「${parent.name}／${name}」：${items.length} 個檔案，改動的 D 檔：${what}。可直接用 NECEXE 開啟這個資料夾${warn}`);
+      try {
+        for (const it of items) {
+          const data = await readItem(it, skipped); if (!data) continue;   // 先讀來源再建檔：讀不到時不會留下 0 KB 的檔案與 .crswap
+          const parts = it.rel.split('/'); let dir = root; for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p, { create: true });
+          const w = await (await dir.getFileHandle(parts[parts.length - 1], { create: true })).createWritable();
+          try { await w.write(data); await w.close(); } catch (e) { try { await w.abort(); } catch {} throw new Error(`寫入 ${it.rel} 失敗：${e && e.message || e}`); }
+        }
+      } catch (e) { try { await parent.removeEntry(name, { recursive: true }); } catch {} throw e; }   // 半成品資料夾整個移除，避免誤用
+      msg(`已建立資料夾「${parent.name}／${name}」：${items.length - skipped.length} 個檔案，改動的 D 檔：${what}。可直接用 NECEXE 開啟這個資料夾${warn}${skipMsg()}`);
     } else {
-      const files = []; for (const it of items) files.push({ name: `${folder}/${it.rel}`, data: await it.get() });
+      const files = []; for (const it of items) { const data = await readItem(it, skipped); if (data) files.push({ name: `${folder}/${it.rel}`, data }); }
       download(folder + '.zip', Core.makeZip(files, d), 'application/zip');
-      msg(`已下載 ${folder}.zip：${items.length} 個檔案，改動的 D 檔：${what}。解壓縮後即為完整案件資料夾，可直接用 NECEXE 開啟${warn}`);
+      msg(`已下載 ${folder}.zip：${files.length} 個檔案，改動的 D 檔：${what}。解壓縮後即為完整案件資料夾，可直接用 NECEXE 開啟${warn}${skipMsg()}`);
     }
   } catch (err) { if (err && err.name === 'AbortError') return; msg('輸出失敗：' + (err && err.message || err)); }
 }
