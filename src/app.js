@@ -521,6 +521,7 @@ function render() {
       ctx.save(); const n = unN();
       for (const u of S.unreg.parcels) { const p = ds.parcels[u.idx]; if (!p || p.deleted) continue; ctx.fillStyle = u.over ? 'rgba(240,140,0,.35)' : 'rgba(250,210,0,.25)'; tracePoly(ds, p.ids); ctx.fill(); }
       ctx.fillStyle = 'rgba(209,36,47,.45)'; for (const g of S.unreg.gaps) { tracePoly(ds, g.ids); ctx.fill(); }
+      if (S.sgaps) { ctx.fillStyle = 'rgba(47,158,68,.4)'; ctx.strokeStyle = '#2f9e44'; ctx.lineWidth = 2; for (const g of S.sgaps) { ctx.beginPath(); g.nodes.forEach((n, i) => i ? ctx.lineTo(toSx(n.x), toSy(n.y)) : ctx.moveTo(toSx(n.x), toSy(n.y))); ctx.closePath(); ctx.fill(); ctx.stroke(); } }   // 與鄰段之間的空隙
       ctx.restore();
     }
     if (S.pocket && !S.printing) {   // 封閉凹口：封口線（紫虛線）與圍出的範圍（綠）
@@ -890,8 +891,38 @@ function finishPocket() {
   catch (err) { msg('無法建立：' + err.message); }
   if ($('dlgUnreg').open) unregPanel(); refresh();
 }
+// 與鄰段之間的封閉空隙（核心 Core.seamGaps／fillSeamGap）
+S.sgaps = null;
+const sgCenter = g => g.nodes.reduce((a, n) => ({ x: a.x + n.x / g.nodes.length, y: a.y + n.y / g.nodes.length }), { x: 0, y: 0 });
+function seamGapPanel(recompute) {
+  if (recompute) { if (!S.ds) return msg('請先載入圖資'); if (!S.nb.length) { S.sgaps = null; $('sgSum').textContent = '請先在「鄰段」加入相鄰地段'; $('sgList').innerHTML = ''; return; } S.sgaps = Core.seamGaps(S.ds, nbArgs()); }
+  const g = S.sgaps || []; $('btnSeamGapsAll').disabled = !g.length;
+  $('sgSum').innerHTML = S.sgaps ? (g.length ? `找到 <b>${g.length}</b> 處，共 ${g.reduce((t, x) => t + x.area, 0).toFixed(2)} m²（綠色）；點一列放大，按「建為新地號」建立` : '沒有找到與鄰段之間的封閉空隙') : '';
+  $('sgList').innerHTML = g.length ? '<table><thead><tr><th></th><th>面積</th><th>點數</th><th>新增點</th><th></th></tr></thead><tbody>' + g.map((x, i) => `<tr data-sg="${i}" style="cursor:pointer"><td>空隙 ${i + 1}</td><td>${x.area.toFixed(2)}</td><td>${x.nodes.length}</td><td>${x.nodes.filter(n => n.id == null).length}</td><td><button class="btn" data-sgfill="${i}">建為新地號</button></td></tr>`).join('') + '</tbody></table>' : '';
+  draw();
+}
+// 建立前重新計算，對回同一處（避免清單在復原或其他編修後過期）
+function freshGap(old, cur) { const c = sgCenter(old); cur = cur || Core.seamGaps(S.ds, nbArgs()); return cur.find(x => { const d = sgCenter(x); return Math.hypot(d.x - c.x, d.y - c.y) < 0.5 && Math.abs(x.area - old.area) < Math.max(0.5, old.area * 0.01); }); }
+$('btnSeamGaps').onclick = () => seamGapPanel(true);
+$('sgList').addEventListener('click', e => {
+  const b = e.target.closest('[data-sgfill]');
+  if (b) { const old = S.sgaps[+b.dataset.sgfill], g = freshGap(old); if (!g) { msg('這處空隙已變動，請重新找出'); return seamGapPanel(true); }
+    try { const r = Core.fillSeamGap(S.ds, g, unMother()); pushStruct(r.delta, `與鄰段之間的空隙建為 ${r.label}`); msg(`已建為新地號 ${r.label}（${g.area.toFixed(2)} m²、${g.nodes.length} 點，新增界址點 ${r.added.length} 點）。可復原；輸出完整案件資料夾時 D14、D13、D11、D21 會一併更新`); }
+    catch (err) { msg('無法建立：' + err.message); }
+    unregPanel(); seamGapPanel(true); refresh(); return; }
+  const tr = e.target.closest('tr[data-sg]'); if (tr) { const g = S.sgaps[+tr.dataset.sg]; let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const n of g.nodes) { x0 = Math.min(x0, n.x); x1 = Math.max(x1, n.x); y0 = Math.min(y0, n.y); y1 = Math.max(y1, n.y); } const m = Math.max(5, (x1 - x0 + y1 - y0) * 0.15); fit({ x0: x0 - m, x1: x1 + m, y0: y0 - m, y1: y1 + m }); }
+});
+$('btnSeamGapsAll').onclick = () => {
+  if (!S.sgaps || !S.sgaps.length) return; const list = S.sgaps.slice();
+  if (!confirm(`把 ${list.length} 處與鄰段之間的空隙（共 ${list.reduce((t, x) => t + x.area, 0).toFixed(2)} m²）各建為新地號（母號 ${unMother()} 續編）？可一次復原`)) return;
+  const deltas = [], made = [], fail = [], cur = Core.seamGaps(S.ds, nbArgs());   // 只重算一次；各處空隙互不影響（共用的新點建立時會沿用）
+  for (const old of list) { const g = freshGap(old, cur); if (!g) { fail.push(old.area.toFixed(1)); continue; } try { const r = Core.fillSeamGap(S.ds, g, unMother()); deltas.push(r.delta); made.push(r.label); } catch (err) { fail.push(`${old.area.toFixed(1)}（${err.message}）`); } }
+  pushMulti(deltas, '與鄰段之間的空隙建為新地號');
+  msg((made.length ? `已建立 ${made.length} 筆：${made.slice(0, 8).join('、')}${made.length > 8 ? '…' : ''}` : '沒有建立任何地號') + (fail.length ? `；未建立 ${fail.length} 處：${fail.slice(0, 3).join('、')}` : '') + '。可一次復原；輸出完整案件資料夾時 D14、D13、D11、D21 會一併更新');
+  unregPanel(); seamGapPanel(true); refresh();
+};
 $('btnUnPocket').onclick = startPocket; $('btnUnRefresh').onclick = unregPanel; $('unN').oninput = unregPanel; $('unRatio').oninput = unregPanel;
-$('dlgUnreg').addEventListener('close', () => { cancelPocket(); });
+$('dlgUnreg').addEventListener('close', () => { cancelPocket(); S.sgaps = null; $('sgSum').textContent = ''; $('sgList').innerHTML = ''; });
 
 // ── 檢視 ───────────────────────────────────────────────────────────────────
 function fit(box) {
@@ -1865,6 +1896,8 @@ const api = {
   unregSummary: ({ maxPts = 10, maxRatio = 2 } = {}) => { const r = Core.unregSummary(S.ds, maxPts, maxRatio); return { parcels: r.parcels.map(p => ({ label: p.label, points: p.pts, ratio: p.ratio, area: p.area, over: p.over, tooLong: p.long })), gaps: r.gaps.map(g => ({ points: g.ids, area: g.area })) }; },
   splitParcel: ({ parcel, maxPts = 10, maxRatio = 2 }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitParcel(S.ds, p.idx, maxPts, maxRatio); if (r.delta) pushStruct(r.delta, `分割 ${parcel}`); return { pieces: r.pieces, addedPoints: r.delta ? r.delta.added.map(q => q.id) : [], unresolved: r.unresolved }; },
   mergeParcels: ({ parcels }) => { const idx = parcels.map(l => { const p = findPar(l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }); const r = Core.mergeParcels(S.ds, idx); pushStruct(r.delta, '合併 ' + parcels.join('、')); return { keep: r.keep, merged: r.merged }; },
+  seamGaps: () => { if (!S.ds) throw new Error('尚未載入圖資'); return Core.seamGaps(S.ds, nbArgs()).map(g => ({ area: g.area, points: g.nodes.length, new_points: g.nodes.filter(n => n.id == null).length })); },
+  fillSeamGaps: ({ mother = 9001 } = {}) => { const ds = S.ds, deltas = [], labels = []; for (const g of Core.seamGaps(ds, nbArgs())) { const r = Core.fillSeamGap(ds, g, mother); deltas.push(r.delta); labels.push(r.label); } pushMulti(deltas, '與鄰段之間的空隙建為新地號'); return { labels }; },
   closePocket: ({ chords, mother = 9001 }) => { const g = Core.pocketRegion(S.ds, chords), r = Core.fillRegion(S.ds, g.ids, mother); pushStruct(r.delta, `凹口建為 ${r.label}`); return { label: r.label, area: g.area, points: g.ids.length }; },
   deleteParcel: ({ parcel }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.deleteParcel(S.ds, p.idx); pushStruct(r.delta, `刪除宗地 ${parcel}`); return { into: r.into, removedPoints: r.removedPoints }; },
   deleteHoleParcel: ({ parcel }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.deleteHoleParcel(S.ds, p.idx); pushStruct(r.delta, `刪除地中地 ${parcel}`); return { into: r.into, removedPoints: r.removedPoints }; },
