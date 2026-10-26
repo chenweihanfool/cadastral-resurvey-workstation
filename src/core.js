@@ -1286,6 +1286,7 @@ const Core = (() => {
   // 回傳 {piece, rest（皆為點號陣列，新點以 'n0'、'n1' 暫代）, news, PP（含暫代點的查詢）}；切不開回傳 null
   function perpCut(cur, P, ux, uy, s, snap = 0.3) {
     const n = cur.length, pr = id => { const q = P.get(id); return q.x * ux + q.y * uy - s; }, hits = [], eps = 1e-6;
+    { let c = 0; for (let i = 0; i < n; i++) { const da = pr(cur[i]), db = pr(cur[(i + 1) % n]); if (Math.abs(da) < eps || (Math.abs(db) >= eps && da * db < 0)) c++; } if (c < 2 || c > 3) return null; }   // 快速排除：交點數不對就不建資料
     for (let i = 0; i < n; i++) {
       const a = cur[i], b = cur[(i + 1) % n], da = pr(a), db = pr(b);
       if (Math.abs(da) < eps) { hits.push({ i, id: a }); continue; }
@@ -1322,12 +1323,18 @@ const Core = (() => {
     }
     return ring.map(id => (map.has(id) ? map.get(id) : id));
   }
-  // 新點要插入的界址線不可是圓弧的一部分
-  const edgeOnArc = (ds, a, b) => ds.parcels.some(p => { if (p.deleted || !p.mid) return false; const k = p.ids.length;
-    for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) return !!(p.mid[i] || p.mid[(i + 1) % k]); } return false; });
+  // 圓弧相關的界址線（新點不可插在上面）：分割前建一次，之後 O(1) 查詢
+  function arcEdgeSet(ds) {
+    const out = new Set();
+    for (const p of ds.parcels) { if (p.deleted || !p.mid || !p.mid.some(Boolean)) continue; const k = p.ids.length;
+      for (let i = 0; i < k; i++) if (p.mid[i] || p.mid[(i + 1) % k]) out.add(segKey(p.ids[i], p.ids[(i + 1) % k])); }
+    return out;
+  }
   // 把宗地切成每塊 ≤ maxPts 點、細長度 ≤ maxRatio（0＝不限形狀）。回傳 {delta, pieces:[地號…], unresolved（形狀仍超過時的細長度）}；地中地、圓弧、與地中地相關者不處理。
   // 點數：以連接既有界址點的弦切下（116 倉庫演算法）。形狀：先試既有點的弦，切不出合格的才垂直長軸切開（大約等分，交點新增界址點，鄰宗同步插入）。
-  function splitParcel(ds, pi, maxPts = 10, maxRatio = 0) {
+  function splitParcel(ds, pi, maxPts = 10, maxRatio = 0) { const g = splitSteps(ds, pi, maxPts, maxRatio); let r; while (!(r = g.next()).done); return r.value; }
+  // 同 splitParcel，但每切一刀 yield 一次，讓介面能分段執行（大宗地不會讓瀏覽器判定沒有回應）
+  function* splitSteps(ds, pi, maxPts = 10, maxRatio = 0) {
     const p = ds.parcels[pi], P = ds.points; if (!p || p.deleted) throw new Error('宗地不存在');
     if (maxPts < 3) throw new Error('每筆至少 3 點');
     if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，尚未支援自動分割`);
@@ -1335,20 +1342,28 @@ const Core = (() => {
     const lim = maxRatio > 0 ? Math.max(1.05, maxRatio) * (1 + 1e-6) : 0, tooLong = ids => lim && shapeRatio(ids, P) > lim * 1.01;   // 切下的塊嚴格 ≤ 上限；剩餘部分超過不到 1% 就不再切（避免切出零碎小塊）
     if (p.ids.length <= maxPts && !tooLong(p.ids)) return { delta: null, pieces: [] };
     const d = newDelta(), pieces = []; touchParcel(d, p);
-    let cur = ccwIds(p.ids, P), unresolved = null;
+    let cur = ccwIds(p.ids, P), unresolved = null; const arcs = lim ? arcEdgeSet(ds) : null;
     for (let guard = 0; guard < 500 && (cur.length > maxPts || tooLong(cur)); guard++) {
+      if (guard) yield guard;
       const n = cur.length, overPts = n > maxPts, areaCur = signedArea(cur, P), k = Math.max(overPts ? 1 : 2, lim ? Math.ceil(shapeRatio(cur, P) / lim * 0.97) : 1), target = areaCur / k;
       let best = null, free = null;
+      // 連續 m 點的面積用鞋帶公式前綴和 O(1) 求得，通過篩選才建陣列
+      const X = cur.map(id => P.get(id).x), Yv = cur.map(id => P.get(id).y), cs = [0];
+      for (let q = 0; q < 2 * n; q++) cs.push(cs[q] + X[q % n] * Yv[(q + 1) % n] - X[(q + 1) % n] * Yv[q % n]);
+      const segArea = (i, m) => { const j = (i + m - 1) % n; return (cs[i + m - 1] - cs[i] + X[j] * Yv[i] - X[i] * Yv[j]) / 2; };
       for (let m = Math.min(maxPts, n - 2); m > 2 && !best; m--) {
         for (let i = 0; i < n; i++) {
           const j = (i + m - 1) % n, u = cur[i], v = cur[j]; if (ds.edges.has(segKey(u, v))) continue;
-          if (!chordInside(cur, i, j, P)) continue;
+          const area = segArea(i, m); if (area < 1) continue;
+          if (!overPts && (area < 0.6 * target || area > 1.4 * target)) continue;
           const piece = []; for (let q = 0; q < m; q++) piece.push(cur[(i + q) % n]);
-          const area = signedArea(piece, P); if (area < 1) continue;
+          if (!overPts && (area < 0.6 * target || area > 1.4 * target)) continue;   // 只為形狀切時，避免切下零碎小塊（先做便宜的面積篩選）
+          const needFree = overPts && (!free || free.m === m);   // 原演算法只用「有合格弦的最大 m」，找到後較小的 m 不必再算
+          if (lim && !needFree && shapeRatio(piece, P) > lim) continue;   // 形狀比弦檢查便宜，先篩
+          if (!chordInside(cur, i, j, P)) continue;
           const a = P.get(u), b = P.get(v), sc = Math.hypot(a.x - b.x, a.y - b.y) / Math.sqrt(area);
-          if (overPts && (!free || sc < free.sc)) free = { sc, i, j, piece };   // 不看形狀的原演算法（備用）
-          if (lim && shapeRatio(piece, P) > lim) continue;
-          if (!overPts && (area < 0.6 * target || area > 1.4 * target)) continue;   // 只為形狀切時，避免切下零碎小塊
+          if (needFree && (!free || sc < free.sc)) free = { sc, i, j, piece, m };   // 不看形狀的原演算法（備用）
+          if (lim && needFree && shapeRatio(piece, P) > lim) continue;
           const key = overPts ? sc : Math.abs(area - target) / target + sc * 1e-3;
           if (!best || key < best.key) best = { key, i, j, piece };
         }
@@ -1363,17 +1378,21 @@ const Core = (() => {
         // 切線方向：最小外接矩形的長、短軸，以及最長幾條邊的方向（L 形、彎曲長條的外接矩形近乎方形，要沿邊的方向切）；每個方向兩端都試
         const r = minRect(cur, P), dirs = [[r.ux, r.uy], [-r.uy, r.ux]];
         cur.map((id, i) => { const A = P.get(id), B = P.get(cur[(i + 1) % n]), L = Math.hypot(B.x - A.x, B.y - A.y); return { L, ux: (B.x - A.x) / L, uy: (B.y - A.y) / L }; })
-          .filter(e => e.L > 1e-6).sort((x, y) => y.L - x.L).slice(0, 4).forEach(e => { if (!dirs.some(([x, y]) => Math.abs(x * e.ux + y * e.uy) > 0.996)) dirs.push([e.ux, e.uy]); });
-        for (const [dx, dy] of dirs) for (const sg of [1, -1]) {
+          .filter(e => e.L > 1e-6).sort((x, y) => y.L - x.L).slice(0, 4).forEach(e => { if (dirs.length < 4 && !dirs.some(([x, y]) => Math.abs(x * e.ux + y * e.uy) > 0.996)) dirs.push([e.ux, e.uy]); });
+        // 切下的塊約占 1/k：只在靠近起點的 2.5/k 範圍取樣 24 處，再在最佳位置兩側細搜（長條很長時大幅減少計算）
+        const span = Math.min(1, 2.5 / k);
+        for (const [di, [dx, dy]] of dirs.entries()) for (const sg of [1, -1]) {
+          if (di > 0 && cut && cut.key < 0.1) break;   // 長軸切得出接近目標的塊就不試其他方向（L 形、彎曲長條才需要）
           const ux = dx * sg, uy = dy * sg; let t0 = Infinity, t1 = -Infinity; for (const id of cur) { const q = P.get(id), t = q.x * ux + q.y * uy; t0 = Math.min(t0, t); t1 = Math.max(t1, t); }
           let mine = null;
-          const at = g => { const c = perpCut(cur, P, ux, uy, t0 + g / 200 * (t1 - t0)); if (!c) return;
-            if (c.piece.length > maxPts || c.news.some(q => edgeOnArc(ds, q.edge[0], q.edge[1]))) return;
+          const at = f => { if (f <= 0 || f >= 1) return; const c = perpCut(cur, P, ux, uy, t0 + f * (t1 - t0)); if (!c) return;
+            if (c.piece.length > maxPts || c.news.some(q => arcs.has(segKey(q.edge[0], q.edge[1])))) return;
             const area = signedArea(c.piece, c.PP); if (area < 1 || areaCur - area < 1) return;
+            const key = Math.abs(area - target) / target; if (mine && key >= mine.key) return;
             if (shapeRatio(c.piece, c.PP) > lim) return;
-            const key = Math.abs(area - target) / target; if (!mine || key < mine.key) mine = { key, g, ...c }; };
-          for (let g = 4; g <= 196; g++) at(g);
-          if (mine) { const g0 = mine.g; for (let h = -50; h <= 50; h++) at(g0 + h / 50); }   // 在最佳位置兩側細搜，避免取樣間距累積的誤差讓剩餘部分略超過上限
+            mine = { key, f, ...c }; };
+          const step = span / 24; for (let g = 1; g <= 24; g++) at(g * step);
+          if (mine) { const f0 = mine.f; for (let h = -20; h <= 20; h++) at(f0 + h * step / 20); }   // 細搜，避免取樣間距累積的誤差讓剩餘部分略超過上限
           if (mine && (!cut || mine.key < cut.key - 1e-9)) cut = mine;
         }
       }
@@ -1669,7 +1688,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();
