@@ -844,6 +844,9 @@ $('btnUnMerge').onclick = async () => {   // 合併勾選的；沒勾選＝同�
     if (!groups.length) return msg('沒有同母號且相連的未登記地可合併');
     if (!confirm(`把同母號且相連的未登記地合併：共 ${groups.length} 組、${groups.reduce((s, g) => s + g.length, 0)} 筆` + (auto ? `，合併後再切成每筆 ≤ ${n} 點` + (lim ? `、長寬比 ≤ ${lim}` : '') : '') + '？可一次復原')) return;
   }
+  if (!unChecked().length) {   // 自動分組：圍成一圈的組（中間是別的宗地）拆成不留空洞的幾群，各自合併
+    const out = []; for (const g of groups) { const c = Core.mergeClusters(ds, g); if (c.delta) deltas.push(c.delta); out.push(...c.clusters.filter(x => x.length > 1)); } groups = out;
+  }
   unBusy(true); const tick = yielder(auto ? '合併並分割中' : '合併中', groups.length);
   for (const [gi, g] of groups.entries()) {
     await tick(gi);

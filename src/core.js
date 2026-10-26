@@ -1282,33 +1282,39 @@ const Core = (() => {
     const r = minRect(ids, P), A = Math.abs(signedArea(ids, P)); if (!(r.short > 1e-9) || !(A > 1e-9)) return Infinity;
     return Math.max(r.long / r.short, r.long * r.long / A / 2);
   }
-  // 垂直於長軸、在投影位置 s 切開環 cur（逆時針）：切線與環恰交兩處才可用；交點離既有點 ≤ snap 公尺就用既有點，否則是新點（{y,x,edge:[a,b]}）。
-  // 回傳 {piece, rest（皆為點號陣列，新點以 'n0'、'n1' 暫代）, news, PP（含暫代點的查詢）}；切不開回傳 null
-  function perpCut(cur, P, ux, uy, s, snap = 0.3) {
-    const n = cur.length, pr = id => { const q = P.get(id); return q.x * ux + q.y * uy - s; }, hits = [], eps = 1e-6;
-    { let c = 0; for (let i = 0; i < n; i++) { const da = pr(cur[i]), db = pr(cur[(i + 1) % n]); if (Math.abs(da) < eps || (Math.abs(db) >= eps && da * db < 0)) c++; } if (c < 2 || c > 3) return null; }   // 快速排除：交點數不對就不建資料
+  // 以直線 {p：p·u = s}（u＝單位向量）切開環 cur（逆時針）。直線可能多次穿過環（彎曲的長條）：交點沿直線排序後，第 1–2、3–4…個交點之間各是一條在環內的弦，每條弦都是一個候選。
+  // 交點離既有點 ≤ snap 公尺就用既有點，否則是新點（{y,x,edge:[a,b]}，暫代號 'n0'、'n1'）。回傳 [{piece（投影較小的一側）, rest, news, PP（含暫代點的查詢）}]
+  function perpCuts(cur, P, ux, uy, s, snap = 0.3) {
+    const n = cur.length, eps = 1e-6, dv = cur.map(id => { const q = P.get(id); return q.x * ux + q.y * uy - s; }), out = [];
+    { let c = 0; for (let i = 0; i < n; i++) { const da = dv[i], db = dv[(i + 1) % n]; if (Math.abs(da) < eps || (Math.abs(db) >= eps && da * db < 0)) c++; } if (c < 2) return out; }   // 快速排除
+    const sgn = i => { for (let k = 1; k < n; k++) { const v = dv[(i + k) % n]; if (Math.abs(v) >= eps) return Math.sign(v); } return 0; };
+    const sgp = i => { for (let k = 1; k < n; k++) { const v = dv[(i - k + n) % n]; if (Math.abs(v) >= eps) return Math.sign(v); } return 0; };
+    const hits = [], w = (y, x) => -x * uy + y * ux;
     for (let i = 0; i < n; i++) {
-      const a = cur[i], b = cur[(i + 1) % n], da = pr(a), db = pr(b);
-      if (Math.abs(da) < eps) { hits.push({ i, id: a }); continue; }
+      const a = cur[i], b = cur[(i + 1) % n], da = dv[i], db = dv[(i + 1) % n];
+      if (Math.abs(da) < eps) { if (sgp(i) * sgn(i) < 0) { const A = P.get(a); hits.push({ i, id: a, w: w(A.y, A.x) }); } continue; }   // 頂點剛好在線上：兩側異號才算穿過
       if (Math.abs(db) < eps || da * db > 0) continue;
       const A = P.get(a), B = P.get(b), t = da / (da - db), y = A.y + t * (B.y - A.y), x = A.x + t * (B.x - A.x), L = Math.hypot(B.x - A.x, B.y - A.y);
-      if (t * L <= snap) hits.push({ i, id: a }); else if ((1 - t) * L <= snap) hits.push({ i: (i + 1) % n, id: b }); else hits.push({ i, t, y, x, edge: [a, b] });
+      if (t * L <= snap) hits.push({ i, id: a, w: w(A.y, A.x) }); else if ((1 - t) * L <= snap) hits.push({ i: (i + 1) % n, id: b, w: w(B.y, B.x) }); else hits.push({ i, t, y, x, edge: [a, b], w: w(y, x) });
     }
-    const uniq = hits.filter((h, k) => h.id == null || hits.findIndex(g => g.id === h.id) === k); if (uniq.length !== 2) return null;
-    if (uniq[0].id != null && uniq[0].id === uniq[1].id) return null;
-    const tmp = new Map(), news = [], ring = [], at = [];
-    for (let i = 0; i < n; i++) {
-      ring.push(cur[i]); const h = uniq.find(g => g.id == null && g.i === i);
-      if (h) { const id = 'n' + news.length; tmp.set(id, { id, y: h.y, x: h.x }); news.push({ id, y: h.y, x: h.x, edge: h.edge }); ring.push(id); }
+    if (hits.length % 2) return out;
+    hits.sort((p, q) => p.w - q.w);
+    for (let k = 0; k + 1 < hits.length; k += 2) {
+      const pair = [hits[k], hits[k + 1]]; if (pair[0].id != null && pair[0].id === pair[1].id) continue;
+      const tmp = new Map(), news = [], ring = [];
+      for (let i = 0; i < n; i++) {
+        ring.push(cur[i]);
+        for (const h of pair) if (h.id == null && h.i === i) { const id = 'n' + news.length; tmp.set(id, { id, y: h.y, x: h.x }); news.push({ id, y: h.y, x: h.x, edge: h.edge }); h.tid = id; ring.push(id); }
+      }
+      const PP = { get: id => tmp.get(id) || P.get(id) }, at = pair.map(h => ring.indexOf(h.id != null ? h.id : h.tid)).sort((x, y) => x - y), [i0, i1] = at, m = ring.length;
+      for (const h of pair) delete h.tid;
+      if (i0 === i1 || m < 4 || !chordInside(ring, i0, i1, PP)) continue;
+      const c1 = ring.slice(i0, i1 + 1), c2 = ring.slice(i1).concat(ring.slice(0, i0 + 1)); if (c1.length < 3 || c2.length < 3) continue;
+      const side = ids => ids.reduce((t, id) => { const q = PP.get(id); return t + q.x * ux + q.y * uy - s; }, 0) / ids.length;
+      const [piece, rest] = side(c1) < side(c2) ? [c1, c2] : [c2, c1];
+      out.push({ piece, rest, news, PP });
     }
-    for (const h of uniq) at.push(ring.indexOf(h.id != null ? h.id : news.find(q => q.edge[0] === h.edge[0] && q.edge[1] === h.edge[1]).id));
-    const PP = { get: id => tmp.get(id) || P.get(id) }, m = ring.length, [i0, i1] = at.sort((x, y) => x - y);
-    if (!chordInside(ring, i0, i1, PP)) return null;
-    const c1 = ring.slice(i0, i1 + 1), c2 = ring.slice(i1).concat(ring.slice(0, i0 + 1));
-    if (c1.length < 3 || c2.length < 3 || m < 4) return null;
-    const side = ids => ids.reduce((t, id) => t + pr2(id), 0) / ids.length, pr2 = id => { const q = PP.get(id); return q.x * ux + q.y * uy - s; };
-    const [piece, rest] = side(c1) < side(c2) ? [c1, c2] : [c2, c1];
-    return { piece, rest, news, PP };
+    return out;
   }
   // 把新點（perpCut 的暫代點）寫入：點號接續最大號，所有含該界址線的宗地環都插入（鄰宗面積不變）；回傳暫代號 → 新點號
   function commitNewPoints(ds, d, news, ring) {
@@ -1379,21 +1385,26 @@ const Core = (() => {
         const r = minRect(cur, P), dirs = [[r.ux, r.uy], [-r.uy, r.ux]];
         cur.map((id, i) => { const A = P.get(id), B = P.get(cur[(i + 1) % n]), L = Math.hypot(B.x - A.x, B.y - A.y); return { L, ux: (B.x - A.x) / L, uy: (B.y - A.y) / L }; })
           .filter(e => e.L > 1e-6).sort((x, y) => y.L - x.L).slice(0, 4).forEach(e => { if (dirs.length < 4 && !dirs.some(([x, y]) => Math.abs(x * e.ux + y * e.uy) > 0.996)) dirs.push([e.ux, e.uy]); });
+        const evalCut = c => {   // 合格回傳與目標面積的相對差，否則 null
+          if (c.piece.length > maxPts || c.news.some(q => arcs.has(segKey(q.edge[0], q.edge[1])))) return null;
+          const area = signedArea(c.piece, c.PP); if (area < 1 || areaCur - area < 1) return null;
+          return shapeRatio(c.piece, c.PP) > lim ? null : Math.abs(area - target) / target;
+        };
         // 切下的塊約占 1/k：只在靠近起點的 2.5/k 範圍取樣 24 處，再在最佳位置兩側細搜（長條很長時大幅減少計算）
         const span = Math.min(1, 2.5 / k);
         for (const [di, [dx, dy]] of dirs.entries()) for (const sg of [1, -1]) {
           if (di > 0 && cut && cut.key < 0.1) break;   // 長軸切得出接近目標的塊就不試其他方向（L 形、彎曲長條才需要）
           const ux = dx * sg, uy = dy * sg; let t0 = Infinity, t1 = -Infinity; for (const id of cur) { const q = P.get(id), t = q.x * ux + q.y * uy; t0 = Math.min(t0, t); t1 = Math.max(t1, t); }
           let mine = null;
-          const at = f => { if (f <= 0 || f >= 1) return; const c = perpCut(cur, P, ux, uy, t0 + f * (t1 - t0)); if (!c) return;
-            if (c.piece.length > maxPts || c.news.some(q => arcs.has(segKey(q.edge[0], q.edge[1])))) return;
-            const area = signedArea(c.piece, c.PP); if (area < 1 || areaCur - area < 1) return;
-            const key = Math.abs(area - target) / target; if (mine && key >= mine.key) return;
-            if (shapeRatio(c.piece, c.PP) > lim) return;
-            mine = { key, f, ...c }; };
+          const at = f => { if (f <= 0 || f >= 1) return; for (const c of perpCuts(cur, P, ux, uy, t0 + f * (t1 - t0))) { const k = evalCut(c); if (k != null && (!mine || k < mine.key)) mine = { key: k, f, ...c }; } };
           const step = span / 24; for (let g = 1; g <= 24; g++) at(g * step);
           if (mine) { const f0 = mine.f; for (let h = -20; h <= 20; h++) at(f0 + h * step / 20); }   // 細搜，避免取樣間距累積的誤差讓剩餘部分略超過上限
           if (mine && (!cut || mine.key < cut.key - 1e-9)) cut = mine;
+        }
+        if (!cut) {   // 其他方向都切不出合格的塊（彎曲的長條）：從每個既有點垂直於相鄰邊切（跟著局部走向）
+          for (let i = 0; i < n; i++) { const V = P.get(cur[i]);
+            for (const j of [(i + n - 1) % n, (i + 1) % n]) { const Q = P.get(cur[j]), L = Math.hypot(Q.x - V.x, Q.y - V.y); if (L < 1e-6) continue; const ux = (Q.x - V.x) / L, uy = (Q.y - V.y) / L;
+              for (const sg of [1, -1]) for (const c of perpCuts(cur, P, sg * ux, sg * uy, sg * (V.x * ux + V.y * uy))) { const k = evalCut(c); if (k != null && (!cut || k < cut.key - 1e-9)) cut = { key: k, ...c }; } } }
         }
       }
       if (cut) {
@@ -1450,6 +1461,22 @@ const Core = (() => {
       for (const [w, z] of eb) { const C = P.get(w), D = P.get(z); if (off(C) > tol || off(D) > tol) continue;   // C–D 在 A–B 的直線上
         if (Math.min(L, Math.max(at(C), at(D))) - Math.max(0, Math.min(at(C), at(D))) > tol) return true; } }   // 且重疊長度 > tol
     return false;
+  }
+  // 自動合併分組：相連的同母號宗地可能圍成一圈（中間是別的宗地），整組合併會留下空洞而失敗。
+  // 先補 T 字接點，再從第一筆開始逐筆加入相鄰的宗地，只有加入後外圍仍是單一環、沒有空洞才收；收不進來的留給下一群。回傳 {delta（補點）, clusters:[[idx…]]}
+  function mergeClusters(ds, idxs) {
+    const d = newDelta(); healJunctions(ds, d, idxs);
+    const ok = g => { const l = outlineLoops(ds, g).filter(x => Math.abs(x.area) > 1e-6); return l.length === 1 && l[0].area > 0; };
+    const left = new Set(idxs), clusters = [];
+    while (left.size) {
+      const seed = left.values().next().value, g = [seed]; left.delete(seed);
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const j of [...left]) if (g.some(i => parcelsTouch(ds, i, j)) && ok([...g, j])) { g.push(j); left.delete(j); grew = true; }
+      }
+      clusters.push(g);
+    }
+    return { delta: d.parcels.size ? closeDelta(ds, d) : null, clusters };
   }
   function mergeParcels(ds, idxs, keep) {
     idxs = [...new Set(idxs)]; if (idxs.length < 2) throw new Error('至少選兩筆');
@@ -1733,7 +1760,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();
