@@ -1763,15 +1763,60 @@ const Core = (() => {
   }
   // 合併相連的宗地成一筆：外圍必須是單一環、中間不可有空洞；保留 keep（預設子號最小、已有 D11 記錄者），其餘標為已刪除。
   // 只屬於這些宗地、合併後不在外圍上的界址點一併刪除。
+  // T 字接點：宗地 A 的界址點落在宗地 B 的邊上（≤ tol 公尺），B 卻沒有這一點，兩宗沿線相鄰但沒有共用的界址線，合併時外圍抵消不掉。
+  // 把這種點插入 B 的邊（所有使用該邊的宗地一併插入；點原本就在線上，面積幾乎不變）。只看 idxs 內的點與邊。回傳插入次數
+  function healJunctions(ds, d, idxs, tol = 0.02) {
+    const P = ds.points, pts = [...new Set(idxs.flatMap(i => ds.parcels[i].ids))]; let count = 0;
+    for (let pass = 0; pass < 5; pass++) {
+      let changed = false;
+      for (const i of idxs) {
+        const p = ds.parcels[i];
+        for (let k = 0; k < p.ids.length; k++) {
+          const n = p.ids.length, u = p.ids[k], v = p.ids[(k + 1) % n]; if (p.mid && (p.mid[k] || p.mid[(k + 1) % n])) continue;
+          const A = P.get(u), B = P.get(v), bx = B.x - A.x, by = B.y - A.y, L2 = bx * bx + by * by; if (L2 < 1e-6) continue;
+          let best = null, bt = Infinity;
+          for (const q of pts) {
+            if (q === u || q === v) continue; const Q = P.get(q); if (!Q) continue;
+            const t = ((Q.x - A.x) * bx + (Q.y - A.y) * by) / L2; if (t <= 1e-6 || t >= 1 - 1e-6 || t >= bt) continue;
+            if (Math.abs(bx * (Q.y - A.y) - by * (Q.x - A.x)) / Math.sqrt(L2) <= tol) { best = q; bt = t; }
+          }
+          if (best == null) continue;
+          for (const r of ds.parcels) {   // 所有使用 u–v 這條邊的宗地都插入
+            if (r.deleted) continue; const m = r.ids.length;
+            for (let j = 0; j < m; j++) { const a = r.ids[j], b = r.ids[(j + 1) % m]; if ((a === u && b === v) || (a === v && b === u)) { touchParcel(d, r); r.ids.splice(j + 1, 0, best); if (r.mid) r.mid.splice(j + 1, 0, false); break; } }
+          }
+          count++; changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+    if (count) buildTopology(ds);
+    return count;
+  }
+  // 兩宗是否沿線相鄰：共用界址線，或有邊彼此共線重疊（T 字接點，≤ tol 公尺）。供「合併」自動分組
+  function parcelsTouch(ds, i, j, tol = 0.02) {
+    const P = ds.points, a = ds.parcels[i], b = ds.parcels[j], edges = p => p.ids.map((id, k) => [id, p.ids[(k + 1) % p.ids.length]]);
+    const ea = edges(a), eb = edges(b), keys = new Set(ea.map(([u, v]) => segKey(u, v)));
+    if (eb.some(([u, v]) => keys.has(segKey(u, v)))) return true;
+    for (const [u, v] of ea) { const A = P.get(u), B = P.get(v), L = Math.hypot(B.x - A.x, B.y - A.y); if (L < 1e-9) continue; const ux = (B.x - A.x) / L, uy = (B.y - A.y) / L;
+      const off = Q => Math.abs(ux * (Q.y - A.y) - uy * (Q.x - A.x)), at = Q => (Q.x - A.x) * ux + (Q.y - A.y) * uy;
+      for (const [w, z] of eb) { const C = P.get(w), D = P.get(z); if (off(C) > tol || off(D) > tol) continue;   // C–D 在 A–B 的直線上
+        if (Math.min(L, Math.max(at(C), at(D))) - Math.max(0, Math.min(at(C), at(D))) > tol) return true; } }   // 且重疊長度 > tol
+    return false;
+  }
   function mergeParcels(ds, idxs, keep) {
     idxs = [...new Set(idxs)]; if (idxs.length < 2) throw new Error('至少選兩筆');
     for (const i of idxs) { const p = ds.parcels[i]; if (!p || p.deleted) throw new Error('宗地不存在');
       if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，尚未支援合併`);
       if (p.mid && p.mid.some(Boolean)) throw new Error(`${p.label} 含圓弧，尚未支援合併`); }
+    const d = newDelta(); d.deleted = []; healJunctions(ds, d, idxs);
     const loops = outlineLoops(ds, idxs).filter(l => Math.abs(l.area) > 1e-6);
-    if (loops.length !== 1 || loops[0].area <= 0) throw new Error(loops.some(l => l.area < 0) ? '合併後中間會有空洞，請連空洞一起處理' : '選取的宗地沒有全部相連');
+    if (loops.length !== 1 || loops[0].area <= 0) {
+      if (d.parcels.size) applyDelta(ds, closeDelta(ds, d), 'undo');
+      throw new Error(loops.some(l => l.area < 0) ? '合併後中間會有空洞，請連空洞一起處理' : `選取的宗地沒有全部相連（外圍 ${loops.filter(l => l.area > 0).length} 個環；可能有縫隙或重疊）`);
+    }
     const order = idxs.map(i => ds.parcels[i]).sort((a, b) => (a.created - b.created) || (mainNo(a) - mainNo(b)) || (subNo(a) - subNo(b)));
-    const k = keep != null ? ds.parcels[keep] : order[0], d = newDelta(); d.deleted = [];
+    const k = keep != null ? ds.parcels[keep] : order[0];
     const inGroup = new Set(idxs), onLoop = new Set(loops[0].ids), drop = new Set();
     for (const i of idxs) { const p = ds.parcels[i]; touchParcel(d, p); for (const id of p.ids) if (!onLoop.has(id) && (ds.pointParcels.get(id) || []).every(x => inGroup.has(x))) drop.add(id); }
     for (const i of idxs) { const p = ds.parcels[i]; if (p === k) continue; p.ids = []; p.mid = []; p.deleted = true; d.deleted.push(i); }
@@ -2041,7 +2086,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();
@@ -2053,6 +2098,16 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.17.2', date: '2026-10-26', type: 'patch',
+    title: '修正：沿線相鄰但沒有共用界址點的未登記地（T 字接點）不會合併',
+    changes: [
+      '例：9016-33 的底邊有界址點，9016-59 的頂邊在同一條線上卻沒有這些點，兩宗沒有共用的界址線。原本「合併」只把共用界址線的視為相連，這類不會分到同一組；勾選後合併也會失敗（外圍抵消不掉）',
+      '自動分組改為：共用界址線，或邊沿線重疊（2 cm 內）都算相連',
+      '合併前先把落在另一宗邊上的界址點（2 cm 內）插入那條邊，所有使用該邊的宗地一併插入（面積不變），外圍才接得起來；合併失敗時一併還原',
+      '合併失敗的訊息改列出外圍有幾個環（有縫隙或重疊時）',
+    ],
+  },
   {
     version: 'v0.17.1', date: '2026-10-26', type: 'patch',
     title: '修正：未登記地「合併」（合併後自動分割）大量宗地時程式沒有回應',
@@ -3192,7 +3247,10 @@ $('btnUnMerge').onclick = async () => {   // 合併勾選的；沒勾選＝同�
   else {   // 同母號、共用界址線者為一組
     const un = S.unreg.parcels.filter(p => !p.nested && !p.arc).map(p => p.idx), set = new Set(un), parent = new Map(un.map(i => [i, i])), find = i => { while (parent.get(i) !== i) i = parent.get(i); return i; };
     const mother = i => parseInt(String(ds.parcels[i].label), 10);
-    for (const e of ds.edges.values()) { const ps = e.parcels.filter(i => set.has(i)); for (let k = 1; k < ps.length; k++) if (mother(ps[0]) === mother(ps[k])) parent.set(find(ps[k]), find(ps[0])); }
+    // 相鄰＝共用界址線，或邊沿線重疊（T 字接點：一宗的點落在另一宗的邊上、沒有共用點）；只比外框相交的同母號
+    const box = i => { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const id of ds.parcels[i].ids) { const q = ds.points.get(id); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } return { x0, x1, y0, y1 }; };
+    const bb = new Map(un.map(i => [i, box(i)])), hit = (a, b) => a.x0 <= b.x1 + 0.05 && b.x0 <= a.x1 + 0.05 && a.y0 <= b.y1 + 0.05 && b.y0 <= a.y1 + 0.05;
+    for (let a = 0; a < un.length; a++) for (let b = a + 1; b < un.length; b++) { const i = un[a], j = un[b]; if (mother(i) === mother(j) && find(i) !== find(j) && hit(bb.get(i), bb.get(j)) && Core.parcelsTouch(ds, i, j)) parent.set(find(j), find(i)); }
     const m = new Map(); for (const i of un) { const r = find(i); if (!m.has(r)) m.set(r, []); m.get(r).push(i); }
     groups = [...m.values()].filter(g => g.length > 1);
     if (!groups.length) return msg('沒有同母號且相連的未登記地可合併');
