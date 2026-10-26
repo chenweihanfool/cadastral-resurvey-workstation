@@ -1193,19 +1193,23 @@ const Core = (() => {
     const d = newDelta(); touchParcel(d, p); p.ids = ids; p.mid = mid; p.hasArc = mid.some(Boolean);
     return { delta: closeDelta(ds, d) };
   }
-  // 刪除地中地、面積併入外圈（仿 NECEXE，KC0336 刪 9012-5004 併入 76-17 驗證）：清空內圈的界址串並標為已刪除，解除地中地關係（外圈面積＝外圈 − 其餘地中地），
-  // 只屬於它的界址點一併刪除。輸出時 D13 該宗的列清成 0（含地號鍵，NECEXE 不讀地號全 0 的列）、D11 新面積／中心坐標／LIMIT 改 0、D21 移除它的經界線；D12 的關係列照 NECEXE 保留。
-  function deleteHoleParcel(ds, hi) {
+  // 刪除宗地（v0.16.0）。地中地＝面積併入外圈（仿 NECEXE，KC0336 刪 9012-5004 併入 76-17 驗證）：解除地中地關係（外圈面積＝外圈 − 其餘地中地）；
+  // 一般宗地（例：與鄰段重疊的外圍未登記地）直接刪除，原本的範圍變成空地／段外，面積不轉給任何宗地。兩者都清空界址串並標為已刪除，只屬於它的界址點一併刪除。
+  // 輸出時 D13 該宗整宗移除、D21 移除或改寫它的經界線（鄰宗那側改為段外）、D11 一般地號新面積／中心坐標／LIMIT 改 0（9000 號以上整筆移除）；D12 的關係列照 NECEXE 保留。
+  function deleteParcel(ds, hi) {
     const h = ds.parcels[hi]; if (!h || h.deleted) throw new Error('宗地不存在或已刪除');
-    if (!(h.containers || []).length) throw new Error(`${h.label} 不是地中地（沒有外圈），目前只支援刪除地中地並把面積併入外圈`);
-    if ((h.holes || []).length) throw new Error(`${h.label} 本身還有地中地，請先處理內層`);
+    if ((h.holes || []).length) throw new Error(`${h.label} 本身還有地中地（${h.holes.map(i => ds.parcels[i].label).join('、')}），請先處理內層`);
     const d = newDelta(); touchParcel(d, h); d.holes = []; d.deleted = [hi];
-    for (const ci of h.containers.slice()) { touchParcel(d, ds.parcels[ci]); linkHole(ds, ci, hi, false); d.holes.push({ p: ci, h: hi, on: false }); }
+    for (const ci of (h.containers || []).slice()) { touchParcel(d, ds.parcels[ci]); linkHole(ds, ci, hi, false); d.holes.push({ p: ci, h: hi, on: false }); }
     const only = h.ids.filter((id, i, a) => a.indexOf(id) === i && (ds.pointParcels.get(id) || []).every(x => x === hi));
     h.ids = []; h.mid = []; h.deleted = true;
     for (const id of only) { const q = ds.points.get(id); if (q) { ds.points.delete(id); d.removed.push(q); } }
     const into = d.holes.map(l => ds.parcels[l.p].label);
     return { delta: closeDelta(ds, d), into, removedPoints: only };
+  }
+  function deleteHoleParcel(ds, hi) {   // 舊名：只接受地中地
+    const h = ds.parcels[hi]; if (h && !h.deleted && !(h.containers || []).length) throw new Error(`${h.label} 不是地中地（沒有外圈）；一般宗地請用 deleteParcel`);
+    return deleteParcel(ds, hi);
   }
   // ── 未登記土地（9000 號以上）：清單、合併、每筆 ≤ N 點分割、空隙與凹口建為新地號（v0.15.0）──────────
   // 分割演算法移植自 116 倉庫 tools/kc0336_step4b_split.py（KC0336 當時把 23 筆 9000 系切成每塊 ≤10 點）：
@@ -1562,7 +1566,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteHoleParcel, unregSummary, splitParcel, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();

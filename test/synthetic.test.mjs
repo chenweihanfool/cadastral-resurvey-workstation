@@ -447,6 +447,33 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const o13 = Core.parseDbf(Core.exportD13(bnd, ds).bytes); assert.ok(noMidJunk(o13, r => r.O_PARCEL || r.O_PARCEL_E), 'D13 沒有夾在中間的空列');
   const re = Core.datasetFromD({ pts: o14, bnd: o13, par: o11 }); assert.equal(re.parcels.length, ds.parcels.filter(p => !p.deleted).length);
 }
+// ── 刪除一般宗地（不是地中地）：範圍變成段外，面積不轉移；共用的界址點保留、鄰宗那側的經界線改為段外 ──
+{
+  const F_D21 = ['LIN_TOP', 'LIN_MID', 'LIN_BOT'].map(name => ({ name, type: 'N', len: 5 })).concat(['L_SECTION', 'L_PARCEL', 'L_PARCEL_E', 'R_SECTION', 'R_PARCEL', 'R_PARCEL_E'].map(name => ({ name, type: 'N', len: 4 })), [{ name: 'LIN_MODE', type: 'N', len: 1 }, { name: 'R_EXAM', type: 'C', len: 20 }]);
+  const F_D11b = [...F_D11, { name: 'CENTER_Y', type: 'N', len: 12, dec: 3 }, { name: 'CENTER_X', type: 'N', len: 11, dec: 3 }, { name: 'LIMIT', type: 'N', len: 8, dec: 3 }];
+  const Y = 2700000, X = 200000, P = [[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0], [5, 0, 150], [6, 100, 150]];
+  const pts = rd(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd = rd(F_D13, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 9006, 65, [2, 5, 6, 3])]);
+  const a = (m, c, ha) => ({ SECTION_O: 1, PAR_O_M: m, PAR_O_C: c, PAR_N_M: m, PAR_N_C: c, SECTION_N: 0, AREA_OLD: ha, AREA_NEW: ha, CENTER_Y: Y + 50, CENTER_X: X + 50, LIMIT: 1.5 });
+  const par = rd(F_D11b, [a(1, 0, 1), a(9006, 65, 0.5)]);
+  const L = (t, b, l, lc, r, rc) => ({ LIN_TOP: t, LIN_MID: 0, LIN_BOT: b, L_SECTION: l ? 1 : 0, L_PARCEL: l, L_PARCEL_E: lc, R_SECTION: r ? 1 : 0, R_PARCEL: r, R_PARCEL_E: rc, LIN_MODE: 0, R_EXAM: '' });
+  const lin = rd(F_D21, [L(1, 2, 1, 0, 0, 0), L(2, 3, 1, 0, 9006, 65), L(3, 4, 1, 0, 0, 0), L(4, 1, 1, 0, 0, 0), L(2, 5, 9006, 65, 0, 0), L(5, 6, 9006, 65, 0, 0), L(6, 3, 9006, 65, 0, 0)]);
+  const ds = Core.datasetFromD({ pts, bnd, par }), dbf = { pts, bnd, par, lin };
+  assert.deepEqual(Object.values(Core.exportD21(lin, ds)).slice(1, 4), [0, 0, 0], '未修改時 D21 與推得的一致');
+  assert.throws(() => Core.deleteHoleParcel(ds, 1), /不是地中地/, '舊名只接受地中地');
+  const r = Core.deleteParcel(ds, 1); near(ds.parcels[0].area, 10000, 1e-6); assert.deepEqual(r.into, []); assert.deepEqual(r.removedPoints.sort(), [5, 6], '共用的 2、3 保留');
+  assert.ok(ds.points.has(2) && ds.points.has(3)); assert.throws(() => Core.deleteParcel(ds, 1), /已刪除/);
+  const ch = Core.changedDFiles(ds, dbf); assert.deepEqual(Object.keys(ch.files).sort(), ['d11', 'd13', 'd21']);
+  assert.equal(Core.parseDbf(ch.files.d13.bytes).n, 1, 'D13 只剩地號 1');
+  const b11 = Core.parseDbf(ch.files.d11.bytes); assert.deepEqual(b11.rows.map(x => x.PAR_O_M), [1], '9000 號以上整筆移除');
+  const b21 = Core.parseDbf(ch.files.d21.bytes), e23 = b21.rows.filter(x => !x._deleted && x.LIN_TOP && [x.LIN_TOP, x.LIN_BOT].sort().join() === '2,3');
+  assert.equal(b21.rows.filter(x => !x._deleted && x.LIN_TOP).length, 4, '只剩地號 1 的四條線'); assert.equal(e23.length, 1);
+  assert.ok([e23[0].L_PARCEL, e23[0].R_PARCEL].includes(0) && [e23[0].L_PARCEL, e23[0].R_PARCEL].includes(1), '2–3 的另一側改為段外');
+  Core.applyDelta(ds, r.delta, 'undo'); assert.ok(!ds.parcels[1].deleted && ds.points.has(5)); near(ds.parcels[1].area, 5000, 1e-6);
+  // 一般地號：D11 保留記錄、新面積 0
+  const bnd2 = rd(F_D13, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [2, 5, 6, 3])]), par2 = rd(F_D11b, [a(1, 0, 1), a(2, 0, 0.5)]), ds2 = Core.datasetFromD({ pts, bnd: bnd2, par: par2 });
+  Core.deleteParcel(ds2, 1); const c11 = Core.parseDbf(Core.changedDFiles(ds2, { pts, bnd: bnd2, par: par2, lin: null }).files.d11.bytes);
+  assert.deepEqual([c11.n, c11.rows[1].AREA_NEW, c11.rows[1].AREA_OLD], [2, 0, 0.5]);
+}
 // ── 已刪除的未登記地（9000 號以上）：D11 整筆移除，指向它的 D12 關係一併移除；一般地號仍保留記錄 ──
 {
   const Y = 2700000, X = 200000, F_D11d = [...F_D11, { name: 'CENTER_Y', type: 'N', len: 12, dec: 3 }, { name: 'CENTER_X', type: 'N', len: 11, dec: 3 }, { name: 'LIMIT', type: 'N', len: 8, dec: 3 }];
