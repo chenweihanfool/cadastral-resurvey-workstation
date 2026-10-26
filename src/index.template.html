@@ -257,10 +257,10 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="small muted" style="margin-top:4px">刪除會同時從所有含該點的宗地環移除；環不能少於 3 點，圓弧的弧端與中點不能刪。可復原。</div>
   <div id="ptEditInfo" class="small" style="margin-top:6px"></div></section></div></dialog>
 <dialog class="fp" id="dlgUnreg"><div class="fphead"><b>未登記土地（9000 號以上）分割合併</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
-  <div class="row small"><label>每筆界址點上限 <input type="number" id="unN" value="10" min="3" style="width:56px"> 點</label><label>新地號母號 <input type="number" id="unMother" value="9001" min="9000" style="width:70px"></label><button class="btn" id="btnUnRefresh">重新計算</button></div>
+  <div class="row small"><label>每筆界址點上限 <input type="number" id="unN" value="10" min="3" style="width:56px"> 點</label><label title="略圖縮放到調查表略圖框（A3 約 143×137 mm，近乎正方形）內列印，所以限制長寬比：外接矩形長÷短；彎曲或 L 形的細長條以「長²÷面積÷2」計。0＝不限形狀">長寬比上限 <input type="number" id="unRatio" value="2" min="0" step="0.1" style="width:56px"></label><label>新地號母號 <input type="number" id="unMother" value="9001" min="9000" style="width:70px"></label><button class="btn" id="btnUnRefresh">重新計算</button></div>
   <div id="unSum" class="small" style="margin-top:6px"></div>
-  <div class="row" style="margin-top:6px"><button class="btn primary" id="btnUnSplit" title="沒勾選＝全部超過上限者">分割（每筆 ≤ 上限）</button><button class="btn" id="btnUnMerge" title="沒勾選＝同母號且相連者各併成一筆">合併</button><label class="chk small"><input type="checkbox" id="unAutoSplit" checked>合併後自動分割</label></div>
-  <div class="small muted" style="margin-top:4px">勾選表內的地號只處理勾選的；不勾選時，「分割」處理全部超過上限者，「合併」把同母號且相連的各併成一筆。分割以連接既有界址點的弦切下，新塊編新子號（同母號、接續最大子號），剩餘部分保留原地號。地中地與含圓弧者暫不處理。全部可一次復原。</div>
+  <div class="row" style="margin-top:6px"><button class="btn primary" id="btnUnSplit" title="沒勾選＝全部超過點數上限或長寬比上限者">分割（點數、長寬比 ≤ 上限）</button><button class="btn" id="btnUnMerge" title="沒勾選＝同母號且相連者各併成一筆">合併</button><label class="chk small"><input type="checkbox" id="unAutoSplit" checked>合併後自動分割</label></div>
+  <div class="small muted" style="margin-top:4px">勾選表內的地號只處理勾選的；不勾選時，「分割」處理全部超過上限者，「合併」把同母號且相連的各併成一筆。分割先以連接既有界址點的弦切下；太細長而切不出合格的塊時，垂直長邊切開（大約等分），切線與界址線的交點新增界址點，鄰宗同步插入（面積不變）。新塊編新子號（同母號、接續最大子號），剩餘部分保留原地號。長寬比上限依調查表略圖框（A3 約 143×137 mm）：略圖縮放到框內，太長的地號印出來會很細。地中地與含圓弧者暫不處理。全部可一次復原。</div>
   <div id="unList" style="margin-top:6px;max-height:36vh;overflow:auto"></div></section>
 <section><h2>封閉凹口（與段外相通的長條）</h2><div class="small muted">按下後，依序點兩個段外圍（測區邊界）上的界址點畫一條封口線；長條兩端都通到段外時就畫兩條。程式找出被封口線圍住、位於所有宗地之外的範圍（綠色預覽），按 Enter 建為新地號（母號見上）。</div>
   <div class="row" style="margin-top:6px"><button class="btn" id="btnUnPocket">開始畫封口線</button></div></section></div></dialog>

@@ -432,6 +432,33 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const fr = Core.fillRegion(dsq, g.ids, 9001); assert.equal(fr.label, '9001-1'); near(dsq.parcels[3].area, 100, 1e-6); assert.equal(Core.freeRegions(dsq).length, 0);
   assert.throws(() => Core.pocketRegion(dsq, [[1, 9]]), /已是界址線|沒有圍出|穿過/);
 }
+// ── 形狀限制（v0.17.0）：細長的未登記地即使點數未超過也要切；只有 4 點的長條要在長邊上新增界址點，鄰宗同步插入 ──
+{
+  const Y = 2700000, X = 200000, shape = (ds, p) => Core.shapeRatio(p.ids, ds.points);
+  near(Core.shapeRatio([1, 2, 3, 4], new Map([[1, { y: 0, x: 0 }], [2, { y: 0, x: 40 }], [3, { y: 10, x: 40 }], [4, { y: 10, x: 0 }]])), 4, 1e-9, '40×10 矩形＝4');
+  near(Core.shapeRatio([1, 2, 3], new Map([[1, { y: 0, x: 0 }], [2, { y: 0, x: 20 }], [3, { y: 10, x: 0 }]])), 2, 1e-9, '直角三角形與外接矩形相同');
+  // 斜向長條 9016-59（4 點，約 100×10 m，旋轉 20°）＋北側鄰宗 7（共用長邊）
+  const c = Math.cos(0.35), s = Math.sin(0.35), at = (u, v) => [Y + u * s + v * c, X + u * c - v * s];
+  const P = [[1, 0, 0], [2, 100, 0], [3, 100, 10], [4, 0, 10], [5, 100, 30], [6, 0, 30]].map(([n, u, v]) => [n, ...at(u, v)]);
+  const pts = rd(F_D14, P.map(([n, y, x]) => pt(n, y, x))), bnd = rd(F_D13, [ring(1, 9016, 59, [1, 2, 3, 4]), ring(1, 7, 0, [4, 3, 5, 6])]);
+  const ds = Core.datasetFromD({ pts, bnd }), a0 = ds.parcels[0].area, a7 = ds.parcels[1].area; near(shape(ds, ds.parcels[0]), 10, 1e-6);
+  const sm = Core.unregSummary(ds, 10, 2); assert.ok(sm.parcels[0].long && sm.parcels[0].over && !sm.parcels[0].overPts, '點數未超過、形狀過長');
+  assert.equal(Core.splitParcel(ds, 0, 10).delta, null, '不限形狀時照舊不切');
+  const r = Core.splitParcel(ds, 0, 10, 2), live = ds.parcels.filter(p => !p.deleted && p.label.startsWith('9016-'));
+  assert.equal(live.length, 5, '10 ÷ 2 ＝ 5 塊'); assert.ok(live.every(p => shape(ds, p) <= 2.02 && p.ids.length <= 10), '每塊細長度 ≤ 2（容差 1%）');
+  near(live.reduce((t, p) => t + p.area, 0), a0, 1e-6, '面積守恆'); near(ds.parcels[1].area, a7, 1e-6, '鄰宗面積不變');
+  assert.equal(r.delta.added.length, 8, '兩條長邊各新增 4 點'); assert.ok(r.delta.added.every(q => ds.parcels[1].ids.includes(q.id) || ds.parcels[1].ids.length === 4 + 4), '鄰宗同步插入北側新點');
+  assert.equal(ds.parcels[1].ids.length, 8); assert.equal(Core.ringConflicts(ds).cross.length, 0); assert.equal(Core.freeRegions(ds).length, 0);
+  live.forEach(p => near(p.area, a0 / 5, 0.5, `${p.label} 約等分`));
+  const ch = Core.changedDFiles(ds, { pts, bnd, par: null, d12: null, lin: null }), re = Core.datasetFromD({ pts: Core.parseDbf(ch.files.d14.bytes), bnd: Core.parseDbf(ch.files.d13.bytes) });
+  assert.equal(re.parcels.length, 6); near(re.parcels.reduce((t, p) => t + p.area, 0), a0 + a7, 1e-3, '重讀 D13／D14 面積總和不變');
+  Core.applyDelta(ds, r.delta, 'undo'); assert.equal(ds.parcels.filter(p => !p.deleted).length, 2); assert.equal(ds.parcels[1].ids.length, 4); assert.equal(ds.points.size, 6);
+  // L 形細長條（外接矩形接近方形，但寬只有 4 m）也要切
+  const L = [[1, 0, 0], [2, 0, 60], [3, 60, 60], [4, 60, 56], [5, 4, 56], [6, 4, 0]];
+  const dl = Core.datasetFromD({ pts: rd(F_D14, L.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, [ring(1, 9001, 1, [1, 2, 3, 4, 5, 6])]) });
+  assert.ok(shape(dl, dl.parcels[0]) > 2, 'L 形算細長'); const rl = Core.splitParcel(dl, 0, 10, 2), ll = dl.parcels.filter(p => !p.deleted);
+  assert.ok(rl.pieces.length >= 3 && ll.every(p => shape(dl, p) <= 2.02), `L 形切開：${ll.map(p => shape(dl, p).toFixed(2)).join(',')}`); near(ll.reduce((t, p) => t + p.area, 0), 464, 1e-6); assert.equal(Core.ringConflicts(dl).cross.length, 0); assert.equal(Core.freeRegions(dl).length, 0);
+}
 // ── 輸出不可在有效記錄之間留下鍵值為 0 的空列（KC0336：NECEXE 會刪掉它並往前遞補，經界線左右地號整批錯位）──
 {
   const noMidJunk = (dbf, isLive) => { let seen = false; for (let i = dbf.n - 1; i >= 0; i--) { if (isLive(dbf.rows[i])) seen = true; else if (seen) return false; } return true; };

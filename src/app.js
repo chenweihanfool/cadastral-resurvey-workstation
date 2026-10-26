@@ -517,9 +517,9 @@ function render() {
     if (S.clean && !S.printing) {   // 清理預覽：將被刪的點（橘＝沒有宗地使用、紫＝直線多餘）
       ctx.lineWidth = 2; for (const q of S.clean.pts) { const sx = toSx(q.x), sy = toSy(q.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue; ctx.strokeStyle = q.add ? '#2f9e44' : q.u ? '#f08c00' : '#9c36b5'; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 7); if (q.add) { ctx.moveTo(sx - 5, sy); ctx.lineTo(sx + 5, sy); ctx.moveTo(sx, sy - 5); ctx.lineTo(sx, sy + 5); } else { ctx.moveTo(sx - 5, sy - 5); ctx.lineTo(sx + 5, sy + 5); ctx.moveTo(sx + 5, sy - 5); ctx.lineTo(sx - 5, sy + 5); } ctx.stroke(); }
     }
-    if ($('dlgUnreg').open && S.unreg && !S.printing) {   // 未登記地：黃＝未登記、橘＝超過點數、紅＝空隙
+    if ($('dlgUnreg').open && S.unreg && !S.printing) {   // 未登記地：黃＝未登記、橘＝需要分割（超過點數或太細長）、紅＝空隙
       ctx.save(); const n = unN();
-      for (const u of S.unreg.parcels) { const p = ds.parcels[u.idx]; if (!p || p.deleted) continue; ctx.fillStyle = p.ids.length > n ? 'rgba(240,140,0,.35)' : 'rgba(250,210,0,.25)'; tracePoly(ds, p.ids); ctx.fill(); }
+      for (const u of S.unreg.parcels) { const p = ds.parcels[u.idx]; if (!p || p.deleted) continue; ctx.fillStyle = u.over ? 'rgba(240,140,0,.35)' : 'rgba(250,210,0,.25)'; tracePoly(ds, p.ids); ctx.fill(); }
       ctx.fillStyle = 'rgba(209,36,47,.45)'; for (const g of S.unreg.gaps) { tracePoly(ds, g.ids); ctx.fill(); }
       ctx.restore();
     }
@@ -791,20 +791,20 @@ $('btnRingCheck').onclick = ringPanel; $('btnRedraw').onclick = startRedraw;
 $('dlgRing').addEventListener('close', () => { S.ringMark = null; draw(); });
 
 // ── 未登記土地（9000 號以上）：清單、合併、每筆 ≤ N 點分割、空隙與凹口建為新地號（核心在 Core.unregSummary／splitParcel／mergeParcels／fillRegion／pocketRegion）──
-const unN = () => Math.max(3, parseInt($('unN').value, 10) || 10), unMother = () => Math.max(9000, parseInt($('unMother').value, 10) || 9001);
+const unN = () => Math.max(3, parseInt($('unN').value, 10) || 10), unRatio = () => Math.max(0, parseFloat($('unRatio').value) || 0), unMother = () => Math.max(9000, parseInt($('unMother').value, 10) || 9001);
 function pushMulti(deltas, label) {   // 多步驟的一鍵操作：一次復原
   deltas = deltas.filter(Boolean); if (!deltas.length) return;
   pushUndo({ undoFn: () => { for (const d of deltas.slice().reverse()) Core.applyDelta(S.ds, d, 'undo'); pruneSel(); }, redoFn: () => { for (const d of deltas) Core.applyDelta(S.ds, d, 'redo'); pruneSel(); }, label });
 }
 function unregPanel() {
   const ds = S.ds; if (!ds) { $('unSum').textContent = '尚未載入圖資'; $('unList').innerHTML = ''; S.unreg = null; return; }
-  const n = unN(), r = S.unreg = Core.unregSummary(ds, n), over = r.parcels.filter(p => p.over);
-  $('unSum').innerHTML = `未登記地 <b>${r.parcels.length}</b> 筆（共 ${r.parcels.reduce((s, p) => s + p.area, 0).toFixed(2)} m²），其中超過 ${n} 點 <b class="${over.length ? 'neg' : ''}">${over.length}</b> 筆；宗地之間沒有地號的封閉空隙 <b>${r.gaps.length}</b> 處。` +
-    '<div class="muted">圖上：黃＝未登記地、橘＝超過點數、紅＝空隙。與段外相通的長條（凹口）請用下方「封閉凹口」畫封口線。</div>';
+  const n = unN(), lim = unRatio(), r = S.unreg = Core.unregSummary(ds, n, lim), over = r.parcels.filter(p => p.over);
+  $('unSum').innerHTML = `未登記地 <b>${r.parcels.length}</b> 筆（共 ${r.parcels.reduce((s, p) => s + p.area, 0).toFixed(2)} m²），需要分割 <b class="${over.length ? 'neg' : ''}">${over.length}</b> 筆（超過 ${n} 點 ${r.parcels.filter(p => p.overPts).length} 筆${lim ? `、長寬比超過 ${lim} 的 ${r.parcels.filter(p => p.long).length} 筆` : ''}）；宗地之間沒有地號的封閉空隙 <b>${r.gaps.length}</b> 處。` +
+    '<div class="muted">圖上：黃＝未登記地、橘＝需要分割（超過點數或太細長）、紅＝空隙。與段外相通的長條（凹口）請用下方「封閉凹口」畫封口線。</div>';
   const rows = r.parcels.slice().sort((a, b) => (b.over - a.over) || String(a.label).localeCompare(String(b.label), 'zh-Hant', { numeric: true }));
-  $('unList').innerHTML = '<table><thead><tr><th></th><th>地號</th><th>點數</th><th>面積</th><th></th></tr></thead><tbody>' +
-    r.gaps.map((g, i) => `<tr data-gap="${i}" style="cursor:pointer"><td></td><td class="neg">空隙 ${i + 1}</td><td>${g.ids.length}</td><td>${g.area.toFixed(2)}</td><td><button class="btn" data-fillgap="${i}">建為新地號</button></td></tr>`).join('') +
-    rows.map(p => `<tr data-i="${p.idx}" style="cursor:pointer"><td><input type="checkbox" class="unchk" data-i="${p.idx}"${S.unSel && S.unSel.has(p.idx) ? ' checked' : ''}></td><td>${esc(p.label)}${p.nested ? '<span class="muted">（地中地）</span>' : ''}${p.arc ? '<span class="muted">（圓弧）</span>' : ''}</td><td class="${p.over ? 'neg' : ''}">${p.pts}</td><td>${p.area.toFixed(2)}</td><td></td></tr>`).join('') + '</tbody></table>';
+  $('unList').innerHTML = '<table><thead><tr><th></th><th>地號</th><th>點數</th><th>長寬比</th><th>面積</th><th></th></tr></thead><tbody>' +
+    r.gaps.map((g, i) => `<tr data-gap="${i}" style="cursor:pointer"><td></td><td class="neg">空隙 ${i + 1}</td><td>${g.ids.length}</td><td></td><td>${g.area.toFixed(2)}</td><td><button class="btn" data-fillgap="${i}">建為新地號</button></td></tr>`).join('') +
+    rows.map(p => `<tr data-i="${p.idx}" style="cursor:pointer"><td><input type="checkbox" class="unchk" data-i="${p.idx}"${S.unSel && S.unSel.has(p.idx) ? ' checked' : ''}></td><td>${esc(p.label)}${p.nested ? '<span class="muted">（地中地）</span>' : ''}${p.arc ? '<span class="muted">（圓弧）</span>' : ''}</td><td class="${p.overPts ? 'neg' : ''}">${p.pts}</td><td class="${p.long ? 'neg' : ''}">${isFinite(p.ratio) ? p.ratio.toFixed(1) : '—'}</td><td>${p.area.toFixed(2)}</td><td></td></tr>`).join('') + '</tbody></table>';
 }
 S.unSel = new Set();
 $('unList').addEventListener('change', e => { const c = e.target.closest('.unchk'); if (!c) return; c.checked ? S.unSel.add(+c.dataset.i) : S.unSel.delete(+c.dataset.i); });
@@ -815,16 +815,16 @@ $('unList').addEventListener('click', e => {
   const tr = e.target.closest('tr[data-i]'); if (tr) { clearSel(); S.sel.par.add(+tr.dataset.i); zoomTo([+tr.dataset.i]); refresh(); }
 });
 const unChecked = () => [...S.unSel].filter(i => S.ds.parcels[i] && !S.ds.parcels[i].deleted);
-$('btnUnSplit').onclick = () => {   // 分割勾選的；沒勾選＝全部超過 N 點者
-  if (!S.ds) return; const n = unN(), list = unChecked().length ? unChecked() : S.unreg.parcels.filter(p => p.over).map(p => p.idx);
-  if (!list.length) return msg(`沒有超過 ${n} 點的未登記地`);
-  const deltas = [], made = [], fail = [];
-  for (const i of list) { const p = S.ds.parcels[i]; try { const r = Core.splitParcel(S.ds, i, n); if (r.delta) { deltas.push(r.delta); made.push(`${p.label}→${r.pieces.length + 1} 筆`); } } catch (err) { fail.push(`${p.label}（${err.message}）`); } }
-  pushMulti(deltas, `未登記地分割 ≤${n} 點`); S.unSel.clear();
-  msg((made.length ? `已分割 ${made.length} 筆：${made.slice(0, 8).join('、')}${made.length > 8 ? '…' : ''}` : '沒有分割任何宗地') + (fail.length ? `；未處理 ${fail.length} 筆：${fail.slice(0, 3).join('、')}` : '') + '。可一次復原'); unregPanel(); refresh();
+$('btnUnSplit').onclick = () => {   // 分割勾選的；沒勾選＝全部超過點數或長寬比上限者
+  if (!S.ds) return; const n = unN(), lim = unRatio(), list = unChecked().length ? unChecked() : S.unreg.parcels.filter(p => p.over).map(p => p.idx);
+  if (!list.length) return msg(`沒有超過 ${n} 點` + (lim ? `或長寬比超過 ${lim}` : '') + ' 的未登記地');
+  const deltas = [], made = [], fail = [], left = [];
+  for (const i of list) { const p = S.ds.parcels[i]; try { const r = Core.splitParcel(S.ds, i, n, lim); if (r.delta) { deltas.push(r.delta); made.push(`${p.label}→${r.pieces.length + 1} 筆` + (r.delta.added.length ? `（新增 ${r.delta.added.length} 點）` : '')); } if (r.unresolved != null) left.push(`${p.label}（${r.unresolved.toFixed(1)}）`); } catch (err) { fail.push(`${p.label}（${err.message}）`); } }
+  pushMulti(deltas, `未登記地分割 ≤${n} 點` + (lim ? `、長寬比 ≤${lim}` : '')); S.unSel.clear();
+  msg((made.length ? `已分割 ${made.length} 筆：${made.slice(0, 8).join('、')}${made.length > 8 ? '…' : ''}` : '沒有分割任何宗地') + (left.length ? `；形狀切不開、仍超過長寬比 ${left.length} 筆：${left.slice(0, 5).join('、')}` : '') + (fail.length ? `；未處理 ${fail.length} 筆：${fail.slice(0, 3).join('、')}` : '') + '。可一次復原' + (deltas.some(d => d.added.length) ? '；有新增界址點，輸出完整案件資料夾時 D14 一併更新' : ''));
 };
 $('btnUnMerge').onclick = () => {   // 合併勾選的；沒勾選＝同母號且相連者各併成一筆
-  if (!S.ds) return; const ds = S.ds, n = unN(), auto = $('unAutoSplit').checked, deltas = [], done = [], fail = [];
+  if (!S.ds) return; const ds = S.ds, n = unN(), lim = unRatio(), auto = $('unAutoSplit').checked, deltas = [], done = [], fail = [];
   let groups;
   if (unChecked().length) groups = [unChecked()];
   else {   // 同母號、共用界址線者為一組
@@ -834,11 +834,11 @@ $('btnUnMerge').onclick = () => {   // 合併勾選的；沒勾選＝同母號�
     const m = new Map(); for (const i of un) { const r = find(i); if (!m.has(r)) m.set(r, []); m.get(r).push(i); }
     groups = [...m.values()].filter(g => g.length > 1);
     if (!groups.length) return msg('沒有同母號且相連的未登記地可合併');
-    if (!confirm(`把同母號且相連的未登記地合併：共 ${groups.length} 組、${groups.reduce((s, g) => s + g.length, 0)} 筆` + (auto ? `，合併後再切成每筆 ≤ ${n} 點` : '') + '？可一次復原')) return;
+    if (!confirm(`把同母號且相連的未登記地合併：共 ${groups.length} 組、${groups.reduce((s, g) => s + g.length, 0)} 筆` + (auto ? `，合併後再切成每筆 ≤ ${n} 點` + (lim ? `、長寬比 ≤ ${lim}` : '') : '') + '？可一次復原')) return;
   }
   for (const g of groups) {
     try { const r = Core.mergeParcels(ds, g); deltas.push(r.delta); let t = `${r.keep}（併入 ${r.merged.length} 筆）`;
-      if (auto) { const k = ds.parcels.find(p => p.label === r.keep && !p.deleted); const s = Core.splitParcel(ds, k.idx, n); if (s.delta) { deltas.push(s.delta); t += `→再切成 ${s.pieces.length + 1} 筆`; } }
+      if (auto) { const k = ds.parcels.find(p => p.label === r.keep && !p.deleted); const s = Core.splitParcel(ds, k.idx, n, lim); if (s.delta) { deltas.push(s.delta); t += `→再切成 ${s.pieces.length + 1} 筆`; } }
       done.push(t); } catch (err) { fail.push(`${g.map(i => ds.parcels[i].label).slice(0, 3).join('、')}…（${err.message}）`); }
   }
   pushMulti(deltas, '未登記地合併'); S.unSel.clear();
@@ -864,7 +864,7 @@ function finishPocket() {
   catch (err) { msg('無法建立：' + err.message); }
   if ($('dlgUnreg').open) unregPanel(); refresh();
 }
-$('btnUnPocket').onclick = startPocket; $('btnUnRefresh').onclick = unregPanel; $('unN').oninput = unregPanel;
+$('btnUnPocket').onclick = startPocket; $('btnUnRefresh').onclick = unregPanel; $('unN').oninput = unregPanel; $('unRatio').oninput = unregPanel;
 $('dlgUnreg').addEventListener('close', () => { cancelPocket(); });
 
 // ── 檢視 ───────────────────────────────────────────────────────────────────
@@ -1836,8 +1836,8 @@ const api = {
   exportErrReport: () => { if (!S.ds) throw new Error('尚未載入圖資'); return errReportText(); },
   ringIssues: () => { if (!S.ds) throw new Error('尚未載入圖資'); return Core.ringIssues(S.ds).map(o => ({ kind: o.kind, parcel: S.ds.parcels[o.p].label, inner: o.h != null ? S.ds.parcels[o.h].label : null, text: Core.ringIssueLine(S.ds, o), jumps: o.jumps || null })); },
   splitHole: ({ outer, inner }) => { const f = l => { const p = S.ds.parcels.find(q => q.label === l || q.oldLabel === l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }; const pi = f(outer), r = Core.splitHole(S.ds, pi, f(inner)); pushStruct(r.delta, `拆出地中地 ${inner}`); return { area: S.ds.parcels[pi].area, jumps: r.jumps, linked: r.linked }; },
-  unregSummary: ({ maxPts = 10 } = {}) => { const r = Core.unregSummary(S.ds, maxPts); return { parcels: r.parcels.map(p => ({ label: p.label, points: p.pts, area: p.area, over: p.over })), gaps: r.gaps.map(g => ({ points: g.ids, area: g.area })) }; },
-  splitParcel: ({ parcel, maxPts = 10 }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitParcel(S.ds, p.idx, maxPts); if (r.delta) pushStruct(r.delta, `分割 ${parcel}`); return { pieces: r.pieces }; },
+  unregSummary: ({ maxPts = 10, maxRatio = 2 } = {}) => { const r = Core.unregSummary(S.ds, maxPts, maxRatio); return { parcels: r.parcels.map(p => ({ label: p.label, points: p.pts, ratio: p.ratio, area: p.area, over: p.over, tooLong: p.long })), gaps: r.gaps.map(g => ({ points: g.ids, area: g.area })) }; },
+  splitParcel: ({ parcel, maxPts = 10, maxRatio = 2 }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitParcel(S.ds, p.idx, maxPts, maxRatio); if (r.delta) pushStruct(r.delta, `分割 ${parcel}`); return { pieces: r.pieces, addedPoints: r.delta ? r.delta.added.map(q => q.id) : [], unresolved: r.unresolved }; },
   mergeParcels: ({ parcels }) => { const idx = parcels.map(l => { const p = findPar(l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }); const r = Core.mergeParcels(S.ds, idx); pushStruct(r.delta, '合併 ' + parcels.join('、')); return { keep: r.keep, merged: r.merged }; },
   closePocket: ({ chords, mother = 9001 }) => { const g = Core.pocketRegion(S.ds, chords), r = Core.fillRegion(S.ds, g.ids, mother); pushStruct(r.delta, `凹口建為 ${r.label}`); return { label: r.label, area: g.area, points: g.ids.length }; },
   deleteParcel: ({ parcel }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.deleteParcel(S.ds, p.idx); pushStruct(r.delta, `刪除宗地 ${parcel}`); return { into: r.into, removedPoints: r.removedPoints }; },
