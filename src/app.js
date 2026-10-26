@@ -815,16 +815,21 @@ $('unList').addEventListener('click', e => {
   const tr = e.target.closest('tr[data-i]'); if (tr) { clearSel(); S.sel.par.add(+tr.dataset.i); zoomTo([+tr.dataset.i]); refresh(); }
 });
 const unChecked = () => [...S.unSel].filter(i => S.ds.parcels[i] && !S.ds.parcels[i].deleted);
-$('btnUnSplit').onclick = () => {   // 分割勾選的；沒勾選＝全部超過點數或長寬比上限者
-  if (!S.ds) return; const n = unN(), lim = unRatio(), list = unChecked().length ? unChecked() : S.unreg.parcels.filter(p => p.over).map(p => p.idx);
+// 批次處理時讓出主執行緒（約每 80 ms）並顯示進度，避免瀏覽器判定「網頁沒有回應」；處理期間停用按鈕
+const unBusy = on => ['btnUnSplit', 'btnUnMerge', 'btnUnRefresh'].forEach(id => { $(id).disabled = on; });
+function yielder(label, total) { let t = performance.now(); return async k => { if (performance.now() - t < 80) return; msg(`${label}… ${k}／${total}`); await new Promise(r => setTimeout(r, 0)); t = performance.now(); }; }
+async function splitAsync(ds, i, n, lim, tick, k) { const g = Core.splitSteps(ds, i, n, lim); for (;;) { const r = g.next(); if (r.done) return r.value; await tick(k); } }   // 每切一刀檢查是否該讓出主執行緒
+$('btnUnSplit').onclick = async () => {   // 分割勾選的；沒勾選＝全部超過點數或長寬比上限者
+  if (!S.ds || $('btnUnSplit').disabled) return; const n = unN(), lim = unRatio(), list = unChecked().length ? unChecked() : S.unreg.parcels.filter(p => p.over).map(p => p.idx);
   if (!list.length) return msg(`沒有超過 ${n} 點` + (lim ? `或長寬比超過 ${lim}` : '') + ' 的未登記地');
   const deltas = [], made = [], fail = [], left = [];
-  for (const i of list) { const p = S.ds.parcels[i]; try { const r = Core.splitParcel(S.ds, i, n, lim); if (r.delta) { deltas.push(r.delta); made.push(`${p.label}→${r.pieces.length + 1} 筆` + (r.delta.added.length ? `（新增 ${r.delta.added.length} 點）` : '')); } if (r.unresolved != null) left.push(`${p.label}（${r.unresolved.toFixed(1)}）`); } catch (err) { fail.push(`${p.label}（${err.message}）`); } }
-  pushMulti(deltas, `未登記地分割 ≤${n} 點` + (lim ? `、長寬比 ≤${lim}` : '')); S.unSel.clear();
+  unBusy(true); const tick = yielder('分割中', list.length);
+  for (const [k, i] of list.entries()) { await tick(k); const p = S.ds.parcels[i]; try { const r = await splitAsync(S.ds, i, n, lim, tick, k); if (r.delta) { deltas.push(r.delta); made.push(`${p.label}→${r.pieces.length + 1} 筆` + (r.delta.added.length ? `（新增 ${r.delta.added.length} 點）` : '')); } if (r.unresolved != null) left.push(`${p.label}（${r.unresolved.toFixed(1)}）`); } catch (err) { fail.push(`${p.label}（${err.message}）`); } }
+  unBusy(false); pushMulti(deltas, `未登記地分割 ≤${n} 點` + (lim ? `、長寬比 ≤${lim}` : '')); S.unSel.clear();
   msg((made.length ? `已分割 ${made.length} 筆：${made.slice(0, 8).join('、')}${made.length > 8 ? '…' : ''}` : '沒有分割任何宗地') + (left.length ? `；形狀切不開、仍超過長寬比 ${left.length} 筆：${left.slice(0, 5).join('、')}` : '') + (fail.length ? `；未處理 ${fail.length} 筆：${fail.slice(0, 3).join('、')}` : '') + '。可一次復原' + (deltas.some(d => d.added.length) ? '；有新增界址點，輸出完整案件資料夾時 D14 一併更新' : ''));
 };
-$('btnUnMerge').onclick = () => {   // 合併勾選的；沒勾選＝同母號且相連者各併成一筆
-  if (!S.ds) return; const ds = S.ds, n = unN(), lim = unRatio(), auto = $('unAutoSplit').checked, deltas = [], done = [], fail = [];
+$('btnUnMerge').onclick = async () => {   // 合併勾選的；沒勾選＝同母號且相連者各併成一筆
+  if (!S.ds || $('btnUnMerge').disabled) return; const ds = S.ds, n = unN(), lim = unRatio(), auto = $('unAutoSplit').checked, deltas = [], done = [], fail = [];
   let groups;
   if (unChecked().length) groups = [unChecked()];
   else {   // 同母號、共用界址線者為一組
@@ -836,12 +841,14 @@ $('btnUnMerge').onclick = () => {   // 合併勾選的；沒勾選＝同母號�
     if (!groups.length) return msg('沒有同母號且相連的未登記地可合併');
     if (!confirm(`把同母號且相連的未登記地合併：共 ${groups.length} 組、${groups.reduce((s, g) => s + g.length, 0)} 筆` + (auto ? `，合併後再切成每筆 ≤ ${n} 點` + (lim ? `、長寬比 ≤ ${lim}` : '') : '') + '？可一次復原')) return;
   }
-  for (const g of groups) {
+  unBusy(true); const tick = yielder(auto ? '合併並分割中' : '合併中', groups.length);
+  for (const [gi, g] of groups.entries()) {
+    await tick(gi);
     try { const r = Core.mergeParcels(ds, g); deltas.push(r.delta); let t = `${r.keep}（併入 ${r.merged.length} 筆）`;
-      if (auto) { const k = ds.parcels.find(p => p.label === r.keep && !p.deleted); const s = Core.splitParcel(ds, k.idx, n, lim); if (s.delta) { deltas.push(s.delta); t += `→再切成 ${s.pieces.length + 1} 筆`; } }
+      if (auto) { const k = ds.parcels.find(p => p.label === r.keep && !p.deleted); const s = await splitAsync(ds, k.idx, n, lim, tick, gi); if (s.delta) { deltas.push(s.delta); t += `→再切成 ${s.pieces.length + 1} 筆`; } }
       done.push(t); } catch (err) { fail.push(`${g.map(i => ds.parcels[i].label).slice(0, 3).join('、')}…（${err.message}）`); }
   }
-  pushMulti(deltas, '未登記地合併'); S.unSel.clear();
+  unBusy(false); pushMulti(deltas, '未登記地合併'); S.unSel.clear();
   msg((done.length ? `已合併 ${done.length} 組：${done.slice(0, 6).join('、')}${done.length > 6 ? '…' : ''}` : '沒有合併任何宗地') + (fail.length ? `；未處理 ${fail.length} 組：${fail.slice(0, 2).join('；')}` : '') + '。可一次復原'); unregPanel(); refresh();
 };
 // 封閉凹口：依序點兩個段外圍上的界址點＝一條封口線，可畫多條；Enter 建立
