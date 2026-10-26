@@ -459,6 +459,18 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.ok(shape(dl, dl.parcels[0]) > 2, 'L 形算細長'); const rl = Core.splitParcel(dl, 0, 10, 2), ll = dl.parcels.filter(p => !p.deleted);
   assert.ok(rl.pieces.length >= 3 && ll.every(p => shape(dl, p) <= 2.02), `L 形切開：${ll.map(p => shape(dl, p).toFixed(2)).join(',')}`); near(ll.reduce((t, p) => t + p.area, 0), 464, 1e-6); assert.equal(Core.ringConflicts(dl).cross.length, 0); assert.equal(Core.freeRegions(dl).length, 0);
 }
+// ── 合併：T 字接點（9016-33 底邊有 5、6 兩點，9016-59 頂邊沒有，兩宗沒有共用界址線）也要能合併 ──
+{
+  const Y = 2700000, X = 200000, P = [[1, 0, 0], [2, 0, 100], [3, 20, 100], [4, 20, 0], [5, 20, 40], [6, 20, 70], [7, 25, 100], [8, 25, 0], [9, 40, 100], [10, 40, 0]];
+  const pts = rd(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x)));
+  const bnd = rd(F_D13, [ring(1, 9016, 59, [1, 2, 3, 4]), ring(1, 9016, 33, [4, 5, 6, 3, 7, 8]), ring(1, 393, 8, [8, 7, 9, 10])]);
+  const ds = Core.datasetFromD({ pts, bnd }), a0 = ds.parcels[0].area + ds.parcels[1].area, a3 = ds.parcels[2].area;
+  assert.ok(![...ds.edges.values()].some(e => e.parcels.includes(0) && e.parcels.includes(1)), '兩宗沒有共用界址線');
+  assert.ok(Core.parcelsTouch(ds, 0, 1) && !Core.parcelsTouch(ds, 0, 2), '沿線相鄰才算');
+  const m = Core.mergeParcels(ds, [0, 1]); assert.equal(m.keep, '9016-33'); const k = ds.parcels[1];
+  near(k.area, a0, 1e-6, '面積＝兩宗相加'); near(ds.parcels[2].area, a3, 1e-6, '鄰宗不變'); assert.deepEqual(m.removedPoints.sort(), [5, 6], '中間的 T 字點移除');
+  assert.equal(Core.ringConflicts(ds).cross.length, 0); Core.applyDelta(ds, m.delta, 'undo'); assert.deepEqual(ds.parcels[0].ids, [1, 2, 3, 4], '復原後 9016-59 不含插入的點');
+}
 // ── 輸出不可在有效記錄之間留下鍵值為 0 的空列（KC0336：NECEXE 會刪掉它並往前遞補，經界線左右地號整批錯位）──
 {
   const noMidJunk = (dbf, isLive) => { let seen = false; for (let i = dbf.n - 1; i >= 0; i--) { if (isLive(dbf.rows[i])) seen = true; else if (seen) return false; } return true; };

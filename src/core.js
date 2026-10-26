@@ -1410,15 +1410,60 @@ const Core = (() => {
   }
   // 合併相連的宗地成一筆：外圍必須是單一環、中間不可有空洞；保留 keep（預設子號最小、已有 D11 記錄者），其餘標為已刪除。
   // 只屬於這些宗地、合併後不在外圍上的界址點一併刪除。
+  // T 字接點：宗地 A 的界址點落在宗地 B 的邊上（≤ tol 公尺），B 卻沒有這一點，兩宗沿線相鄰但沒有共用的界址線，合併時外圍抵消不掉。
+  // 把這種點插入 B 的邊（所有使用該邊的宗地一併插入；點原本就在線上，面積幾乎不變）。只看 idxs 內的點與邊。回傳插入次數
+  function healJunctions(ds, d, idxs, tol = 0.02) {
+    const P = ds.points, pts = [...new Set(idxs.flatMap(i => ds.parcels[i].ids))]; let count = 0;
+    for (let pass = 0; pass < 5; pass++) {
+      let changed = false;
+      for (const i of idxs) {
+        const p = ds.parcels[i];
+        for (let k = 0; k < p.ids.length; k++) {
+          const n = p.ids.length, u = p.ids[k], v = p.ids[(k + 1) % n]; if (p.mid && (p.mid[k] || p.mid[(k + 1) % n])) continue;
+          const A = P.get(u), B = P.get(v), bx = B.x - A.x, by = B.y - A.y, L2 = bx * bx + by * by; if (L2 < 1e-6) continue;
+          let best = null, bt = Infinity;
+          for (const q of pts) {
+            if (q === u || q === v) continue; const Q = P.get(q); if (!Q) continue;
+            const t = ((Q.x - A.x) * bx + (Q.y - A.y) * by) / L2; if (t <= 1e-6 || t >= 1 - 1e-6 || t >= bt) continue;
+            if (Math.abs(bx * (Q.y - A.y) - by * (Q.x - A.x)) / Math.sqrt(L2) <= tol) { best = q; bt = t; }
+          }
+          if (best == null) continue;
+          for (const r of ds.parcels) {   // 所有使用 u–v 這條邊的宗地都插入
+            if (r.deleted) continue; const m = r.ids.length;
+            for (let j = 0; j < m; j++) { const a = r.ids[j], b = r.ids[(j + 1) % m]; if ((a === u && b === v) || (a === v && b === u)) { touchParcel(d, r); r.ids.splice(j + 1, 0, best); if (r.mid) r.mid.splice(j + 1, 0, false); break; } }
+          }
+          count++; changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+    if (count) buildTopology(ds);
+    return count;
+  }
+  // 兩宗是否沿線相鄰：共用界址線，或有邊彼此共線重疊（T 字接點，≤ tol 公尺）。供「合併」自動分組
+  function parcelsTouch(ds, i, j, tol = 0.02) {
+    const P = ds.points, a = ds.parcels[i], b = ds.parcels[j], edges = p => p.ids.map((id, k) => [id, p.ids[(k + 1) % p.ids.length]]);
+    const ea = edges(a), eb = edges(b), keys = new Set(ea.map(([u, v]) => segKey(u, v)));
+    if (eb.some(([u, v]) => keys.has(segKey(u, v)))) return true;
+    for (const [u, v] of ea) { const A = P.get(u), B = P.get(v), L = Math.hypot(B.x - A.x, B.y - A.y); if (L < 1e-9) continue; const ux = (B.x - A.x) / L, uy = (B.y - A.y) / L;
+      const off = Q => Math.abs(ux * (Q.y - A.y) - uy * (Q.x - A.x)), at = Q => (Q.x - A.x) * ux + (Q.y - A.y) * uy;
+      for (const [w, z] of eb) { const C = P.get(w), D = P.get(z); if (off(C) > tol || off(D) > tol) continue;   // C–D 在 A–B 的直線上
+        if (Math.min(L, Math.max(at(C), at(D))) - Math.max(0, Math.min(at(C), at(D))) > tol) return true; } }   // 且重疊長度 > tol
+    return false;
+  }
   function mergeParcels(ds, idxs, keep) {
     idxs = [...new Set(idxs)]; if (idxs.length < 2) throw new Error('至少選兩筆');
     for (const i of idxs) { const p = ds.parcels[i]; if (!p || p.deleted) throw new Error('宗地不存在');
       if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，尚未支援合併`);
       if (p.mid && p.mid.some(Boolean)) throw new Error(`${p.label} 含圓弧，尚未支援合併`); }
+    const d = newDelta(); d.deleted = []; healJunctions(ds, d, idxs);
     const loops = outlineLoops(ds, idxs).filter(l => Math.abs(l.area) > 1e-6);
-    if (loops.length !== 1 || loops[0].area <= 0) throw new Error(loops.some(l => l.area < 0) ? '合併後中間會有空洞，請連空洞一起處理' : '選取的宗地沒有全部相連');
+    if (loops.length !== 1 || loops[0].area <= 0) {
+      if (d.parcels.size) applyDelta(ds, closeDelta(ds, d), 'undo');
+      throw new Error(loops.some(l => l.area < 0) ? '合併後中間會有空洞，請連空洞一起處理' : `選取的宗地沒有全部相連（外圍 ${loops.filter(l => l.area > 0).length} 個環；可能有縫隙或重疊）`);
+    }
     const order = idxs.map(i => ds.parcels[i]).sort((a, b) => (a.created - b.created) || (mainNo(a) - mainNo(b)) || (subNo(a) - subNo(b)));
-    const k = keep != null ? ds.parcels[keep] : order[0], d = newDelta(); d.deleted = [];
+    const k = keep != null ? ds.parcels[keep] : order[0];
     const inGroup = new Set(idxs), onLoop = new Set(loops[0].ids), drop = new Set();
     for (const i of idxs) { const p = ds.parcels[i]; touchParcel(d, p); for (const id of p.ids) if (!onLoop.has(id) && (ds.pointParcels.get(id) || []).every(x => inGroup.has(x))) drop.add(id); }
     for (const i of idxs) { const p = ds.parcels[i]; if (p === k) continue; p.ids = []; p.mid = []; p.deleted = true; d.deleted.push(i); }
@@ -1688,7 +1733,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();

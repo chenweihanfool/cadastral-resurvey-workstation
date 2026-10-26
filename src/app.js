@@ -835,7 +835,10 @@ $('btnUnMerge').onclick = async () => {   // 合併勾選的；沒勾選＝同�
   else {   // 同母號、共用界址線者為一組
     const un = S.unreg.parcels.filter(p => !p.nested && !p.arc).map(p => p.idx), set = new Set(un), parent = new Map(un.map(i => [i, i])), find = i => { while (parent.get(i) !== i) i = parent.get(i); return i; };
     const mother = i => parseInt(String(ds.parcels[i].label), 10);
-    for (const e of ds.edges.values()) { const ps = e.parcels.filter(i => set.has(i)); for (let k = 1; k < ps.length; k++) if (mother(ps[0]) === mother(ps[k])) parent.set(find(ps[k]), find(ps[0])); }
+    // 相鄰＝共用界址線，或邊沿線重疊（T 字接點：一宗的點落在另一宗的邊上、沒有共用點）；只比外框相交的同母號
+    const box = i => { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const id of ds.parcels[i].ids) { const q = ds.points.get(id); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } return { x0, x1, y0, y1 }; };
+    const bb = new Map(un.map(i => [i, box(i)])), hit = (a, b) => a.x0 <= b.x1 + 0.05 && b.x0 <= a.x1 + 0.05 && a.y0 <= b.y1 + 0.05 && b.y0 <= a.y1 + 0.05;
+    for (let a = 0; a < un.length; a++) for (let b = a + 1; b < un.length; b++) { const i = un[a], j = un[b]; if (mother(i) === mother(j) && find(i) !== find(j) && hit(bb.get(i), bb.get(j)) && Core.parcelsTouch(ds, i, j)) parent.set(find(j), find(i)); }
     const m = new Map(); for (const i of un) { const r = find(i); if (!m.has(r)) m.set(r, []); m.get(r).push(i); }
     groups = [...m.values()].filter(g => g.length > 1);
     if (!groups.length) return msg('沒有同母號且相連的未登記地可合併');
