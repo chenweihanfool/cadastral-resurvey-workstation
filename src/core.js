@@ -1503,6 +1503,96 @@ const Core = (() => {
     if (ids.length < 3) throw new Error('範圍至少 3 點'); const d = newDelta(), p = createParcel(ds, d, mother, ccwIds(ids, ds.points), null);
     return { delta: closeDelta(ds, d), label: p.label };
   }
+  // ── 與鄰段之間的封閉空隙（v0.19.0）：主測區段外圍與已載入鄰段的段界之間，沒有任何宗地的封閉範圍 ──
+  // 把主測區段外圍邊（帶點號）與鄰段段界線段（只有坐標）放進同一張平面圖：端點相距 ≤ tol 視為同一點（主測區點優先），交點與落在線上的點把線段切開；
+  // 去掉懸空的線後追蹤每個有界的面，留下「同時用到主測區與鄰段的邊、內部不在任何宗地內、面積 ≥ minArea、平均寬（2×面積÷周長）≥ minWidth」者。
+  // 回傳 [{nodes:[{id（主測區點號，新點為 null）, x, y, onMain（落在主測區段外圍的邊上時為 true）}], area, perim}]，不修改資料
+  function seamGaps(ds, nbs, opt = {}) {
+    const tol = opt.tol != null ? opt.tol : 0.05, minArea = opt.minArea != null ? opt.minArea : 1, minWidth = opt.minWidth != null ? opt.minWidth : 0.5, P = ds.points;
+    const nodes = [], cs = Math.max(4 * tol, 1), grid = new Map(), gk = (i, j) => i + ',' + j, byId = new Map();
+    const near = (x, y) => { let best = null, bd = tol; const i0 = Math.floor(x / cs), j0 = Math.floor(y / cs);
+      for (let i = i0 - 1; i <= i0 + 1; i++) for (let j = j0 - 1; j <= j0 + 1; j++) for (const n of grid.get(gk(i, j)) || []) { const dd = Math.hypot(n.x - x, n.y - y); if (dd <= bd) { bd = dd; best = n; } }
+      return best; };
+    const put = n => { n.k = nodes.length; nodes.push(n); const k = gk(Math.floor(n.x / cs), Math.floor(n.y / cs)); let l = grid.get(k); if (!l) grid.set(k, l = []); l.push(n); return n; };
+    const mainNode = id => { let n = byId.get(id); if (!n) { const q = P.get(id); n = put({ id, x: q.x, y: q.y }); byId.set(id, n); } return n; };
+    const freeNode = (x, y) => near(x, y) || put({ id: null, x, y });
+    const segs = [];
+    for (const e of ds.edges.values()) {   // 主測區段外圍（只屬於一宗、且不是地中地內圈的邊；圓弧以弦計）
+      if (e.parcels.length !== 1) continue; const p = ds.parcels[e.parcels[0]]; if (!p || p.deleted || (p.containers && p.containers.length)) continue;
+      segs.push({ a: mainNode(e.a), b: mainNode(e.b), main: true });
+    }
+    if (!segs.length) return [];
+    const nbRings = [];
+    for (const nb of nbs) {
+      for (const sg of boundarySegments(nb.ds).segs) { const a = freeNode(sg.ax, sg.ay), b = freeNode(sg.bx, sg.by); if (a !== b) segs.push({ a, b, main: false }); }
+      for (const p of nb.ds.parcels) if (!p.deleted && p.ids.length >= 3) nbRings.push(p.ids.map(id => nb.ds.points.get(id)));
+    }
+    // 線段格網（找交點、找落在線上的點）
+    const sgrid = new Map(), cellsOf = (A, B) => { const out = []; for (let i = Math.floor((Math.min(A.x, B.x) - tol) / cs); i <= Math.floor((Math.max(A.x, B.x) + tol) / cs); i++) for (let j = Math.floor((Math.min(A.y, B.y) - tol) / cs); j <= Math.floor((Math.max(A.y, B.y) + tol) / cs); j++) out.push(gk(i, j)); return out; };
+    segs.forEach((sg, n) => { for (const k of cellsOf(sg.a, sg.b)) { let l = sgrid.get(k); if (!l) sgrid.set(k, l = []); l.push(n); } });
+    const seen = new Set();
+    for (const l of sgrid.values()) for (let x = 0; x < l.length; x++) for (let y = x + 1; y < l.length; y++) {
+      const i = l[x], j = l[y], key = i < j ? i * 1e7 + j : j * 1e7 + i; if (seen.has(key)) continue; seen.add(key);
+      const s1 = segs[i], s2 = segs[j]; if (s1.main && s2.main) continue;
+      if (s1.a === s2.a || s1.a === s2.b || s1.b === s2.a || s1.b === s2.b) continue;
+      const A = s1.a, B = s1.b, C = s2.a, D = s2.b, rx = B.x - A.x, ry = B.y - A.y, sx = D.x - C.x, sy = D.y - C.y, den = rx * sy - ry * sx; if (Math.abs(den) < 1e-12) continue;
+      const t = ((C.x - A.x) * sy - (C.y - A.y) * sx) / den, u = ((C.x - A.x) * ry - (C.y - A.y) * rx) / den; if (t <= 1e-9 || t >= 1 - 1e-9 || u <= 1e-9 || u >= 1 - 1e-9) continue;
+      freeNode(A.x + t * rx, A.y + t * ry);   // 交點（接近既有點時併入）
+    }
+    // 把落在線段上的點切進去；新點落在主測區邊上時投影到線上並記下
+    const edges = new Map(), addEdge = (a, b, main) => { if (a === b) return; const k = a.k < b.k ? a.k + '-' + b.k : b.k + '-' + a.k; const e = edges.get(k); if (e) { e.main = e.main || main; e.nb = e.nb || !main; } else edges.set(k, { a, b, main, nb: !main }); };
+    for (const sg of segs) {
+      const A = sg.a, B = sg.b, L2 = (B.x - A.x) ** 2 + (B.y - A.y) ** 2; if (L2 < 1e-12) continue; const on = [];
+      for (const k of cellsOf(A, B)) for (const n of grid.get(k) || []) {
+        if (n === A || n === B) continue; const t = ((n.x - A.x) * (B.x - A.x) + (n.y - A.y) * (B.y - A.y)) / L2; if (t <= 1e-9 || t >= 1 - 1e-9) continue;
+        if (Math.abs((B.x - A.x) * (n.y - A.y) - (B.y - A.y) * (n.x - A.x)) / Math.sqrt(L2) > tol) continue;
+        if (sg.main && n.id == null) { n.x = A.x + t * (B.x - A.x); n.y = A.y + t * (B.y - A.y); n.onMain = true; }
+        if (!on.some(o => o.n === n)) on.push({ n, t });
+      }
+      on.sort((p, q) => p.t - q.t); let prev = A; for (const o of on) { addEdge(prev, o.n, sg.main); prev = o.n; } addEdge(prev, B, sg.main);
+    }
+    // 去掉懸空的線（度數 1 的點）
+    const adj = new Map(); for (const e of edges.values()) { for (const [x, y] of [[e.a, e.b], [e.b, e.a]]) { let l = adj.get(x); if (!l) adj.set(x, l = new Map()); l.set(y, e); } }
+    for (let changed = true; changed;) { changed = false; for (const [v, l] of adj) if (l.size < 2) { for (const w of l.keys()) adj.get(w).delete(v); adj.delete(v); changed = true; } }
+    // 追蹤面：沿 u→v 到 v 後取「順時針方向緊接 u 的下一條邊」，面在左側；有界面為逆時針（面積 > 0）
+    const order = new Map(); for (const [v, l] of adj) order.set(v, [...l.keys()].sort((p, q) => Math.atan2(p.y - v.y, p.x - v.x) - Math.atan2(q.y - v.y, q.x - v.x)));
+    const used = new Set(), out = [], hk = (u, v) => u.k + '>' + v.k;
+    const inRing = (pts, x, y) => { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const a = pts[i], b = pts[j]; if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) c = !c; } return c; };
+    for (const [u0, l] of adj) for (const v0 of l.keys()) {
+      if (used.has(hk(u0, v0))) continue; const ring = [u0]; let u = u0, v = v0, main = false, nb = false, ok = true;
+      for (let g = 0; g < 100000; g++) {
+        used.add(hk(u, v)); const e = adj.get(u).get(v); main = main || e.main; nb = nb || e.nb;
+        if (v === u0) break; ring.push(v);
+        const ord = order.get(v), i = ord.indexOf(u), w = ord[(i - 1 + ord.length) % ord.length]; u = v; v = w;
+        if (g === 99999) ok = false;
+      }
+      if (!ok || ring.length < 3 || !main || !nb) continue;
+      let A2 = 0, per = 0; for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; A2 += a.x * b.y - b.x * a.y; per += Math.hypot(b.x - a.x, b.y - a.y); }
+      const area = A2 / 2; if (area < minArea || 2 * area / per < minWidth) continue;
+      const tmp = new Map(ring.map((n, i) => [i, n])), ip = interiorPoint(ring.map((n, i) => i), tmp);
+      if (ds.parcels.some(p => !p.deleted && p.ids.length >= 3 && pointInRing(p.ids, P, ip.y, ip.x))) continue;   // 在主測區宗地內
+      if (nbRings.some(r => inRing(r, ip.x, ip.y))) continue;   // 在鄰段宗地內
+      out.push({ nodes: ring.map(n => ({ id: n.id, x: n.x, y: n.y, onMain: !!n.onMain })), area, perim: per });
+    }
+    return out.sort((a, b) => b.area - a.area);
+  }
+  // 把 seamGaps 找到的一處建為新的未登記地：新點加入主測區點檔（落在段外圍邊上的插入該宗界址串，面積不變），再建宗地
+  function fillSeamGap(ds, gap, mother) {
+    const d = newDelta(), P = ds.points;
+    const ids = gap.nodes.map(n => {
+      if (n.id != null) return n.id;
+      for (const q of P.values()) if (Math.abs(q.x - n.x) < 1e-4 && Math.abs(q.y - n.y) < 1e-4) return q.id;   // 相鄰的空隙共用的新點：先建的那一處已加入
+      const id = nextPointId(ds), np = { id, y: n.y, x: n.x, y0: n.y, x0: n.x, row: null, added: true }; ds.points.set(id, np); d.added.push(np);
+      if (n.onMain) for (const p of ds.parcels) {
+        if (p.deleted) continue; const k = p.ids.length;
+        for (let i = 0; i < k; i++) { const A = P.get(p.ids[i]), B = P.get(p.ids[(i + 1) % k]); if (p.ids[i] === id || p.ids[(i + 1) % k] === id) continue;
+          if (distToSeg(n.x, n.y, A.x, A.y, B.x, B.y) < 1e-4 && Math.hypot(A.x - n.x, A.y - n.y) > 1e-4 && Math.hypot(B.x - n.x, B.y - n.y) > 1e-4) { touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); break; } }
+      }
+      return id;
+    });
+    const p = createParcel(ds, d, mother, ccwIds(ids, P), null);
+    return { delta: closeDelta(ds, d), label: p.label, added: d.added.map(q => q.id) };
+  }
   // 凹口：在段外圍（測區邊界）上畫一條或多條封口線（每條連兩個既有界址點），圍出位於所有宗地之外、且每條封口線都在其邊上的最小範圍。
   // 做法：段外圍的邊反向（段外在左）加上封口線的雙向邊，以「最左轉」追蹤出各個面；取面積為正（有界）且用到所有封口線者。回傳 {ids（逆時針）, area}，不修改資料
   function pocketRegion(ds, chords) {
@@ -1760,7 +1850,7 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, seamGaps, fillSeamGap, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize };
 })();

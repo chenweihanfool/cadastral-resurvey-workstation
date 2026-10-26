@@ -497,6 +497,18 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const b11 = Core.parseDbf(Core.changedDFiles(ds, { pts, bnd, par, d12: null, lin: null }).files.d11.bytes); assert.deepEqual([b11.rows[0].PAR_O_M, b11.rows[0].AREA_NEW], [12, 0], '被併掉的已登記地號 D11 保留、新面積 0');
   const m2 = Core.mergeParcels(ds, [1, 2]); assert.equal(m2.keep, '5', '已登記與未登記合併保留已登記'); near(ds.parcels[1].area, 300, 1e-6);
 }
+// ── 與鄰段之間的封閉空隙：本段 0–10、鄰段 14–24 與上下兩塊封口，中間 10–14 × 5–25 為空隙（80 m²）──
+{
+  const Y = 2700000, X = 200000, mk = (P, rings) => Core.datasetFromD({ pts: rd(F_D14, P.map(([n, x, y]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings) });
+  const ds = mk([[1, 0, 0], [2, 10, 0], [3, 10, 30], [4, 0, 30]], [ring(1, 1, 0, [1, 2, 3, 4])]), a0 = ds.parcels[0].area;
+  const nb = mk([[1, 14, 0], [2, 24, 0], [3, 24, 30], [4, 14, 30], [5, 10, 0], [6, 14, 5], [7, 10, 5], [8, 14, 25], [9, 10, 25], [10, 10, 30.003]],
+    [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [5, 1, 6, 7]), ring(1, 3, 0, [9, 8, 4, 10])]);
+  const g = Core.seamGaps(ds, [{ name: 'N', ds: nb }]); assert.equal(g.length, 1); near(g[0].area, 80, 1e-6);
+  assert.equal(g[0].nodes.filter(n => n.id == null).length, 4, '鄰段的 4 個角點新增'); assert.equal(g[0].nodes.filter(n => n.onMain).length, 2, '其中 (10,5)、(10,25) 在本段邊上');
+  const r = Core.fillSeamGap(ds, g[0], 9001); assert.equal(r.label, '9001-1'); near(ds.parcels[1].area, 80, 1e-6); near(ds.parcels[0].area, a0, 1e-9, '本段面積不變');
+  assert.equal(ds.parcels[0].ids.length, 6, '兩個新點插入本段界址串'); assert.equal(Core.ringConflicts(ds).overlap.length + Core.ringConflicts(ds).cross.length, 0);
+  assert.equal(Core.seamGaps(ds, [{ name: 'N', ds: nb }]).length, 0, '建立後沒有空隙'); Core.applyDelta(ds, r.delta, 'undo'); assert.equal(ds.parcels[0].ids.length, 4);
+}
 // ── 輸出不可在有效記錄之間留下鍵值為 0 的空列（KC0336：NECEXE 會刪掉它並往前遞補，經界線左右地號整批錯位）──
 {
   const noMidJunk = (dbf, isLive) => { let seen = false; for (let i = dbf.n - 1; i >= 0; i--) { if (isLive(dbf.rows[i])) seen = true; else if (seen) return false; } return true; };
