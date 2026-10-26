@@ -116,7 +116,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
       <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
-      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="ptline">點移到線上…<small>垂足</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><button data-act="delhole">刪除所選宗地<small>地中地併入外圈</small></button><button data-act="unreg">未登記土地分割合併…<small>9000 號以上</small></button><hr>
+      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="ptline">點移到線上…<small>垂足</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><button data-act="delhole">刪除所選宗地<small>地中地併入外圈</small></button><button data-act="merge">合併所選宗地<small>相連、不留空洞</small></button><button data-act="unreg">未登記土地分割合併…<small>9000 號以上</small></button><hr>
       <button data-act="move">移動／旋轉／對位…</button></div></div>
     <div class="menu"><button class="mbtn">檢視</button><div class="mlist">
       <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
@@ -142,7 +142,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <aside>
     <details class="acc" open><summary>選取資訊</summary>
       <div class="accbody"><div id="selInfo" class="small muted">尚未選取</div>
-      <div class="row small" style="margin-top:6px"><button class="btn" data-act="move" title="輸入位移、旋轉、兩點對位">移動／旋轉…</button><button class="btn" data-act="pts">界址點編修…</button><button class="btn" id="btnDelHole" hidden title="刪除所選宗地：地中地面積併入外圈；一般宗地直接刪除，範圍變成空地／段外">刪除宗地</button></div></div></details>
+      <div class="row small" style="margin-top:6px"><button class="btn" data-act="move" title="輸入位移、旋轉、兩點對位">移動／旋轉…</button><button class="btn" data-act="pts">界址點編修…</button><button class="btn" id="btnDelHole" hidden title="刪除所選宗地：地中地面積併入外圈；一般宗地直接刪除，範圍變成空地／段外">刪除宗地</button><button class="btn" id="btnMergeSel" hidden title="合併所選的相連宗地：保留已登記且地號最小者，其餘標為已刪除">合併</button></div></div></details>
     <details class="acc" open><summary>面積較差</summary>
       <div class="accbody">
       <div class="row small" style="margin-bottom:6px">
@@ -259,8 +259,8 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <dialog class="fp" id="dlgUnreg"><div class="fphead"><b>未登記土地（9000 號以上）分割合併</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
   <div class="row small"><label>每筆界址點上限 <input type="number" id="unN" value="10" min="3" style="width:56px"> 點</label><label title="略圖縮放到調查表略圖框（A3 約 143×137 mm，近乎正方形）內列印，所以限制長寬比：外接矩形長÷短；彎曲或 L 形的細長條以「長²÷面積÷2」計。0＝不限形狀">長寬比上限 <input type="number" id="unRatio" value="2" min="0" step="0.1" style="width:56px"></label><label>新地號母號 <input type="number" id="unMother" value="9001" min="9000" style="width:70px"></label><button class="btn" id="btnUnRefresh">重新計算</button></div>
   <div id="unSum" class="small" style="margin-top:6px"></div>
-  <div class="row" style="margin-top:6px"><button class="btn primary" id="btnUnSplit" title="沒勾選＝全部超過點數上限或長寬比上限者">分割（點數、長寬比 ≤ 上限）</button><button class="btn" id="btnUnMerge" title="沒勾選＝同母號且相連者各併成一筆">合併</button><label class="chk small"><input type="checkbox" id="unAutoSplit" checked>合併後自動分割</label></div>
-  <div class="small muted" style="margin-top:4px">勾選表內的地號只處理勾選的；不勾選時，「分割」處理全部超過上限者，「合併」把同母號且相連的各併成一筆。分割先以連接既有界址點的弦切下；太細長而切不出合格的塊時，垂直長邊切開（大約等分），切線與界址線的交點新增界址點，鄰宗同步插入（面積不變）。新塊編新子號（同母號、接續最大子號），剩餘部分保留原地號。長寬比上限依調查表略圖框（A3 約 143×137 mm）：略圖縮放到框內，太長的地號印出來會很細。地中地與含圓弧者暫不處理。全部可一次復原。</div>
+  <div class="row" style="margin-top:6px"><button class="btn primary" id="btnUnSplit" title="沒勾選＝全部超過點數上限或長寬比上限者">分割（點數、長寬比 ≤ 上限）</button><button class="btn" id="btnUnMerge" title="沒勾選＝相連的未登記地各併成一筆（不限同母號）">合併</button><label class="chk small"><input type="checkbox" id="unAutoSplit" checked>合併後自動分割</label></div>
+  <div class="small muted" style="margin-top:4px">勾選表內的地號只處理勾選的；不勾選時，「分割」處理全部超過上限者，「合併」把相連的未登記地（不限同母號）各併成一筆；任意宗地的合併見「編輯 → 合併所選宗地」。分割先以連接既有界址點的弦切下；太細長而切不出合格的塊時，垂直長邊切開（大約等分），切線與界址線的交點新增界址點，鄰宗同步插入（面積不變）。新塊編新子號（同母號、接續最大子號），剩餘部分保留原地號。長寬比上限依調查表略圖框（A3 約 143×137 mm）：略圖縮放到框內，太長的地號印出來會很細。地中地與含圓弧者暫不處理。全部可一次復原。</div>
   <div id="unList" style="margin-top:6px;max-height:36vh;overflow:auto"></div></section>
 <section><h2>封閉凹口（與段外相通的長條）</h2><div class="small muted">按下後，依序點兩個段外圍（測區邊界）上的界址點畫一條封口線；長條兩端都通到段外時就畫兩條。程式找出被封口線圍住、位於所有宗地之外的範圍（綠色預覽），按 Enter 建為新地號（母號見上）。</div>
   <div class="row" style="margin-top:6px"><button class="btn" id="btnUnPocket">開始畫封口線</button></div></section></div></dialog>
@@ -2126,6 +2126,15 @@ if (typeof module !== 'undefined') module.exports = Core;
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.18.0', date: '2026-10-26', type: 'minor',
+    title: '通用合併：任何相連的宗地都能合併；未登記地合併不再限同母號',
+    changes: [
+      '「編輯 → 合併所選宗地」與右側「選取資訊」的「合併 N 宗」：選取兩宗以上相連的宗地即可合併（外圍須連成一圈、中間不可有空洞）。保留已登記且地號最小者，其餘標為已刪除：已登記地號 D11 保留記錄、新面積 0，9000 號以上整筆移除；合併後在內部、只屬於這些宗地的界址點一併刪除。T 字接點（一宗的點落在另一宗的邊上）會先補點。可復原',
+      '未登記土地分割合併的「合併」是它的特例（只處理 9000 號以上，另可合併後自動分割），自動分組改為相連即可，不再限同母號',
+      'AI／MCP：mergeParcels({parcels}) 可用於任何地號',
+    ],
+  },
+  {
     version: 'v0.17.3', date: '2026-10-26', type: 'patch',
     title: '修正：圍成一圈的同母號未登記地整組合併失敗（9016-32、59、33、36 等都沒合併）；彎曲的長條也切得開',
     changes: [
@@ -3129,7 +3138,7 @@ function panel() {
   if (S.sel.pt.size === 1 && !S.sel.edge.size && !S.sel.par.size) { const p = ds.points.get([...S.sel.pt][0]); info += NL + `點 ${p.id}　N ${p.y.toFixed(3)}　E ${p.x.toFixed(3)}`; }
   if (S.sel.edge.size === 1 && !S.sel.pt.size && !S.sel.par.size) { const e = ds.edges.get([...S.sel.edge][0]), a = ds.points.get(e.a), b = ds.points.get(e.b); info += NL + `線 ${e.a}–${e.b}　長 ${Math.hypot(a.x - b.x, a.y - b.y).toFixed(3)} m`; }
   $('selInfo').innerHTML = info.split(NL).map(s => `<div>${s}</div>`).join('');
-  { const sel = [...S.sel.par].map(i => ds.parcels[i]).filter(p => !p.deleted), b = $('btnDelHole'); b.hidden = !sel.length; b.textContent = sel.length === 1 && (sel[0].containers || []).length ? '刪除地中地（併入外圈）' : sel.length > 1 ? `刪除 ${sel.length} 宗` : '刪除宗地'; }
+  { const sel = [...S.sel.par].map(i => ds.parcels[i]).filter(p => !p.deleted), b = $('btnDelHole'); b.hidden = !sel.length; b.textContent = sel.length === 1 && (sel[0].containers || []).length ? '刪除地中地（併入外圈）' : sel.length > 1 ? `刪除 ${sel.length} 宗` : '刪除宗地'; $('btnMergeSel').hidden = sel.length < 2; $('btnMergeSel').textContent = `合併 ${sel.length} 宗`; }
   $('pivotInfo').textContent = S.pivot ? `樞紐：N ${S.pivot.y.toFixed(3)}  E ${S.pivot.x.toFixed(3)}（自訂）` : '樞紐：移動對象的中心（Alt+點擊可自訂）';
   // 較差表
   const scope = document.querySelector('input[name=scope]:checked').value, tol = parseFloat($('tol').value) || 0;
@@ -3236,6 +3245,20 @@ function deleteParcelUI(pis) {
   if ($('dlgRing').open) ringPanel(); refresh();
 }
 $('btnDelHole').onclick = () => deleteParcelUI();
+// 合併所選宗地（通用；核心 Core.mergeParcels）：外圍須相連成一圈、中間不可有空洞；保留已登記且地號最小者（未登記地合併是其特例，另可自動分割）。
+// 被併掉的宗地標為已刪除：已登記地號 D11 保留記錄、新面積 0；9000 號以上整筆移除。只屬於這些宗地、合併後在內部的界址點一併刪除
+function mergeParcelsUI(pis) {
+  const ds = S.ds; if (!ds) return msg('請先載入圖資'); pis = (pis || [...S.sel.par]).filter(i => !ds.parcels[i].deleted); if (pis.length < 2) return msg('請先選取兩宗以上相連的宗地');
+  const hs = pis.map(i => ds.parcels[i]), keep = hs.slice().sort((a, b) => (a.created - b.created) || (parseInt(a.label, 10) - parseInt(b.label, 10)) || String(a.label).localeCompare(String(b.label), 'zh-Hant', { numeric: true }))[0];
+  const reg = hs.filter(h => h !== keep && !h.created && parseInt(h.label, 10) < 9000);
+  if (!confirm(`合併 ${hs.length} 宗：${hs.slice(0, 12).map(h => h.label).join('、')}${hs.length > 12 ? '…' : ''}\n保留地號 ${keep.label}，合計 ${hs.reduce((t, h) => t + h.area, 0).toFixed(2)} m²；其餘標為已刪除。` + (reg.length ? `\n${reg.map(h => h.label).join('、')} 是已登記地號：D11 保留記錄、新面積改 0。` : '') + '\n合併後在內部、只屬於這些宗地的界址點會刪除；可復原。')) return;
+  try { const a0 = hs.reduce((t, h) => t + h.area, 0), r = Core.mergeParcels(ds, pis, keep.idx); pushStruct(r.delta, `合併 ${hs.map(h => h.label).join('、')}`); clearSel(); S.sel.par.add(keep.idx);
+    msg(`已合併成 ${r.keep}（${a0.toFixed(2)} → ${keep.area.toFixed(2)} m²），併入 ${r.merged.join('、')}` + (r.removedPoints.length ? `；刪除內部界址點 ${r.removedPoints.length} 點` : '') + '。可復原；輸出完整案件資料夾時 D13、D11、D21 會一併更新');
+  } catch (err) { msg('無法合併：' + err.message); }
+  if ($('dlgUnreg').open) unregPanel(); refresh();
+}
+$('btnMergeSel').onclick = () => mergeParcelsUI();
+
 $('btnRingCheck').onclick = ringPanel; $('btnRedraw').onclick = startRedraw;
 $('dlgRing').addEventListener('close', () => { S.ringMark = null; draw(); });
 
@@ -3277,21 +3300,20 @@ $('btnUnSplit').onclick = async () => {   // 分割勾選的；沒勾選＝全�
   unBusy(false); pushMulti(deltas, `未登記地分割 ≤${n} 點` + (lim ? `、長寬比 ≤${lim}` : '')); S.unSel.clear();
   msg((made.length ? `已分割 ${made.length} 筆：${made.slice(0, 8).join('、')}${made.length > 8 ? '…' : ''}` : '沒有分割任何宗地') + (left.length ? `；形狀切不開、仍超過長寬比 ${left.length} 筆：${left.slice(0, 5).join('、')}` : '') + (fail.length ? `；未處理 ${fail.length} 筆：${fail.slice(0, 3).join('、')}` : '') + '。可一次復原' + (deltas.some(d => d.added.length) ? '；有新增界址點，輸出完整案件資料夾時 D14 一併更新' : ''));
 };
-$('btnUnMerge').onclick = async () => {   // 合併勾選的；沒勾選＝同母號且相連者各併成一筆
+$('btnUnMerge').onclick = async () => {   // 合併勾選的；沒勾選＝相連的未登記地各併成一筆（不限同母號）
   if (!S.ds || $('btnUnMerge').disabled) return; const ds = S.ds, n = unN(), lim = unRatio(), auto = $('unAutoSplit').checked, deltas = [], done = [], fail = [];
   let groups;
   if (unChecked().length) groups = [unChecked()];
-  else {   // 同母號、共用界址線者為一組
+  else {   // 相連者為一組
     const un = S.unreg.parcels.filter(p => !p.nested && !p.arc).map(p => p.idx), set = new Set(un), parent = new Map(un.map(i => [i, i])), find = i => { while (parent.get(i) !== i) i = parent.get(i); return i; };
-    const mother = i => parseInt(String(ds.parcels[i].label), 10);
-    // 相鄰＝共用界址線，或邊沿線重疊（T 字接點：一宗的點落在另一宗的邊上、沒有共用點）；只比外框相交的同母號
+    // 相鄰＝共用界址線，或邊沿線重疊（T 字接點：一宗的點落在另一宗的邊上、沒有共用點）；只比外框相交的（不限同母號）
     const box = i => { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const id of ds.parcels[i].ids) { const q = ds.points.get(id); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } return { x0, x1, y0, y1 }; };
     const bb = new Map(un.map(i => [i, box(i)])), hit = (a, b) => a.x0 <= b.x1 + 0.05 && b.x0 <= a.x1 + 0.05 && a.y0 <= b.y1 + 0.05 && b.y0 <= a.y1 + 0.05;
-    for (let a = 0; a < un.length; a++) for (let b = a + 1; b < un.length; b++) { const i = un[a], j = un[b]; if (mother(i) === mother(j) && find(i) !== find(j) && hit(bb.get(i), bb.get(j)) && Core.parcelsTouch(ds, i, j)) parent.set(find(j), find(i)); }
+    for (let a = 0; a < un.length; a++) for (let b = a + 1; b < un.length; b++) { const i = un[a], j = un[b]; if (find(i) !== find(j) && hit(bb.get(i), bb.get(j)) && Core.parcelsTouch(ds, i, j)) parent.set(find(j), find(i)); }
     const m = new Map(); for (const i of un) { const r = find(i); if (!m.has(r)) m.set(r, []); m.get(r).push(i); }
     groups = [...m.values()].filter(g => g.length > 1);
-    if (!groups.length) return msg('沒有同母號且相連的未登記地可合併');
-    if (!confirm(`把同母號且相連的未登記地合併：共 ${groups.length} 組、${groups.reduce((s, g) => s + g.length, 0)} 筆` + (auto ? `，合併後再切成每筆 ≤ ${n} 點` + (lim ? `、長寬比 ≤ ${lim}` : '') : '') + '？可一次復原')) return;
+    if (!groups.length) return msg('沒有相連的未登記地可合併');
+    if (!confirm(`把相連的未登記地合併：共 ${groups.length} 組、${groups.reduce((s, g) => s + g.length, 0)} 筆` + (auto ? `，合併後再切成每筆 ≤ ${n} 點` + (lim ? `、長寬比 ≤ ${lim}` : '') : '') + '？可一次復原')) return;
   }
   if (!unChecked().length) {   // 自動分組：圍成一圈的組（中間是別的宗地）拆成不留空洞的幾群，各自合併
     const out = []; for (const g of groups) { const c = Core.mergeClusters(ds, g); if (c.delta) deltas.push(c.delta); out.push(...c.clusters.filter(x => x.length > 1)); } groups = out;
@@ -3489,7 +3511,7 @@ function openPanel(id) {
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
-  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), move: () => openPanel('dlgMove'),
+  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
   fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
   help: () => $('help').showModal(),
 };

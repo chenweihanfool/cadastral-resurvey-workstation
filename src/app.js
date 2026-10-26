@@ -680,7 +680,7 @@ function panel() {
   if (S.sel.pt.size === 1 && !S.sel.edge.size && !S.sel.par.size) { const p = ds.points.get([...S.sel.pt][0]); info += NL + `點 ${p.id}　N ${p.y.toFixed(3)}　E ${p.x.toFixed(3)}`; }
   if (S.sel.edge.size === 1 && !S.sel.pt.size && !S.sel.par.size) { const e = ds.edges.get([...S.sel.edge][0]), a = ds.points.get(e.a), b = ds.points.get(e.b); info += NL + `線 ${e.a}–${e.b}　長 ${Math.hypot(a.x - b.x, a.y - b.y).toFixed(3)} m`; }
   $('selInfo').innerHTML = info.split(NL).map(s => `<div>${s}</div>`).join('');
-  { const sel = [...S.sel.par].map(i => ds.parcels[i]).filter(p => !p.deleted), b = $('btnDelHole'); b.hidden = !sel.length; b.textContent = sel.length === 1 && (sel[0].containers || []).length ? '刪除地中地（併入外圈）' : sel.length > 1 ? `刪除 ${sel.length} 宗` : '刪除宗地'; }
+  { const sel = [...S.sel.par].map(i => ds.parcels[i]).filter(p => !p.deleted), b = $('btnDelHole'); b.hidden = !sel.length; b.textContent = sel.length === 1 && (sel[0].containers || []).length ? '刪除地中地（併入外圈）' : sel.length > 1 ? `刪除 ${sel.length} 宗` : '刪除宗地'; $('btnMergeSel').hidden = sel.length < 2; $('btnMergeSel').textContent = `合併 ${sel.length} 宗`; }
   $('pivotInfo').textContent = S.pivot ? `樞紐：N ${S.pivot.y.toFixed(3)}  E ${S.pivot.x.toFixed(3)}（自訂）` : '樞紐：移動對象的中心（Alt+點擊可自訂）';
   // 較差表
   const scope = document.querySelector('input[name=scope]:checked').value, tol = parseFloat($('tol').value) || 0;
@@ -787,6 +787,20 @@ function deleteParcelUI(pis) {
   if ($('dlgRing').open) ringPanel(); refresh();
 }
 $('btnDelHole').onclick = () => deleteParcelUI();
+// 合併所選宗地（通用；核心 Core.mergeParcels）：外圍須相連成一圈、中間不可有空洞；保留已登記且地號最小者（未登記地合併是其特例，另可自動分割）。
+// 被併掉的宗地標為已刪除：已登記地號 D11 保留記錄、新面積 0；9000 號以上整筆移除。只屬於這些宗地、合併後在內部的界址點一併刪除
+function mergeParcelsUI(pis) {
+  const ds = S.ds; if (!ds) return msg('請先載入圖資'); pis = (pis || [...S.sel.par]).filter(i => !ds.parcels[i].deleted); if (pis.length < 2) return msg('請先選取兩宗以上相連的宗地');
+  const hs = pis.map(i => ds.parcels[i]), keep = hs.slice().sort((a, b) => (a.created - b.created) || (parseInt(a.label, 10) - parseInt(b.label, 10)) || String(a.label).localeCompare(String(b.label), 'zh-Hant', { numeric: true }))[0];
+  const reg = hs.filter(h => h !== keep && !h.created && parseInt(h.label, 10) < 9000);
+  if (!confirm(`合併 ${hs.length} 宗：${hs.slice(0, 12).map(h => h.label).join('、')}${hs.length > 12 ? '…' : ''}\n保留地號 ${keep.label}，合計 ${hs.reduce((t, h) => t + h.area, 0).toFixed(2)} m²；其餘標為已刪除。` + (reg.length ? `\n${reg.map(h => h.label).join('、')} 是已登記地號：D11 保留記錄、新面積改 0。` : '') + '\n合併後在內部、只屬於這些宗地的界址點會刪除；可復原。')) return;
+  try { const a0 = hs.reduce((t, h) => t + h.area, 0), r = Core.mergeParcels(ds, pis, keep.idx); pushStruct(r.delta, `合併 ${hs.map(h => h.label).join('、')}`); clearSel(); S.sel.par.add(keep.idx);
+    msg(`已合併成 ${r.keep}（${a0.toFixed(2)} → ${keep.area.toFixed(2)} m²），併入 ${r.merged.join('、')}` + (r.removedPoints.length ? `；刪除內部界址點 ${r.removedPoints.length} 點` : '') + '。可復原；輸出完整案件資料夾時 D13、D11、D21 會一併更新');
+  } catch (err) { msg('無法合併：' + err.message); }
+  if ($('dlgUnreg').open) unregPanel(); refresh();
+}
+$('btnMergeSel').onclick = () => mergeParcelsUI();
+
 $('btnRingCheck').onclick = ringPanel; $('btnRedraw').onclick = startRedraw;
 $('dlgRing').addEventListener('close', () => { S.ringMark = null; draw(); });
 
@@ -828,21 +842,20 @@ $('btnUnSplit').onclick = async () => {   // 分割勾選的；沒勾選＝全�
   unBusy(false); pushMulti(deltas, `未登記地分割 ≤${n} 點` + (lim ? `、長寬比 ≤${lim}` : '')); S.unSel.clear();
   msg((made.length ? `已分割 ${made.length} 筆：${made.slice(0, 8).join('、')}${made.length > 8 ? '…' : ''}` : '沒有分割任何宗地') + (left.length ? `；形狀切不開、仍超過長寬比 ${left.length} 筆：${left.slice(0, 5).join('、')}` : '') + (fail.length ? `；未處理 ${fail.length} 筆：${fail.slice(0, 3).join('、')}` : '') + '。可一次復原' + (deltas.some(d => d.added.length) ? '；有新增界址點，輸出完整案件資料夾時 D14 一併更新' : ''));
 };
-$('btnUnMerge').onclick = async () => {   // 合併勾選的；沒勾選＝同母號且相連者各併成一筆
+$('btnUnMerge').onclick = async () => {   // 合併勾選的；沒勾選＝相連的未登記地各併成一筆（不限同母號）
   if (!S.ds || $('btnUnMerge').disabled) return; const ds = S.ds, n = unN(), lim = unRatio(), auto = $('unAutoSplit').checked, deltas = [], done = [], fail = [];
   let groups;
   if (unChecked().length) groups = [unChecked()];
-  else {   // 同母號、共用界址線者為一組
+  else {   // 相連者為一組
     const un = S.unreg.parcels.filter(p => !p.nested && !p.arc).map(p => p.idx), set = new Set(un), parent = new Map(un.map(i => [i, i])), find = i => { while (parent.get(i) !== i) i = parent.get(i); return i; };
-    const mother = i => parseInt(String(ds.parcels[i].label), 10);
-    // 相鄰＝共用界址線，或邊沿線重疊（T 字接點：一宗的點落在另一宗的邊上、沒有共用點）；只比外框相交的同母號
+    // 相鄰＝共用界址線，或邊沿線重疊（T 字接點：一宗的點落在另一宗的邊上、沒有共用點）；只比外框相交的（不限同母號）
     const box = i => { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const id of ds.parcels[i].ids) { const q = ds.points.get(id); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } return { x0, x1, y0, y1 }; };
     const bb = new Map(un.map(i => [i, box(i)])), hit = (a, b) => a.x0 <= b.x1 + 0.05 && b.x0 <= a.x1 + 0.05 && a.y0 <= b.y1 + 0.05 && b.y0 <= a.y1 + 0.05;
-    for (let a = 0; a < un.length; a++) for (let b = a + 1; b < un.length; b++) { const i = un[a], j = un[b]; if (mother(i) === mother(j) && find(i) !== find(j) && hit(bb.get(i), bb.get(j)) && Core.parcelsTouch(ds, i, j)) parent.set(find(j), find(i)); }
+    for (let a = 0; a < un.length; a++) for (let b = a + 1; b < un.length; b++) { const i = un[a], j = un[b]; if (find(i) !== find(j) && hit(bb.get(i), bb.get(j)) && Core.parcelsTouch(ds, i, j)) parent.set(find(j), find(i)); }
     const m = new Map(); for (const i of un) { const r = find(i); if (!m.has(r)) m.set(r, []); m.get(r).push(i); }
     groups = [...m.values()].filter(g => g.length > 1);
-    if (!groups.length) return msg('沒有同母號且相連的未登記地可合併');
-    if (!confirm(`把同母號且相連的未登記地合併：共 ${groups.length} 組、${groups.reduce((s, g) => s + g.length, 0)} 筆` + (auto ? `，合併後再切成每筆 ≤ ${n} 點` + (lim ? `、長寬比 ≤ ${lim}` : '') : '') + '？可一次復原')) return;
+    if (!groups.length) return msg('沒有相連的未登記地可合併');
+    if (!confirm(`把相連的未登記地合併：共 ${groups.length} 組、${groups.reduce((s, g) => s + g.length, 0)} 筆` + (auto ? `，合併後再切成每筆 ≤ ${n} 點` + (lim ? `、長寬比 ≤ ${lim}` : '') : '') + '？可一次復原')) return;
   }
   if (!unChecked().length) {   // 自動分組：圍成一圈的組（中間是別的宗地）拆成不留空洞的幾群，各自合併
     const out = []; for (const g of groups) { const c = Core.mergeClusters(ds, g); if (c.delta) deltas.push(c.delta); out.push(...c.clusters.filter(x => x.length > 1)); } groups = out;
@@ -1040,7 +1053,7 @@ function openPanel(id) {
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
-  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), move: () => openPanel('dlgMove'),
+  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
   fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
   help: () => $('help').showModal(),
 };
