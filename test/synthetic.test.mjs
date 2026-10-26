@@ -487,6 +487,16 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.equal(ru.unresolved, null, 'U 形切得開'); assert.ok(lu.length > 1 && lu.every(p => Core.shapeRatio(p.ids, du.points) <= 1.52), lu.map(p => Core.shapeRatio(p.ids, du.points).toFixed(2)).join(','));
   near(lu.reduce((t, p) => t + p.area, 0), 40 * 4 * 2 + 32 * 4, 1e-6); assert.equal(Core.ringConflicts(du).cross.length, 0); assert.equal(Core.freeRegions(du).length, 0);
 }
+// ── 通用合併：已登記地號（保留地號小者，另一筆 D11 保留記錄、新面積 0）；不同母號的未登記地也能合併 ──
+{
+  const Y = 2700000, X = 200000, P = [[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 0, 20], [6, 10, 20], [7, 0, 30], [8, 10, 30]];
+  const pts = rd(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd = rd(F_D13, [ring(1, 12, 0, [1, 2, 3, 4]), ring(1, 5, 0, [2, 5, 6, 3]), ring(1, 9002, 1, [5, 7, 8, 6])]);
+  const a = (m, ha) => ({ SECTION_O: 1, PAR_O_M: m, PAR_O_C: 0, PAR_N_M: m, PAR_N_C: 0, SECTION_N: 0, AREA_OLD: ha, AREA_NEW: ha }), par = rd(F_D11, [a(12, 0.01), a(5, 0.01)]);
+  const ds = Core.datasetFromD({ pts, bnd, par }), m = Core.mergeParcels(ds, [0, 1]);
+  assert.equal(m.keep, '5', '保留地號小者'); near(ds.parcels[1].area, 200, 1e-6); assert.deepEqual(m.removedPoints, [], '2、3 仍是外圍點');
+  const b11 = Core.parseDbf(Core.changedDFiles(ds, { pts, bnd, par, d12: null, lin: null }).files.d11.bytes); assert.deepEqual([b11.rows[0].PAR_O_M, b11.rows[0].AREA_NEW], [12, 0], '被併掉的已登記地號 D11 保留、新面積 0');
+  const m2 = Core.mergeParcels(ds, [1, 2]); assert.equal(m2.keep, '5', '已登記與未登記合併保留已登記'); near(ds.parcels[1].area, 300, 1e-6);
+}
 // ── 輸出不可在有效記錄之間留下鍵值為 0 的空列（KC0336：NECEXE 會刪掉它並往前遞補，經界線左右地號整批錯位）──
 {
   const noMidJunk = (dbf, isLive) => { let seen = false; for (let i = dbf.n - 1; i >= 0; i--) { if (isLive(dbf.rows[i])) seen = true; else if (seen) return false; } return true; };
