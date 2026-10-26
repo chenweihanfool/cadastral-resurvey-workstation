@@ -680,7 +680,7 @@ function panel() {
   if (S.sel.pt.size === 1 && !S.sel.edge.size && !S.sel.par.size) { const p = ds.points.get([...S.sel.pt][0]); info += NL + `點 ${p.id}　N ${p.y.toFixed(3)}　E ${p.x.toFixed(3)}`; }
   if (S.sel.edge.size === 1 && !S.sel.pt.size && !S.sel.par.size) { const e = ds.edges.get([...S.sel.edge][0]), a = ds.points.get(e.a), b = ds.points.get(e.b); info += NL + `線 ${e.a}–${e.b}　長 ${Math.hypot(a.x - b.x, a.y - b.y).toFixed(3)} m`; }
   $('selInfo').innerHTML = info.split(NL).map(s => `<div>${s}</div>`).join('');
-  { const one = S.sel.par.size === 1 ? ds.parcels[[...S.sel.par][0]] : null; $('btnDelHole').hidden = !(one && !one.deleted && (one.containers || []).length); }
+  { const sel = [...S.sel.par].map(i => ds.parcels[i]).filter(p => !p.deleted), b = $('btnDelHole'); b.hidden = !sel.length; b.textContent = sel.length === 1 && (sel[0].containers || []).length ? '刪除地中地（併入外圈）' : sel.length > 1 ? `刪除 ${sel.length} 宗` : '刪除宗地'; }
   $('pivotInfo').textContent = S.pivot ? `樞紐：N ${S.pivot.y.toFixed(3)}  E ${S.pivot.x.toFixed(3)}（自訂）` : '樞紐：移動對象的中心（Alt+點擊可自訂）';
   // 較差表
   const scope = document.querySelector('input[name=scope]:checked').value, tol = parseFloat($('tol').value) || 0;
@@ -768,18 +768,25 @@ function finishRedraw() {
   catch (err) { msg('無法完成：' + err.message); }
   if ($('dlgRing').open) ringPanel(); refresh();
 }
-// 刪除地中地、面積併入外圈（核心 Core.deleteHoleParcel；輸出時 D13／D11／D21 一併更新，D12 照 NECEXE 保留）
-function deleteHoleUI(pi) {
-  const ds = S.ds; if (!ds) return msg('請先載入圖資'); if (pi == null) { if (S.sel.par.size !== 1) return msg('請先選取一宗地中地'); pi = [...S.sel.par][0]; }
-  const h = ds.parcels[pi], outer = (h.containers || []).map(i => ds.parcels[i]);
-  if (!outer.length) return msg(`${h.label} 不是地中地（沒有外圈），目前只能刪除地中地並把面積併入外圈`);
-  if (!confirm(`刪除地中地 ${h.label}（${h.area.toFixed(2)} m²），面積併入 ${outer.map(o => o.label).join('、')}？\n只屬於它的界址點會一併刪除；可復原。`)) return;
-  try { const a0 = outer.map(o => o.area), r = Core.deleteHoleParcel(ds, pi); pushStruct(r.delta, `刪除地中地 ${h.label}`); clearSel(); outer.forEach(o => S.sel.par.add(o.idx));
-    msg(`已刪除地中地 ${h.label}，面積併入 ${outer.map((o, i) => `${o.label}（${a0[i].toFixed(2)} → ${o.area.toFixed(2)} m²）`).join('、')}` + (r.removedPoints.length ? `；刪除界址點 ${r.removedPoints.join('、')}` : '') + '。可復原；輸出完整案件資料夾時 D13、D11、D21 會一併更新');
-  } catch (err) { msg('無法刪除：' + err.message); }
+// 刪除宗地（核心 Core.deleteParcel）：地中地面積併入外圈；一般宗地直接刪除，範圍變成空地／段外。輸出時 D13／D11／D21 一併更新，D12 照 NECEXE 保留
+function deleteParcelUI(pis) {
+  const ds = S.ds; if (!ds) return msg('請先載入圖資'); pis = (pis || [...S.sel.par]).filter(i => !ds.parcels[i].deleted); if (!pis.length) return msg('請先選取要刪除的宗地');
+  const hs = pis.map(i => ds.parcels[i]), nest = hs.filter(h => (h.holes || []).some(x => !pis.includes(x)));
+  if (nest.length) return msg(`${nest.map(h => h.label).join('、')} 本身還有地中地，請一併選取或先處理內層`);
+  const line = h => (h.containers || []).length ? `${h.label}（地中地 ${h.area.toFixed(2)} m²，併入 ${h.containers.map(i => ds.parcels[i].label).join('、')}）` : `${h.label}（${h.area.toFixed(2)} m²，範圍變成空地／段外，面積不轉給別宗）`;
+  const reg = hs.filter(h => !h.created && parseInt(h.label, 10) < 9000);
+  if (!confirm(`刪除 ${hs.length} 宗：\n${hs.slice(0, 12).map(line).join('\n')}${hs.length > 12 ? '\n…' : ''}\n\n只屬於它的界址點會一併刪除；可復原。` + (reg.length ? `\n${reg.map(h => h.label).join('、')} 是已登記地號：D11 保留記錄、新面積改 0。` : ''))) return;
+  // 內層先刪（地中地與外圈同時選取時）
+  const order = hs.slice().sort((x, y) => ((x.holes || []).length - (y.holes || []).length)), deltas = [], pts = [];
+  const into = [...new Set(hs.flatMap(h => h.containers || []))].filter(i => !pis.includes(i)).map(i => ds.parcels[i]);
+  try {
+    for (const h of order) { const r = Core.deleteParcel(ds, h.idx); deltas.push(r.delta); pts.push(...r.removedPoints); }
+  } catch (err) { for (const d of deltas.slice().reverse()) Core.applyDelta(ds, d, 'undo'); msg('無法刪除：' + err.message); refresh(); return; }
+  pushMulti(deltas, `刪除宗地 ${hs.map(h => h.label).join('、')}`); clearSel(); into.forEach(o => S.sel.par.add(o.idx));
+  msg(`已刪除 ${hs.map(h => h.label).join('、')}` + (into.length ? `；地中地面積併入 ${into.map(o => `${o.label}（${o.area.toFixed(2)} m²）`).join('、')}` : '') + (pts.length ? `；刪除界址點 ${pts.slice(0, 20).join('、')}${pts.length > 20 ? '…' : ''}` : '') + '。可復原；輸出完整案件資料夾時 D13、D11、D21 會一併更新');
   if ($('dlgRing').open) ringPanel(); refresh();
 }
-$('btnDelHole').onclick = () => deleteHoleUI();
+$('btnDelHole').onclick = () => deleteParcelUI();
 $('btnRingCheck').onclick = ringPanel; $('btnRedraw').onclick = startRedraw;
 $('dlgRing').addEventListener('close', () => { S.ringMark = null; draw(); });
 
@@ -1020,7 +1027,7 @@ function openPanel(id) {
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
-  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteHoleUI(), move: () => openPanel('dlgMove'),
+  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), move: () => openPanel('dlgMove'),
   fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
   help: () => $('help').showModal(),
 };
@@ -1820,6 +1827,7 @@ const api = {
   splitParcel: ({ parcel, maxPts = 10 }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitParcel(S.ds, p.idx, maxPts); if (r.delta) pushStruct(r.delta, `分割 ${parcel}`); return { pieces: r.pieces }; },
   mergeParcels: ({ parcels }) => { const idx = parcels.map(l => { const p = findPar(l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }); const r = Core.mergeParcels(S.ds, idx); pushStruct(r.delta, '合併 ' + parcels.join('、')); return { keep: r.keep, merged: r.merged }; },
   closePocket: ({ chords, mother = 9001 }) => { const g = Core.pocketRegion(S.ds, chords), r = Core.fillRegion(S.ds, g.ids, mother); pushStruct(r.delta, `凹口建為 ${r.label}`); return { label: r.label, area: g.area, points: g.ids.length }; },
+  deleteParcel: ({ parcel }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.deleteParcel(S.ds, p.idx); pushStruct(r.delta, `刪除宗地 ${parcel}`); return { into: r.into, removedPoints: r.removedPoints }; },
   deleteHoleParcel: ({ parcel }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.deleteHoleParcel(S.ds, p.idx); pushStruct(r.delta, `刪除地中地 ${parcel}`); return { into: r.into, removedPoints: r.removedPoints }; },
   pointsToLine: ({ ids, a, b }) => { const r = pointsToLine(ids, a, b); return { moved: r.moved, skipped: r.skipped }; },
   setRing: ({ parcel, ids }) => { const p = S.ds.parcels.find(q => q.label === parcel || q.oldLabel === parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.setRing(S.ds, p.idx, ids); pushStruct(r.delta, `重繪界址串 ${parcel}`); return { area: p.area, points: p.ids.length }; },

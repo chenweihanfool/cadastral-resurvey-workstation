@@ -116,7 +116,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
       <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
-      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="ptline">點移到線上…<small>垂足</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><button data-act="delhole">刪除所選地中地<small>面積併入外圈</small></button><button data-act="unreg">未登記土地分割合併…<small>9000 號以上</small></button><hr>
+      <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="ptline">點移到線上…<small>垂足</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><button data-act="delhole">刪除所選宗地<small>地中地併入外圈</small></button><button data-act="unreg">未登記土地分割合併…<small>9000 號以上</small></button><hr>
       <button data-act="move">移動／旋轉／對位…</button></div></div>
     <div class="menu"><button class="mbtn">檢視</button><div class="mlist">
       <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
@@ -142,7 +142,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <aside>
     <details class="acc" open><summary>選取資訊</summary>
       <div class="accbody"><div id="selInfo" class="small muted">尚未選取</div>
-      <div class="row small" style="margin-top:6px"><button class="btn" data-act="move" title="輸入位移、旋轉、兩點對位">移動／旋轉…</button><button class="btn" data-act="pts">界址點編修…</button><button class="btn" id="btnDelHole" hidden title="刪除這宗地中地，面積併入外圈">刪除地中地（併入外圈）</button></div></div></details>
+      <div class="row small" style="margin-top:6px"><button class="btn" data-act="move" title="輸入位移、旋轉、兩點對位">移動／旋轉…</button><button class="btn" data-act="pts">界址點編修…</button><button class="btn" id="btnDelHole" hidden title="刪除所選宗地：地中地面積併入外圈；一般宗地直接刪除，範圍變成空地／段外">刪除宗地</button></div></div></details>
     <details class="acc" open><summary>面積較差</summary>
       <div class="accbody">
       <div class="row small" style="margin-bottom:6px">
