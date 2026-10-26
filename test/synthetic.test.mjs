@@ -471,6 +471,22 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   near(k.area, a0, 1e-6, '面積＝兩宗相加'); near(ds.parcels[2].area, a3, 1e-6, '鄰宗不變'); assert.deepEqual(m.removedPoints.sort(), [5, 6], '中間的 T 字點移除');
   assert.equal(Core.ringConflicts(ds).cross.length, 0); Core.applyDelta(ds, m.delta, 'undo'); assert.deepEqual(ds.parcels[0].ids, [1, 2, 3, 4], '復原後 9016-59 不含插入的點');
 }
+// ── 自動合併分組：8 筆未登記地圍成一圈（中間是 1 號），整組合併會留空洞 → 拆成不留空洞的幾群；U 形長條要能切 ──
+{
+  const Y = 2700000, X = 200000, P = []; for (let r = 0; r <= 3; r++) for (let c = 0; c <= 3; c++) P.push([r * 4 + c + 1, r * 10, c * 10]);
+  const id = (r, c) => r * 4 + c + 1, cell = (r, c) => [id(r, c), id(r, c + 1), id(r + 1, c + 1), id(r + 1, c)], rows = []; let sub = 1;
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) rows.push(r === 1 && c === 1 ? ring(1, 1, 0, cell(r, c)) : ring(1, 9016, sub++, cell(r, c)));
+  const ds = Core.datasetFromD({ pts: rd(F_D14, P.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rows) }), g = ds.parcels.filter(p => p.label.startsWith('9016-')).map(p => p.idx);
+  assert.throws(() => Core.mergeParcels(ds, g), /空洞/);
+  const mc = Core.mergeClusters(ds, g); assert.deepEqual(mc.clusters.map(c => c.length).sort(), [1, 7], '收 7 筆，封口的第 8 筆另成一群');
+  const m = Core.mergeParcels(ds, mc.clusters.find(c => c.length === 7)); near(ds.parcels.find(p => p.label === m.keep).area, 700, 1e-6);
+  // U 形長條（寬 4 m，細長度 1.79）：直線會穿過兩次，上限 1.5 時仍要切得開
+  const U = [[1, 0, 0], [2, 0, 40], [3, 40, 40], [4, 40, 36], [5, 4, 36], [6, 4, 4], [7, 40, 4], [8, 40, 0]];
+  const du = Core.datasetFromD({ pts: rd(F_D14, U.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, [ring(1, 9001, 1, [1, 2, 3, 4, 5, 6, 7, 8])]) });
+  const ru = Core.splitParcel(du, 0, 10, 1.5), lu = du.parcels.filter(p => !p.deleted);
+  assert.equal(ru.unresolved, null, 'U 形切得開'); assert.ok(lu.length > 1 && lu.every(p => Core.shapeRatio(p.ids, du.points) <= 1.52), lu.map(p => Core.shapeRatio(p.ids, du.points).toFixed(2)).join(','));
+  near(lu.reduce((t, p) => t + p.area, 0), 40 * 4 * 2 + 32 * 4, 1e-6); assert.equal(Core.ringConflicts(du).cross.length, 0); assert.equal(Core.freeRegions(du).length, 0);
+}
 // ── 輸出不可在有效記錄之間留下鍵值為 0 的空列（KC0336：NECEXE 會刪掉它並往前遞補，經界線左右地號整批錯位）──
 {
   const noMidJunk = (dbf, isLive) => { let seen = false; for (let i = dbf.n - 1; i >= 0; i--) { if (isLive(dbf.rows[i])) seen = true; else if (seen) return false; } return true; };
