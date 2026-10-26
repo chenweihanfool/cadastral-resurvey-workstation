@@ -1134,32 +1134,34 @@ async function exportCaseFolder() {
   if (!rep.size && !confirm('沒有任何改動，仍要輸出一份與原案件相同的資料夾？')) return;
   const d = new Date(), z = v => String(v).padStart(2, '0'), stamp = `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`, folder = `${cf.name}_調整_${stamp}`;
   const items = []; const seen = new Set();
-  for (const { rel, file } of cf.list) { const r = !rel.includes('/') && rep.get(rel.toLowerCase()); items.push({ rel, get: r ? async () => r.bytes : () => readBuf(file) }); seen.add(rel.toLowerCase()); }
-  for (const [k, r] of rep) if (!seen.has(k)) items.push({ rel: r.name, get: async () => r.bytes });   // 只開了個別檔案時，至少放進改動的 D 檔
+  for (const { rel, file } of cf.list) { const r = !rel.includes('/') && rep.get(rel.toLowerCase()); items.push({ rel, changed: !!r, get: r ? async () => r.bytes : () => readBuf(file) }); seen.add(rel.toLowerCase()); }
+  for (const [k, r] of rep) if (!seen.has(k)) items.push({ rel: r.name, changed: true, get: async () => r.bytes });   // 只開了個別檔案時，至少放進改動的 D 檔
   const what = rep.size ? [...rep.values()].map(r => `${r.name}（${r.note}）`).join('、') : '無改動';
-  const skipped = [], skipMsg = () => skipped.length ? `。⚠ ${skipped.length} 個原檔讀不到、沒有複製，請自行從原資料夾複製（未改動）：${skipped.slice(0, 5).join('、')}${skipped.length > 5 ? '…' : ''}` : '';
+  const skipped = [], failed = [], skipMsg = () => (skipped.length ? `。⚠ ${skipped.length} 個原檔讀不到、沒有複製，請自行從原資料夾複製（未改動）：${skipped.slice(0, 5).join('、')}${skipped.length > 5 ? '…' : ''}` : '') +
+    (failed.length ? `。⚠ ${failed.length} 個檔案寫入失敗${failed.some(f => f.changed) ? '（含改動的 D 檔，這個資料夾不完整，請勿使用）' : '（未改動，可自行從原資料夾複製）'}：${failed.slice(0, 5).map(f => `${f.rel}（${f.err}）`).join('、')}${failed.length > 5 ? '…' : ''}` : '');
   const warn = cf.partial ? '。注意：目前是用「開啟檔案」個別選的，資料夾內只有選取的檔案；要完整資料夾請改用「開啟資料夾」載入' : '';
+  let picked = false;
   try {
     if (window.showDirectoryPicker) {
-      const parent = await window.showDirectoryPicker({ id: 'necexe-out', mode: 'readwrite' });
+      const parent = await window.showDirectoryPicker({ id: 'necexe-out', mode: 'readwrite' }); picked = true;
       const exist = new Set(); for await (const [k] of parent.entries()) exist.add(k.toLowerCase());   // 先列出現有名稱，同名就加 (2)、(3)…
       let name = folder, n = 1; while (exist.has(name.toLowerCase())) name = `${folder}(${++n})`;
       const root = await parent.getDirectoryHandle(name, { create: true });
-      try {
-        for (const it of items) {
-          const data = await readItem(it, skipped); if (!data) continue;   // 先讀來源再建檔：讀不到時不會留下 0 KB 的檔案與 .crswap
-          const parts = it.rel.split('/'); let dir = root; for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p, { create: true });
-          const w = await (await dir.getFileHandle(parts[parts.length - 1], { create: true })).createWritable();
-          try { await w.write(data); await w.close(); } catch (e) { try { await w.abort(); } catch {} throw new Error(`寫入 ${it.rel} 失敗：${e && e.message || e}`); }
-        }
-      } catch (e) { try { await parent.removeEntry(name, { recursive: true }); } catch {} throw e; }   // 半成品資料夾整個移除，避免誤用
-      msg(`已建立資料夾「${parent.name}／${name}」：${items.length - skipped.length} 個檔案，改動的 D 檔：${what}。可直接用 NECEXE 開啟這個資料夾${warn}${skipMsg()}`);
+      for (const it of items) {   // 逐檔處理：一個檔失敗只列出，不中斷、不刪除已寫好的檔案
+        const data = await readItem(it, skipped); if (!data) continue;   // 先讀來源再建檔：讀不到時不會留下 0 KB 的檔案與 .crswap
+        const parts = it.rel.split('/'), fname = parts[parts.length - 1]; let w = null, dir = root;
+        try {
+          for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p, { create: true });
+          w = await (await dir.getFileHandle(fname, { create: true })).createWritable(); await w.write(data); await w.close();
+        } catch (e) { if (w) { try { await w.abort(); } catch {} try { await dir.removeEntry(fname); } catch {} } failed.push({ rel: it.rel, changed: it.changed, err: `${e && e.name || ''} ${e && e.message || e}`.trim() }); }
+      }
+      msg(`已建立資料夾「${parent.name}／${name}」：${items.length - skipped.length - failed.length} 個檔案，改動的 D 檔：${what}。可直接用 NECEXE 開啟這個資料夾${warn}${skipMsg()}`);
     } else {
       const files = []; for (const it of items) { const data = await readItem(it, skipped); if (data) files.push({ name: `${folder}/${it.rel}`, data }); }
       download(folder + '.zip', Core.makeZip(files, d), 'application/zip');
       msg(`已下載 ${folder}.zip：${files.length} 個檔案，改動的 D 檔：${what}。解壓縮後即為完整案件資料夾，可直接用 NECEXE 開啟${warn}${skipMsg()}`);
     }
-  } catch (err) { if (err && err.name === 'AbortError') return; msg('輸出失敗：' + (err && err.message || err)); }
+  } catch (err) { if (err && err.name === 'AbortError' && !picked) return; msg('輸出失敗：' + `${err && err.name || ''} ${err && err.message || err}`.trim()); }   // 只有取消選資料夾才靜默；寫檔被瀏覽器擋下也是 AbortError，要顯示
 }
 $('btnExpCase').onclick = exportCaseFolder;
 $('btnExpJson').onclick = () => download((S.names.d14 || 'session').replace(/\.\w+$/, '') + '.adjust.json', JSON.stringify(Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })) }, S.survey), null, 2), 'application/json');
