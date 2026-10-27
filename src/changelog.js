@@ -3,6 +3,13 @@
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.22.1', date: '2026-10-27', type: 'patch',
+    title: '接圖前比對、所有權人分析的表格不再被捲軸擋住',
+    changes: [
+      '表格改為面板寬度、「原因」欄可換行，捲軸另留位置，最右欄的字不再被遮住；「（2 塊）」改到倍數下一行；「跨分幅，請人工判斷」在表格裡簡寫為「跨分幅」（滑鼠停留看全文，CSV 不變）',
+    ],
+  },
+  {
     version: 'v0.22.0', date: '2026-10-27', type: 'minor',
     title: '所有權人分析：讀入 EXAM.MDB，抓出非 9000 號卻沒有所有權人的土地，圖上依所有權型態著色',
     changes: [

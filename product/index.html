@@ -41,6 +41,7 @@ label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
 table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
 th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
 #blList td.small,#ownList td.small{white-space:normal;text-align:left;min-width:90px}
+#blList,#ownList{scrollbar-gutter:stable;padding-right:2px}#blList table,#ownList table{width:100%}#blList td.cause{white-space:normal;text-align:left;min-width:4.5em}
 #ringList td,#ringList th{text-align:left;vertical-align:top}#ringList td:nth-child(3){white-space:normal;min-width:220px}
 th:first-child,td:first-child{text-align:left} th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
 tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-child{box-shadow:inset 3px 0 var(--sel)}
@@ -2676,6 +2677,13 @@ if (typeof module !== 'undefined') module.exports = Core;
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.22.1', date: '2026-10-27', type: 'patch',
+    title: '接圖前比對、所有權人分析的表格不再被捲軸擋住',
+    changes: [
+      '表格改為面板寬度、「原因」欄可換行，捲軸另留位置，最右欄的字不再被遮住；「（2 塊）」改到倍數下一行；「跨分幅，請人工判斷」在表格裡簡寫為「跨分幅」（滑鼠停留看全文，CSV 不變）',
+    ],
+  },
+  {
     version: 'v0.22.0', date: '2026-10-27', type: 'minor',
     title: '所有權人分析：讀入 EXAM.MDB，抓出非 9000 號卻沒有所有權人的土地，圖上依所有權型態著色',
     changes: [
@@ -4553,7 +4561,7 @@ function blPanel() {
   $('blList').innerHTML =
     (r.missing.length ? `<div class="row small" style="margin:4px 0"><button class="btn primary" id="btnBlFixAll" title="依接圖前界址從蓋住它的未登記地切出，建回原地號（登記面積照接圖前）；可一次復原">全部修復（${r.missing.length}）</button><span class="muted">只從未登記地（9000 號以上）切；位置上有登記地就不做，請人工處理</span></div>` : '') +
     sec('遺漏：接圖前有、目前的圖沒有', true, ['地號', '登記㎡', '接圖前㎡', '在圖內', '現屬（㎡）', ''], r.missing.map((m, i) => `<tr data-bl="missing:${i}" style="cursor:pointer"><td><b>${esc(m.label)}</b></td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(0)}%</td><td class="small">${cov(m.cover)}${blRegNote(m.label)}</td><td><button class="btn" data-blfix="${i}" title="依接圖前界址從未登記地切出，建回 ${esc(m.label)}">修復</button></td></tr>`)) +
-    sec(`面積較差超過 ${r.opt.ratio} 倍公差`, true, ['地號', '登記㎡', '現面積㎡', '較差㎡', '倍數', '接圖前倍數', '原因'], r.flagged.map(x => `<tr data-bl="par:${x.idx}" style="cursor:pointer"><td>${esc(x.label)}</td><td>${n(x.reg, 0)}</td><td>${n(x.area)}</td><td>${x.diff >= 0 ? '+' : ''}${n(x.diff)}</td><td><b>${n(x.ratio)}</b></td><td>${x.refRatio == null ? '' : n(x.refRatio) + (x.pieces > 1 ? `<span class="muted">（${x.pieces} 塊）</span>` : '')}</td><td style="color:${BL_CAUSE[x.cause] || 'inherit'}">${x.cause}</td></tr>`)) +
+    sec(`面積較差超過 ${r.opt.ratio} 倍公差`, true, ['地號', '登記㎡', '現面積㎡', '較差㎡', '倍數', '接圖前倍數', '原因'], r.flagged.map(x => `<tr data-bl="par:${x.idx}" style="cursor:pointer"><td>${esc(x.label)}</td><td>${n(x.reg, 0)}</td><td>${n(x.area)}</td><td>${x.diff >= 0 ? '+' : ''}${n(x.diff)}</td><td><b>${n(x.ratio)}</b></td><td>${x.refRatio == null ? '' : n(x.refRatio) + (x.pieces > 1 ? `<div class="muted">${x.pieces} 塊</div>` : '')}</td><td class="cause" style="color:${BL_CAUSE[x.cause] || 'inherit'}" title="${x.cause}">${x.cause.replace('，請人工判斷', '')}</td></tr>`)) +
     sec('部分在區內（只有一部分落在目前的圖內，請確認區界）', false, ['地號', '登記㎡', '接圖前㎡', '在圖內', '區內部分現屬（㎡）'], r.partial.map((m, i) => `<tr data-bl="partial:${i}" style="cursor:pointer"><td>${esc(m.label)}</td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(1)}%</td><td class="small">${cov(m.cover)}</td></tr>`)) +
     sec('登記地被未登記地佔用（超過該宗公差）', false, ['地號', '登記㎡', '被佔㎡', '公差㎡', '佔用的未登記地（㎡）'], r.occupied.map(o => `<tr data-bl="par:${o.idx}" style="cursor:pointer"><td>${esc(o.label)}</td><td>${n(o.reg, 0)}</td><td>${n(o.occ)}</td><td>${n(o.tol)}</td><td class="small">${cov(o.cover)}</td></tr>`)) +
     sec('接圖前的未登記地（目前另編號，不算遺漏）', false, ['地號', '接圖前㎡', '現屬（㎡）'], r.unreg.map((m, i) => `<tr data-bl="unreg:${i}" style="cursor:pointer"><td>${esc(m.label)}</td><td>${n(m.area, 0)}</td><td class="small">${cov(m.cover)}</td></tr>`)) +
