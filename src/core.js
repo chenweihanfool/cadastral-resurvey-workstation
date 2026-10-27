@@ -1833,6 +1833,118 @@ const Core = (() => {
   }
 
   // 供 AI/外部程式讀取的中繼資料（JSON，自帶欄位說明）
+  // ── Access 資料庫（.MDB，Jet 4）讀取：只讀使用者資料表的文字與數值欄（地政 EXAM.MDB 用）──────────────
+  // 頁 4096 bytes。系統目錄 MSysObjects 的表定義在第 2 頁；使用者表＝Type 1、Flags 0，Id 低 24 位＝表定義頁。
+  // 資料頁（type 1）在 offset 4 記錄所屬表定義頁，掃描全部資料頁即可取得各表的列（刪除列 0x8000、轉址列 0x4000 略過）。
+  // 列：開頭 2 bytes 欄數；固定長度欄在 2＋offset_F；尾端依序往前是 null 遮罩（每欄 1 bit，1＝有值）、可變欄數、可變欄位移表。
+  // Jet 4 文字為 UCS-2；以 0xFF 0xFE 開頭為壓縮格式（0x00 切換單位元組／雙位元組）。驗證：KC0336 EXAM.MDB 兩表與 mdb-export 逐欄相同。
+  function parseMdb(buf) {
+    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf), dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), PG = 4096;
+    if (u8.length < PG * 3 || dv.getUint32(0, true) !== 0x100 || dv.getUint8(0x14) < 1) throw new Error('不是 Access 2000 以後（Jet 4）的 MDB 檔');
+    const npg = Math.floor(u8.length / PG), u16 = o => dv.getUint16(o, true), u32 = o => dv.getUint32(o, true);
+    const ucs = (o, n) => { let s = ''; for (let i = 0; i + 1 < n; i += 2) s += String.fromCharCode(u16(o + i)); return s; };
+    const text = (o, n) => {
+      if (n >= 2 && u8[o] === 0xff && u8[o + 1] === 0xfe) { let s = '', i = o + 2, wide = false; const e = o + n;
+        while (i < e) { if (u8[i] === 0 && !(wide && i + 1 < e)) { wide = !wide; i++; continue; } if (wide) { if (u8[i] === 0 && i + 1 < e && u8[i + 1] === 0) { wide = false; i++; continue; } s += String.fromCharCode(u8[i] | (u8[i + 1] << 8)); i += 2; } else { if (u8[i] === 0) { wide = true; i++; continue; } s += String.fromCharCode(u8[i]); i++; } }
+        return s; }
+      return ucs(o, n);
+    };
+    function tdef(pg) {
+      const parts = []; let p = pg;
+      for (let g = 0; p && g < 64; g++) { const o = p * PG; if (u8[o] !== 2) throw new Error(`第 ${p} 頁不是表定義頁`); parts.push(g ? u8.subarray(o + 8, o + PG) : u8.subarray(o, o + PG)); p = u32(o + 4); }
+      const t = new Uint8Array(parts.reduce((s, a) => s + a.length, 0)); let k = 0; for (const a of parts) { t.set(a, k); k += a.length; }
+      const tv = new DataView(t.buffer), nCols = tv.getUint16(0x2d, true), nRealIdx = tv.getUint32(0x33, true);
+      let o = 0x3f + nRealIdx * 12; const cols = [];
+      for (let i = 0; i < nCols; i++, o += 25) cols.push({ type: t[o], num: tv.getUint16(o + 5, true), varIdx: tv.getUint16(o + 7, true), fixed: !!(t[o + 15] & 1), fixOff: tv.getUint16(o + 21, true), len: tv.getUint16(o + 23, true) });
+      for (const c of cols) { const n = tv.getUint16(o, true); let s = ''; for (let i = 0; i < n; i += 2) s += String.fromCharCode(tv.getUint16(o + 2 + i, true)); c.name = s; o += 2 + n; }
+      return cols.sort((a, b) => a.num - b.num);   // 依欄號（＝Access 裡的欄位順序）
+    }
+    function value(c, rs, re, nullMask, varOff, nVar) {
+      const present = (nullMask[c.num >> 3] >> (c.num & 7)) & 1;
+      if (c.type === 1) return !!present;
+      if (!present) return null;
+      let o, n;
+      if (c.fixed) { o = rs + 2 + c.fixOff; n = c.len; }
+      else { if (c.varIdx >= nVar) return null; o = rs + varOff[c.varIdx]; n = varOff[c.varIdx + 1] - varOff[c.varIdx]; if (n <= 0) return c.type === 10 ? '' : null; }
+      if (o + n > re) return null;
+      switch (c.type) {
+        case 2: return u8[o]; case 3: return dv.getInt16(o, true); case 4: return dv.getInt32(o, true);
+        case 6: return dv.getFloat32(o, true); case 7: return dv.getFloat64(o, true);
+        case 5: return Number(dv.getBigInt64(o, true)) / 1e4;
+        case 8: return new Date(Date.UTC(1899, 11, 30) + dv.getFloat64(o, true) * 864e5);
+        case 10: return text(o, n);
+        default: return null;   // 備忘、OLE、GUID、數值（decimal）等本工具用不到
+      }
+    }
+    function rows(pg, cols) {
+      const out = [];
+      for (let p = 1; p < npg; p++) {
+        const o = p * PG; if (u8[o] !== 1 || u32(o + 4) !== pg) continue;
+        const n = u16(o + 12); let prevStart = PG;
+        for (let i = 0; i < n; i++) {
+          const raw = u16(o + 14 + i * 2), start = raw & 0x1fff, end = prevStart; prevStart = start;
+          if (raw & 0xc000 || start >= end) continue;   // 刪除或轉址
+          const rs = o + start, re = o + end, nc = u16(rs), maskLen = (nc + 7) >> 3, mask = u8.subarray(re - maskLen, re);
+          const nVar = u16(re - maskLen - 2), varOff = []; for (let k = 0; k <= nVar; k++) varOff.push(u16(re - maskLen - 4 - k * 2));
+          const r = {}; for (const c of cols) r[c.name] = value(c, rs, re, mask, varOff, nVar); out.push(r);
+        }
+      }
+      return out;
+    }
+    const sysCols = tdef(2), sys = rows(2, sysCols), tables = {};
+    for (const r of sys) if (r.Type === 1 && !(r.Flags & 0x80000002) && r.Name && !/^MSys/i.test(r.Name)) {
+      const pg = r.Id & 0xffffff; try { const cols = tdef(pg); tables[r.Name] = { columns: cols.map(c => c.name), rows: rows(pg, cols) }; } catch (e) { tables[r.Name] = { error: e.message, columns: [], rows: [] }; }
+    }
+    return tables;
+  }
+  // ── 所有權人分析（EXAM.MDB：土地標示資料表、權利人與土地關係資料表）──────────────────────────
+  // 以原段號＋原母號＋原子號對應宗地鍵（D13 的 O_SECTION|O_PARCEL|O_PARCEL_E）。只計「所有權」，抵押權等他項權利另計。
+  const PUBLIC_RE = /國有|省有|縣有|市有|鄉有|鎮有|縣市有|鄉鎮市有|公有/;
+  function ownerTables(tables) {
+    const find = re => Object.keys(tables).find(n => re.test(n)), lt = find(/土地標示/), ot = find(/權利人/);
+    if (!lt && !ot) throw new Error('MDB 裡沒有「土地標示資料表」或「權利人與土地關係資料表」');
+    const key = r => `${parseInt(r['原段號'], 10)}|${r['原母號']}|${r['原子號'] || 0}`;
+    const land = new Map(), own = new Map();
+    for (const r of lt ? tables[lt].rows : []) land.set(key(r), { zone: r['使用分區'] || '', use: r['使用地類別'] || '', other: r['有無他項權利'] === '1', bldg: r['有無建物登記'] === '1' });
+    for (const r of ot ? tables[ot].rows : []) { const k = key(r); (own.get(k) || own.set(k, []).get(k)).push({ no: r['錄號'], scope: r['權利範圍'] || '', den: r['權利範圍分母'] || '', num: r['權利範圍分子'] || '', right: r['權利種類'] || '', kind: r['權利人類別'] || '', name: r['權利人姓名'] || '', mgr: r['管理者姓名'] || '' }); }
+    return { land, own, landRows: lt ? tables[lt].rows.length : 0, ownRows: ot ? tables[ot].rows.length : 0 };
+  }
+  // 宗地的所有權型態：無所有權人／公有／單獨所有／分別共有／公同共有／法人等
+  function ownerClass(list) {
+    const o = (list || []).filter(x => x.right === '所有權'); if (!o.length) return 'none';
+    if (o.some(x => PUBLIC_RE.test(x.kind) || PUBLIC_RE.test(x.name))) return 'public';
+    if (o.some(x => x.scope === '公同共有')) return 'joint';
+    if (o.length > 1 || o.some(x => x.scope === '分別共有')) return 'shared';
+    return /人$/.test(o[0].kind) && !/法人/.test(o[0].kind) ? 'single' : 'corp';
+  }
+  const OWNER_CLASS = { none: '無所有權人', public: '公有', single: '單獨所有（自然人）', corp: '法人／祭祀公業等', shared: '分別共有', joint: '公同共有' };
+  // 持分合計（BigInt 分數）；含公同共有者每人都記 1/1，不檢查
+  function shareSum(list) {
+    const g = (a, b) => { while (b) [a, b] = [b, a % b]; return a < 0n ? -a : a; };
+    let n = 0n, d = 1n;
+    for (const x of list) { if (!/^\d+$/.test(x.num) || !/^\d+$/.test(x.den) || x.den === '0') return null; const a = BigInt(x.num), b = BigInt(x.den); n = n * b + a * d; d *= b; const k = g(n, d); n /= k; d /= k; }
+    return { n, d };
+  }
+  function ownerAnalysis(ds, ot) {
+    const parcels = [], noOwner = [], noLand = [], shareBad = [], onMap = new Set(), counts = {};
+    for (const p of ds.parcels) {
+      if (p.deleted || p.ids.length < 3) continue; const no = parcelNo(p); if (!no || !no.m) continue;
+      onMap.add(p.key); const list = ot.own.get(p.key) || [], o = list.filter(x => x.right === '所有權'), cls = no.m >= UNREG_MIN ? 'unreg' : ownerClass(list), land = ot.land.get(p.key) || null;
+      counts[cls] = (counts[cls] || 0) + 1; parcels.push({ idx: p.idx, cls });
+      if (cls === 'none') noOwner.push({ idx: p.idx, label: p.label, oldLabel: p.oldLabel, area: p.area, reg: p.areaReg, inLand: !!land, others: list.length });
+      if (no.m < UNREG_MIN && o.length && !o.some(x => x.scope === '公同共有')) { const s = shareSum(o); if (s && !(s.n === s.d)) shareBad.push({ idx: p.idx, label: p.label, sum: `${s.n}/${s.d}`, owners: o.length }); }
+    }
+    for (const k of new Set([...ot.land.keys(), ...ot.own.keys()])) if (!onMap.has(k)) { const [, m, c] = k.split('|'); noLand.push({ key: k, label: +c ? `${m}-${c}` : m, owners: (ot.own.get(k) || []).filter(x => x.right === '所有權').length }); }
+    const byNo = (u, v) => String(u.oldLabel || u.label).localeCompare(String(v.oldLabel || v.label), 'en', { numeric: true });
+    noOwner.sort(byNo); noLand.sort(byNo); shareBad.sort(byNo);
+    return { parcels, noOwner, noLand, shareBad, counts };
+  }
+  // 名字或統一編號以外的條件查詢：回傳權利人姓名含 q 的宗地索引
+  function findOwner(ds, ot, q) {
+    q = String(q || '').trim(); if (!q) return [];
+    return ds.parcels.filter(p => !p.deleted && (ot.own.get(p.key) || []).some(x => x.name.includes(q) || x.mgr.includes(q))).map(p => p.idx);
+  }
+
   // ── 接圖前圖資比對：齊全檢查（遺漏）＋面積較差超限 ─────────────────────
   // 參考圖資＝接圖前的分幅資料（可多份，例如各分幅資料夾，或「分幅都放在一起、分幅線還在」的整份 D 檔）。
   // 分幅切開的同一地號以子號 +1000、+2000… 編號（48-15 → 48-1015、48-2015），比對前併回原地號、面積相加。
@@ -2171,6 +2283,7 @@ const Core = (() => {
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, seamGaps, fillSeamGap, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
-    AREA_TOL, areaTol, parcelNo, fitAffine, intersectArea, compareBaseline, baselineCsv, restoreMissing };
+    AREA_TOL, areaTol, parcelNo, fitAffine, intersectArea, compareBaseline, baselineCsv, restoreMissing,
+    parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner };
 })();
 if (typeof module !== 'undefined') module.exports = Core;

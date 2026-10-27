@@ -640,4 +640,55 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.equal(JSON.stringify(ds.parcels.map(p => p.ids)), before); assert.equal(ds.points.size, 6);
   assert.throws(() => Core.restoreMissing(ds, { label: '7', rings: [R(10, 10, 20, 20)] }), /已存在/);
 }
+// ── Access（Jet 4）MDB 讀取與所有權人分析 ──
+{
+  // 迷你 Jet 4 檔：第 0 頁表頭、第 2 頁 MSysObjects 表定義、第 3 頁其資料、第 4 頁使用者表定義、第 5 頁其資料
+  const PG = 4096, buf = new Uint8Array(PG * 6), dv = new DataView(buf.buffer);
+  dv.setUint32(0, 0x100, true); buf[0x14] = 1;
+  const ucs = s => { const a = new Uint8Array(s.length * 2); for (let i = 0; i < s.length; i++) { a[2 * i] = s.charCodeAt(i) & 255; a[2 * i + 1] = s.charCodeAt(i) >> 8; } return a; };
+  const comp = s => Uint8Array.from([0xff, 0xfe, ...[...s].map(c => c.charCodeAt(0))]);   // 壓縮文字（全 ASCII）
+  // cols: [{name, type, fixed, len}]；固定欄依序排，可變欄依序編 varIdx
+  const writeTdef = (pg, cols) => {
+    const o = pg * PG; buf[o] = 2; buf[o + 1] = 1; dv.setUint16(o + 0x2d, cols.length, true); dv.setUint32(o + 0x33, 0, true);
+    let c = o + 0x3f, fo = 0, vi = 0;
+    for (const [i, col] of cols.entries()) { buf[c] = col.type; dv.setUint16(c + 5, i, true); dv.setUint16(c + 7, col.fixed ? 0 : vi, true); buf[c + 15] = col.fixed ? 1 : 0; dv.setUint16(c + 21, col.fixed ? fo : 0, true); dv.setUint16(c + 23, col.len, true); col.off = fo; col.vi = vi; if (col.fixed) fo += col.len; else vi++; c += 25; }
+    for (const col of cols) { const n = ucs(col.name); dv.setUint16(c, n.length, true); buf.set(n, c + 2); c += 2 + n.length; }
+  };
+  const encRow = (cols, vals) => {
+    const fixLen = cols.filter(c => c.fixed).reduce((t, c) => t + c.len, 0), fix = new Uint8Array(fixLen), fdv = new DataView(fix.buffer), vars = [], mask = new Uint8Array((cols.length + 7) >> 3);
+    cols.forEach((c, i) => { const v = vals[c.name]; if (c.type === 1) { if (v) mask[i >> 3] |= 1 << (i & 7); return; } if (v == null) { if (!c.fixed) vars.push(new Uint8Array(0)); return; } mask[i >> 3] |= 1 << (i & 7);
+      if (c.type === 3) fdv.setInt16(c.off, v, true); else if (c.type === 4) fdv.setInt32(c.off, v, true); else if (c.type === 10) vars.push(typeof v === 'object' ? v : ucs(v)); });
+    const offs = [], parts = []; let pos = 2 + fixLen; for (const v of vars) { offs.push(pos); parts.push(v); pos += v.length; } offs.push(pos);
+    const tail = new Uint8Array(offs.length * 2 + 2), tdv = new DataView(tail.buffer); offs.forEach((x, k) => tdv.setUint16(tail.length - 2 - (k + 1) * 2, x, true)); tdv.setUint16(tail.length - 2, vars.length, true);
+    const row = new Uint8Array(pos + tail.length + mask.length), rdv = new DataView(row.buffer); rdv.setUint16(0, cols.length, true); row.set(fix, 2); let q = 2 + fixLen; for (const v of parts) { row.set(v, q); q += v.length; } row.set(tail, q); row.set(mask, q + tail.length); return row;
+  };
+  const writeData = (pg, owner, rows, deleted = []) => {
+    const o = pg * PG; buf[o] = 1; buf[o + 1] = 1; dv.setUint32(o + 4, owner, true); dv.setUint16(o + 12, rows.length, true); let end = PG;
+    rows.forEach((r, i) => { const st = end - r.length; buf.set(r, o + st); dv.setUint16(o + 14 + i * 2, st | (deleted.includes(i) ? 0x8000 : 0), true); end = st; });
+  };
+  const sysCols = [{ name: 'Id', type: 4, fixed: true, len: 4 }, { name: 'Type', type: 3, fixed: true, len: 2 }, { name: 'Flags', type: 4, fixed: true, len: 4 }, { name: 'Name', type: 10, fixed: false, len: 255 }];
+  writeTdef(2, sysCols); writeData(3, 2, [encRow(sysCols, { Id: 4, Type: 1, Flags: 0, Name: '土地標示資料表' }), encRow(sysCols, { Id: 2, Type: 1, Flags: 0x80000000 | 0, Name: 'MSysObjects' })]);
+  const cols = [{ name: '原母號', type: 4, fixed: true, len: 4 }, { name: '原子號', type: 4, fixed: true, len: 4 }, { name: '原段號', type: 10, len: 8 }, { name: '使用分區', type: 10, len: 20 }, { name: '有無建物登記', type: 1, fixed: true, len: 0 }];
+  writeTdef(4, cols);
+  writeData(5, 4, [encRow(cols, { 原母號: 12, 原子號: 3, 原段號: comp('0336'), 使用分區: '山坡地保育區', 有無建物登記: true }), encRow(cols, { 原母號: 99, 原子號: 0, 原段號: '0336', 使用分區: null }), encRow(cols, { 原母號: 7, 原子號: 0, 原段號: '0336', 使用分區: 'x' })], [2]);
+  const t = Core.parseMdb(buf);
+  assert.deepEqual(Object.keys(t), ['土地標示資料表']); assert.deepEqual(t['土地標示資料表'].columns, ['原母號', '原子號', '原段號', '使用分區', '有無建物登記']);
+  assert.deepEqual(t['土地標示資料表'].rows, [{ 原母號: 12, 原子號: 3, 原段號: '0336', 使用分區: '山坡地保育區', 有無建物登記: true }, { 原母號: 99, 原子號: 0, 原段號: '0336', 使用分區: null, 有無建物登記: false }], '壓縮文字、null、布林、刪除列');
+  assert.throws(() => Core.parseMdb(new Uint8Array(PG * 3)), /Jet 4/);
+  // 分析：以原段號|原母號|原子號對應 D13 鍵
+  const Y = 2706000, X = 222000, sq = (n, x) => [pt(n, Y, X + x), pt(n + 1, Y, X + x + 10), pt(n + 2, Y + 10, X + x + 10), pt(n + 3, Y + 10, X + x)];
+  const pts = rd(F_D14, [...sq(1, 0), ...sq(11, 20), ...sq(21, 40), ...sq(31, 60), ...sq(41, 80)]);
+  const bnd = rd(F_D13, [ring(336, 1, 0, [1, 2, 3, 4]), ring(336, 2, 0, [11, 12, 13, 14]), ring(336, 3, 0, [21, 22, 23, 24]), ring(336, 9001, 1, [31, 32, 33, 34]), ring(336, 4, 0, [41, 42, 43, 44])]);
+  const ds = Core.datasetFromD({ pts, bnd });
+  const L = (m, c = 0) => ({ 原段號: '0336', 原母號: m, 原子號: c, 使用分區: '一般農業區', 使用地類別: '農牧用地', 有無他項權利: '0', 有無建物登記: '0' });
+  const O = (m, name, scope, num, den, kind = '本國人', right = '所有權') => ({ 原段號: '0336', 原母號: m, 原子號: 0, 權利範圍: scope, 權利範圍分子: num, 權利範圍分母: den, 權利種類: right, 權利人類別: kind, 權利人姓名: name, 管理者姓名: '' });
+  const ot = Core.ownerTables({ 土地標示資料表: { rows: [L(1), L(2), L(3), L(5)] }, 權利人與土地關係資料表: { rows: [O(1, '甲', '全部', '1', '1'), O(2, '乙', '分別共有', '1', '3'), O(2, '丙', '分別共有', '1', '3'), O(3, '中華民國', '全部', '1', '1', '國有（中央機關）'), O(4, '銀行', '全部', '', '', '銀行法人', '抵押權'), O(5, '丁', '全部', '1', '1')] } });
+  const r = Core.ownerAnalysis(ds, ot);
+  assert.deepEqual(r.noOwner.map(x => [x.label, x.inLand, x.others]), [['4', false, 1]], '4 號沒有所有權人（只有抵押權），9001-1 是未登記地不算');
+  assert.deepEqual(r.noLand.map(x => x.label), ['5'], '登記有、圖上沒有');
+  assert.deepEqual(r.shareBad.map(x => [x.label, x.sum]), [['2', '2/3']], '持分合計 2/3');
+  assert.deepEqual(r.counts, { single: 1, shared: 1, public: 1, unreg: 1, none: 1 });
+  assert.deepEqual(Core.findOwner(ds, ot, '丙').map(i => ds.parcels[i].label), ['2']);
+  assert.deepEqual(Core.shareSum([{ num: '1', den: '6' }, { num: '1', den: '3' }, { num: '1', den: '2' }]), { n: 1n, d: 1n });
+}
 console.log('SYNTHETIC OK');
