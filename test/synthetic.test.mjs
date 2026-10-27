@@ -564,4 +564,51 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.deepEqual(b11.rows.map(r => r.PAR_O_M), [1], '9012-5（本次刪除）與 9012-9（原本就刪掉的）都移除'); assert.equal(b12.n, 0, '指向已移除地號的地中地關係一併移除');
   const re = Core.datasetFromD({ pts, bnd: Core.parseDbf(ch.files.d13.bytes), par: b11, d12: b12 }); near(re.parcels[0].area, 10000, 1e-6); assert.equal(re.meta.noRing.length, 0);
 }
+// ── 接圖前比對：TWD67 自動轉換、分幅子號併回、遺漏、面積超限與原因、未登記地佔用、KC 地號標籤 ──
+{
+  const Y = 2706000, X = 222000, F11 = [...F_D11];
+  const build = (list, dy = 0, dx = 0) => {   // list: [m, c, 登記 m², [[y,x]...]]（相對坐標）
+    const P = [], B = [], A = []; let n = 1;
+    for (const [m, c, reg, xy] of list) { const ids = xy.map(([y, x]) => { P.push(pt(n, Y + y + dy, X + x + dx)); return n++; }); B.push(ring(336, m, c, ids)); A.push({ SECTION_O: 336, PAR_O_M: m, PAR_O_C: c, PAR_N_M: m, PAR_N_C: c, SECTION_N: 336, AREA_OLD: reg / 1e4, AREA_NEW: 0 }); }
+    return Core.datasetFromD({ pts: rd(F_D14, P), bnd: rd(F_D13, B), par: rd(F11, A) });
+  };
+  const sq = (y, x, h = 100, w = 100) => [[y, x], [y, x + w], [y + h, x + w], [y + h, x]];
+  const grid = [];   // 3×3 共 9 宗，地號 1～9，各 10000 m²
+  for (let i = 0; i < 9; i++) grid.push([i + 1, 0, 10000, sq(Math.floor(i / 3) * 100, (i % 3) * 100)]);
+  // 目前的圖：2 號往東多 20 m（接圖後變大）；5 號被補成未登記地 9001；6 號東側 10 m 被 9002 佔用
+  const cur = grid.filter(g => g[0] !== 5 && g[0] !== 2 && g[0] !== 6).concat([[2, 0, 10000, sq(0, 100, 100, 100)], [9001, 0, 0, sq(100, 100)], [6, 0, 10000, sq(100, 200, 100, 90)], [9002, 0, 0, sq(100, 290, 100, 10)]]);
+  cur.find(g => g[0] === 3)[3] = sq(0, 200, 100, 120);   // 3 號：接圖前就大 20%（見下）
+  cur.find(g => g[0] === 2)[2] = 8000;                   // 2 號登記 8000，接圖前 10000 → 接圖前即不符？不：見 ref
+  const ds = build(cur);
+  // 接圖前（TWD67：東 −830、北 +205）：4 號被分幅線切成 4 與 4-1000；3 號接圖前就 12000；另有區外的 99 號
+  const ref = grid.filter(g => g[0] !== 4 && g[0] !== 3).concat([[4, 0, 10000, sq(100, 0, 100, 60)], [4, 1000, 10000, sq(100, 60, 100, 40)], [3, 0, 10000, sq(0, 200, 100, 120)], [99, 0, 500, sq(1000, 1000, 20, 25)]]);
+  ref.find(g => g[0] === 2)[2] = 8000;
+  const r = Core.compareBaseline(ds, [build(ref, 205, -830)], { ratio: 5 });
+  assert.ok(r.fit && Math.abs(r.fit.X[2] - r.fit.X[0] * 0) !== 0, '有擬合'); const o = r.fit; near(o.median, 0, 1e-3, '轉換殘差');
+  assert.equal(r.refGroups, 10, '4-1000 併回 4');
+  assert.deepEqual(r.missing.map(m => m.label), ['5'], '5 號遺漏'); assert.equal(r.missing[0].cover[0].label, '9001'); near(r.missing[0].inside, 1, 1e-9);
+  assert.equal(r.outside, 1, '99 號在區外，不算遺漏'); assert.deepEqual(r.extra.map(e => e.label), []);
+  const by = Object.fromEntries(r.area.map(x => [x.label, x]));
+  near(Core.areaTol(10000), 95, 1e-9, '公差 (0.25+0.07·10)·100');
+  assert.ok(by['3'].flag && by['3'].cause === '接圖前即不符', '3 號接圖前就 12000');
+  assert.ok(by['2'].flag && by['2'].cause === '接圖前即不符', '2 號登記 8000、接圖前 10000、現 10000');
+  assert.ok(!by['4'].flag && by['4'].pieces === 2); near(by['4'].refArea, 10000, 1e-6, '分幅面積相加');
+  assert.deepEqual(r.occupied.map(x => x.label), ['6'], '6 號被 9002 佔 1000 m²'); near(r.occupied[0].occ, 1000, 1e-3);
+  assert.ok(by['6'].flag && by['6'].cause === '接圖後產生');
+  // 多組：遺漏看聯集；同地號取塊數少的那組
+  const whole = build(grid, 205, -830), r2 = Core.compareBaseline(ds, [build(ref, 205, -830), whole]);
+  assert.equal(r2.area.find(x => x.label === '4').pieces, 1, '整幅的 4 號只有一塊'); assert.deepEqual(r2.missing.map(m => m.label), ['5']);
+  assert.ok(Core.baselineCsv(r).split('\r\n')[1].startsWith('遺漏,5,'));
+  // 精確交集面積：部分重疊、包含、相離、共邊相接（不算）、共邊同向（算一次）
+  const R = (x, y, w, h) => [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  near(Core.intersectArea(R(0, 0, 10, 10), R(5, 5, 10, 10)), 25, 1e-9); near(Core.intersectArea(R(0, 0, 10, 10), R(2, 2, 3, 3)), 9, 1e-9);
+  near(Core.intersectArea(R(0, 0, 10, 10), R(20, 0, 5, 5)), 0, 1e-12); near(Core.intersectArea(R(0, 0, 10, 10), R(10, 0, 10, 10)), 0, 1e-9, '共邊相接');
+  near(Core.intersectArea(R(0, 0, 10, 10), R(0, 0, 10, 4)), 40, 1e-9, '共邊同向'); near(Core.intersectArea(R(0, 0, 10, 10), R(0, 0, 10, 10)), 100, 1e-9, '完全相同');
+  near(Core.intersectArea(R(0, 0, 10, 10).reverse(), [{ x: 5, y: -5 }, { x: 15, y: 5 }, { x: 5, y: 15 }, { x: -5, y: 5 }]), 100, 1e-9, '菱形外接正方形（角點落在菱形邊上）、順時針');
+  near(Core.intersectArea(R(0, 0, 10, 10), [{ x: 10, y: 0 }, { x: 15, y: 5 }, { x: 10, y: 10 }, { x: 5, y: 5 }]), 25, 1e-9, '菱形一半在內');
+  // KC（BNP 前兩欄是母號、子號）：地號標籤為「母號-子號」
+  const kc = Core.datasetFromKC({ coa: 'KC\n    1 2706000.000000002220000.00000000\n    2 2706000.000000002220010.00000000\n    3 2706010.000000002220010.00000000\n',
+    bnp: 'KC\n  48  15  1   3     1     2     3\n  48   0  1   3     1     2     3\n', par: null });
+  assert.deepEqual(kc.parcels.map(p => p.label), ['48-15', '48']); assert.deepEqual(Core.parcelNo(kc.parcels[0]), { m: 48, c: 15 });
+}
 console.log('SYNTHETIC OK');
