@@ -1485,7 +1485,8 @@ function blPanel() {
   const cov = l => l.map(h => `${esc(h.label)}（${h.area.toFixed(0)}）`).join('、') || '—';
   const sec = (title, open, head, rows) => rows.length ? `<details ${open ? 'open' : ''} style="margin:4px 0"><summary><b>${title}</b>（${rows.length}）</summary><table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></details>` : '';
   $('blList').innerHTML =
-    sec('遺漏：接圖前有、目前的圖沒有', true, ['地號', '登記㎡', '接圖前㎡', '在圖內', '現屬（㎡）'], r.missing.map((m, i) => `<tr data-bl="missing:${i}" style="cursor:pointer"><td><b>${esc(m.label)}</b></td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(0)}%</td><td class="small">${cov(m.cover)}</td></tr>`)) +
+    (r.missing.length ? `<div class="row small" style="margin:4px 0"><button class="btn primary" id="btnBlFixAll" title="依接圖前界址從蓋住它的未登記地切出，建回原地號（登記面積照接圖前）；可一次復原">全部修復（${r.missing.length}）</button><span class="muted">只從未登記地（9000 號以上）切；位置上有登記地就不做，請人工處理</span></div>` : '') +
+    sec('遺漏：接圖前有、目前的圖沒有', true, ['地號', '登記㎡', '接圖前㎡', '在圖內', '現屬（㎡）', ''], r.missing.map((m, i) => `<tr data-bl="missing:${i}" style="cursor:pointer"><td><b>${esc(m.label)}</b></td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(0)}%</td><td class="small">${cov(m.cover)}</td><td><button class="btn" data-blfix="${i}" title="依接圖前界址從未登記地切出，建回 ${esc(m.label)}">修復</button></td></tr>`)) +
     sec(`面積較差超過 ${r.opt.ratio} 倍公差`, true, ['地號', '登記㎡', '現面積㎡', '較差㎡', '倍數', '接圖前倍數', '原因'], r.flagged.map(x => `<tr data-bl="par:${x.idx}" style="cursor:pointer"><td>${esc(x.label)}</td><td>${n(x.reg, 0)}</td><td>${n(x.area)}</td><td>${x.diff >= 0 ? '+' : ''}${n(x.diff)}</td><td><b>${n(x.ratio)}</b></td><td>${x.refRatio == null ? '' : n(x.refRatio) + (x.pieces > 1 ? `<span class="muted">（${x.pieces} 塊）</span>` : '')}</td><td style="color:${BL_CAUSE[x.cause] || 'inherit'}">${x.cause}</td></tr>`)) +
     sec('部分在區內（只有一部分落在目前的圖內，請確認區界）', false, ['地號', '登記㎡', '接圖前㎡', '在圖內', '區內部分現屬（㎡）'], r.partial.map((m, i) => `<tr data-bl="partial:${i}" style="cursor:pointer"><td>${esc(m.label)}</td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(1)}%</td><td class="small">${cov(m.cover)}</td></tr>`)) +
     sec('登記地被未登記地佔用（超過該宗公差）', false, ['地號', '登記㎡', '被佔㎡', '公差㎡', '佔用的未登記地（㎡）'], r.occupied.map(o => `<tr data-bl="par:${o.idx}" style="cursor:pointer"><td>${esc(o.label)}</td><td>${n(o.reg, 0)}</td><td>${n(o.occ)}</td><td>${n(o.tol)}</td><td class="small">${cov(o.cover)}</td></tr>`)) +
@@ -1518,7 +1519,21 @@ $('btnBlRun').onclick = () => { try { const r = blRun(); msg(`比對完成：遺
 $('btnBlCsv').onclick = () => download(caseBase() + '_接圖前比對.csv', '﻿' + Core.baselineCsv(S.bl.res), 'text/csv;charset=utf-8');
 $('chkBlMap').onchange = draw;
 $('blSets').addEventListener('click', e => { const b = e.target.closest('[data-blrm]'); if (!b) return; S.bl.sets.splice(+b.dataset.blrm, 1); S.bl.res = null; blPanel(); refresh(); });
-$('blList').addEventListener('click', e => { const tr = e.target.closest('tr[data-bl]'); if (!tr) return; const [k, i] = tr.dataset.bl.split(':'); blFocus(k, +i); });
+// 遺漏地號一鍵修復：依接圖前界址從蓋住它的未登記地切出、建回原地號；全部同一步復原，做完重新比對
+function blFix(items, ask = true) {
+  if (!S.ds || !S.bl.res) throw new Error('請先比對'); if (!items.length) return { restored: [], failed: [] };
+  if (ask && !confirm(`依接圖前界址把 ${items.map(m => m.label).join('、')} 從蓋住它的未登記地切出，建回原地號（登記面積照接圖前）？\n只從未登記地切；位置上有登記地就不做。可一次復原。`)) return null;
+  const deltas = [], restored = [], failed = [];
+  for (const m of items) { try { const x = Core.restoreMissing(S.ds, m); deltas.push(x.delta); restored.push({ label: x.label, area: x.area, from: x.from.map(f => f.label), pieces: x.pieces, deleted: x.deleted, added: x.added.length, hole: x.hole }); } catch (err) { failed.push({ label: m.label, reason: err.message }); } }
+  if (deltas.length) pushMulti(deltas, `復原遺漏地號 ${restored.map(x => x.label).join('、')}`);
+  blRun(); clearSel(); for (const x of restored) { const p = S.ds.parcels.find(q => !q.deleted && q.label === x.label); if (p) S.sel.par.add(p.idx); } refresh();
+  msg((restored.length ? `已復原 ${restored.map(x => `${x.label}（${x.area.toFixed(2)} m²，取自 ${x.from.join('、')}${x.pieces.length ? `；未登記地剩下的另一塊編為 ${x.pieces.join('、')}` : ''}${x.deleted.length ? `；${x.deleted.join('、')} 整宗切完已刪除` : ''}）`).join('；')}` : '沒有復原任何地號') +
+    (failed.length ? `。未修復：${failed.map(f => `${f.label}（${f.reason}）`).join('；')}` : '') + (restored.length ? '。可復原；輸出完整案件資料夾時 D14、D13、D11、D21 會一併更新' : ''));
+  return { restored, failed };
+}
+$('blList').addEventListener('click', e => { const fx = e.target.closest('[data-blfix]'); if (fx) { try { blFix([S.bl.res.missing[+fx.dataset.blfix]]); } catch (err) { msg(err.message); } return; }
+  if (e.target.closest('#btnBlFixAll')) { try { blFix(S.bl.res.missing.slice()); } catch (err) { msg(err.message); } return; }
+  const tr = e.target.closest('tr[data-bl]'); if (!tr) return; const [k, i] = tr.dataset.bl.split(':'); blFocus(k, +i); });
 $('dlgBl').addEventListener('close', () => { S.bl.focus = null; draw(); });
 const nbArgs = () => S.nb.map(n => ({ name: n.name, ds: n.ds, authoritative: n.authoritative }));
 const seamOpts = (o = {}) => { const v = (id, k) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x >= 0 ? x : Core.SEAM_DEFAULT[k]; };
@@ -1937,6 +1952,7 @@ const api = {
   addNeighbor: ({ files = [] } = {}) => loadNeighbors(files.map(toFile)),
   // ── 接圖前比對（MCP）：addBaseline（每次一組，可多個資料夾）→ compareBaseline（遺漏＋面積超限）→ getBaselineReport ──
   addBaseline: ({ files = [] } = {}) => loadBaseline(files.map(toFile)),
+  restoreMissing: ({ labels } = {}) => { if (!S.bl.res) blRun(); const all = S.bl.res.missing, pick = labels ? all.filter(m => labels.map(String).includes(m.label)) : all.slice(); return blFix(pick, false); },
   clearBaseline: () => { S.bl = { sets: [], res: null, focus: null }; refresh(); return { sets: 0 }; },
   compareBaseline: (o = {}) => { const r = blRun(o); return api.getBaselineReport(); },
   getBaselineReport: () => { const r = S.bl.res; if (!r) return null; const strip = l => l.map(({ rings, ...x }) => x);
