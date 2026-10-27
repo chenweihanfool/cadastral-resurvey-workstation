@@ -25,6 +25,7 @@ const S = {
   printing: false,
   style: null,                             // 圖層與樣式（見 STYLE_DEF）
   clean: null,                             // 清理預覽（圖上標示將被刪的點）
+  bl: { sets: [], res: null, focus: null }, // 接圖前比對：參考圖資各組 [{name, ds:[資料集]}]、比對結果、目前聚焦的項目
 };
 
 // ── 座標轉換 ───────────────────────────────────────────────────────────────
@@ -517,6 +518,7 @@ function render() {
     if (S.clean && !S.printing) {   // 清理預覽：將被刪的點（橘＝沒有宗地使用、紫＝直線多餘）
       ctx.lineWidth = 2; for (const q of S.clean.pts) { const sx = toSx(q.x), sy = toSy(q.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue; ctx.strokeStyle = q.add ? '#2f9e44' : q.u ? '#f08c00' : '#9c36b5'; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 7); if (q.add) { ctx.moveTo(sx - 5, sy); ctx.lineTo(sx + 5, sy); ctx.moveTo(sx, sy - 5); ctx.lineTo(sx, sy + 5); } else { ctx.moveTo(sx - 5, sy - 5); ctx.lineTo(sx + 5, sy + 5); ctx.moveTo(sx + 5, sy - 5); ctx.lineTo(sx - 5, sy + 5); } ctx.stroke(); }
     }
+    if ($('dlgBl').open && S.bl.res && $('chkBlMap').checked && !S.printing) drawBaseline(ds);
     if ($('dlgUnreg').open && S.unreg && !S.printing) {   // 未登記地：黃＝未登記、橘＝需要分割（超過點數或太細長）、紅＝空隙
       ctx.save(); const n = unN();
       for (const u of S.unreg.parcels) { const p = ds.parcels[u.idx]; if (!p || p.deleted) continue; ctx.fillStyle = u.over ? 'rgba(240,140,0,.35)' : 'rgba(250,210,0,.25)'; tracePoly(ds, p.ids); ctx.fill(); }
@@ -1079,13 +1081,13 @@ const actDis = (n, v) => document.querySelectorAll(`[data-act="${n}"]`).forEach(
 function openPanel(id) {
   document.querySelectorAll('dialog.fp[open]').forEach(d => { if (d.id !== id) d.close(); });
   const d = $(id); if (!d.open) d.show();
-  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); refresh();
+  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); else if (id === 'dlgBl') blPanel(); refresh();
 }
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
   undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
-  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'),
+  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'),
   help: () => $('help').showModal(),
 };
 document.addEventListener('click', e => {
@@ -1269,7 +1271,7 @@ async function loadFiles(files) {
     msg('缺少必要檔案：需要 D14+D13，或 COA+BNP，或 D2C+D2B；控制點用 CTL/CT2/D20；現況點請用「匯入現況點」'); return false;
   }
   S.caseFiles = caseFolderFiles(files, by.d14 || by.coa || by.d2c);
-  S.seam = null; S.clean = null; S.ringMark = null; S.redraw = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
+  S.bl.res = null; S.bl.focus = null; S.seam = null; S.clean = null; S.ringMark = null; S.redraw = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
   fit(); refresh();
   msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
   return true;
@@ -1441,6 +1443,83 @@ const NB_COLORS = ['#e8590c', '#1c7ed6', '#9c36b5', '#2f9e44', '#c2255c', '#b089
 const SEAM_COLOR = { coincide: '#1a7f37', overlap: '#d1242f', gap: '#f08c00', missing_in_main: '#9c36b5', unmatched: '#9c36b5' };
 const SEAM_TEXT = { coincide: '重合', overlap: '重疊', gap: '脫開', missing_in_main: '主區缺點', unmatched: '無對應' };
 const nbDirOf = f => { const p = f.webkitRelativePath || f._path || ''; return p.slice(0, p.lastIndexOf('/') + 1); };
+// ── 接圖前比對：參考圖資（各組可含多個資料夾）、比對、表格與圖上標記 ──────────────
+async function loadBaseline(files) {
+  const groups = new Map();
+  for (const f of files) {
+    const m = /^(.*)\.([^.]+)$/.exec(f.name); if (!m) continue; const x = m[2].toLowerCase(); if (!/^(d11|d12|d13|d14|coa|bnp|par)$/.test(x)) continue;
+    const dir = nbDirOf(f), key = dir + m[1].toLowerCase(); let g = groups.get(key); if (!g) groups.set(key, g = { name: (dir.replace(/\/$/, '').split('/').pop() || m[1]), f: {} });
+    if (!g.f[x]) g.f[x] = f;
+  }
+  const ds = [], skipped = [];
+  for (const g of groups.values()) {
+    try {
+      let d = null;
+      if (g.f.d14 && g.f.d13) d = Core.datasetFromD({ pts: Core.parseDbf(await readBuf(g.f.d14)), bnd: Core.parseDbf(await readBuf(g.f.d13)), par: g.f.d11 ? Core.parseDbf(await readBuf(g.f.d11)) : null, d12: g.f.d12 ? Core.parseDbf(await readBuf(g.f.d12)) : null, name: g.name, source: 'D 檔' });
+      else if (g.f.coa && g.f.bnp) d = Core.datasetFromKC({ coa: await readText(g.f.coa), bnp: await readText(g.f.bnp), par: g.f.par ? await readText(g.f.par) : null, name: g.name, source: 'COA/BNP/PAR' });
+      if (d && d.parcels.length) ds.push(d); else skipped.push(g.name);
+    } catch (e) { skipped.push(g.name + '（' + e.message + '）'); }
+  }
+  if (!ds.length) { msg('沒有可用的接圖前圖資（需要 D14＋D13（＋D11）或 COA＋BNP（＋PAR））' + (skipped.length ? '：' + skipped.join('、') : '')); return { added: 0, skipped }; }
+  const top = files.map(f => (f.webkitRelativePath || f._path || '').split('/')[0]).find(Boolean);
+  const set = { name: ds.length > 1 ? `${top || ds[0].name}（${ds.length} 幅）` : ds[0].name, ds };
+  S.bl.sets.push(set); S.bl.res = null; blPanel(); refresh();
+  msg(`已加入接圖前圖資「${set.name}」：${ds.reduce((t, d) => t + d.parcels.length, 0)} 宗` + (skipped.length ? `；略過 ${skipped.join('、')}` : ''));
+  return { added: ds.length, name: set.name, skipped };
+}
+const blOpts = () => { const v = (id, d) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x >= 0 ? x : d; }; return { a: v('blA', 0.25), b: v('blB', 0.07), ratio: v('blRatio', 5) }; };
+function blRun(o = {}) {
+  if (!S.ds) throw new Error('請先開啟目前的圖（接完圖的地籍圖）'); if (!S.bl.sets.length) throw new Error('請先加入接圖前圖資');
+  S.bl.res = Core.compareBaseline(S.ds, S.bl.sets.map(s => s.ds), { ...blOpts(), ...o }); S.bl.focus = null; blPanel(); refresh(); return S.bl.res;
+}
+const BL_CAUSE = { '接圖前即不符': '#8a5a00', '接圖後產生': '#d1242f', '跨分幅，請人工判斷': '#6741d9', '接圖前無此宗': '#6741d9' };
+function blPanel() {
+  $('blSets').innerHTML = S.bl.sets.length ? S.bl.sets.map((s, i) => `<div class="row" style="margin:2px 0"><b>${esc(s.name)}</b><span class="muted">${s.ds.reduce((t, d) => t + d.parcels.length, 0)} 宗（${esc(s.ds[0].source)}）</span><button class="btn" data-blrm="${i}" title="移除這組">✕</button></div>`).join('') : '<span class="muted">尚未加入</span>';
+  const r = S.bl.res; $('btnBlCsv').disabled = !r; $('btnBlRun').disabled = !S.ds || !S.bl.sets.length;
+  if (!r) { $('blSum').textContent = !S.ds ? '請先開啟目前的圖' : S.bl.sets.length ? '按「開始比對」' : ''; $('blList').innerHTML = ''; return; }
+  const f = r.fit, n = (v, d = 1) => (v == null ? '' : v.toFixed(d)), causes = {}; for (const x of r.flagged) causes[x.cause] = (causes[x.cause] || 0) + 1;
+  $('blSum').innerHTML = `接圖前 ${r.refParcels} 宗（併回分幅後 ${r.refGroups} 個地號）；目前的圖 ${r.curParcels} 宗。` +
+    (f ? `坐標轉換：${f.used}/${f.total} 宗同地號擬合，殘差中位數 ${f.median.toFixed(2)} m。` : '坐標未轉換（同一坐標系統，或可擬合的同地號太少）。') +
+    `<br><b style="color:${r.missing.length ? '#d1242f' : 'inherit'}">遺漏 ${r.missing.length}</b>　部分在區內 ${r.partial.length}　被未登記地佔用 ${r.occupied.length}　接圖前沒有 ${r.extra.length}　<b style="color:${r.flagged.length ? '#d1242f' : 'inherit'}">面積超過 ${r.opt.ratio} 倍公差 ${r.flagged.length}</b>` +
+    (r.flagged.length ? '（' + Object.entries(causes).map(([k, v]) => `${k} ${v}`).join('、') + '）' : '');
+  const cov = l => l.map(h => `${esc(h.label)}（${h.area.toFixed(0)}）`).join('、') || '—';
+  const sec = (title, open, head, rows) => rows.length ? `<details ${open ? 'open' : ''} style="margin:4px 0"><summary><b>${title}</b>（${rows.length}）</summary><table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></details>` : '';
+  $('blList').innerHTML =
+    sec('遺漏：接圖前有、目前的圖沒有', true, ['地號', '登記㎡', '接圖前㎡', '在圖內', '現屬（㎡）'], r.missing.map((m, i) => `<tr data-bl="missing:${i}" style="cursor:pointer"><td><b>${esc(m.label)}</b></td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(0)}%</td><td class="small">${cov(m.cover)}</td></tr>`)) +
+    sec(`面積較差超過 ${r.opt.ratio} 倍公差`, true, ['地號', '登記㎡', '現面積㎡', '較差㎡', '倍數', '接圖前倍數', '原因'], r.flagged.map(x => `<tr data-bl="par:${x.idx}" style="cursor:pointer"><td>${esc(x.label)}</td><td>${n(x.reg, 0)}</td><td>${n(x.area)}</td><td>${x.diff >= 0 ? '+' : ''}${n(x.diff)}</td><td><b>${n(x.ratio)}</b></td><td>${x.refRatio == null ? '' : n(x.refRatio) + (x.pieces > 1 ? `<span class="muted">（${x.pieces} 塊）</span>` : '')}</td><td style="color:${BL_CAUSE[x.cause] || 'inherit'}">${x.cause}</td></tr>`)) +
+    sec('部分在區內（只有一部分落在目前的圖內，請確認區界）', false, ['地號', '登記㎡', '接圖前㎡', '在圖內', '區內部分現屬（㎡）'], r.partial.map((m, i) => `<tr data-bl="partial:${i}" style="cursor:pointer"><td>${esc(m.label)}</td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(1)}%</td><td class="small">${cov(m.cover)}</td></tr>`)) +
+    sec('登記地被未登記地佔用（超過該宗公差）', false, ['地號', '登記㎡', '被佔㎡', '公差㎡', '佔用的未登記地（㎡）'], r.occupied.map(o => `<tr data-bl="par:${o.idx}" style="cursor:pointer"><td>${esc(o.label)}</td><td>${n(o.reg, 0)}</td><td>${n(o.occ)}</td><td>${n(o.tol)}</td><td class="small">${cov(o.cover)}</td></tr>`)) +
+    sec('接圖前的未登記地（目前另編號，不算遺漏）', false, ['地號', '接圖前㎡', '現屬（㎡）'], r.unreg.map((m, i) => `<tr data-bl="unreg:${i}" style="cursor:pointer"><td>${esc(m.label)}</td><td>${n(m.area, 0)}</td><td class="small">${cov(m.cover)}</td></tr>`)) +
+    sec('目前的圖有、接圖前沒有（非未登記地）', false, ['地號'], r.extra.map(e => `<tr data-bl="par:${e.idx}" style="cursor:pointer"><td>${esc(e.label)}</td></tr>`)) +
+    (!r.missing.length && !r.flagged.length ? '<div class="small" style="color:#1a7f37">沒有遺漏，也沒有面積超限的宗地</div>' : '');
+}
+function blFocus(kind, i) {
+  if (kind === 'par') { clearSel(); S.sel.par.add(i); zoomTo([i]); S.bl.focus = null; refresh(); const p = S.ds.parcels[i]; msg(`${p.label}：面積 ${p.area.toFixed(2)} m²` + (p.areaReg != null ? `　登記 ${p.areaReg.toFixed(2)} m²` : '')); return; }
+  const m = S.bl.res[kind][i]; S.bl.focus = m; clearSel(); for (const h of m.cover) S.sel.par.add(h.idx);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const r of m.rings) for (const q of r) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
+  const g = Math.max(5, 0.4 * Math.max(x1 - x0, y1 - y0)); fit({ x0: x0 - g, x1: x1 + g, y0: y0 - g, y1: y1 + g }); refresh();
+  msg(`接圖前 ${m.label}（${m.area.toFixed(1)} m²，${(m.inside * 100).toFixed(0)}% 在目前的圖內）` + (m.cover.length ? '，現屬 ' + m.cover.map(h => h.label).join('、') + '（已選取）' : ''));
+}
+function drawBaseline(ds) {
+  const r = S.bl.res, ring = q => { ctx.beginPath(); q.forEach((p, k) => k ? ctx.lineTo(toSx(p.x), toSy(p.y)) : ctx.moveTo(toSx(p.x), toSy(p.y))); ctx.closePath(); };
+  ctx.save();
+  ctx.strokeStyle = '#d6336c'; ctx.lineWidth = 2.5; for (const x of r.flagged) { const p = ds.parcels[x.idx]; if (p && !p.deleted) { ring(p.ids.map(id => ds.points.get(id))); ctx.stroke(); } }
+  const layer = (list, fill, stroke) => { ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); for (const m of list) for (const q of m.rings) { ring(q); ctx.fill(); ctx.stroke(); } ctx.setLineDash([]); };
+  layer(r.partial, 'rgba(240,140,0,.18)', '#f08c00'); layer(r.missing, 'rgba(209,36,47,.35)', '#d1242f');
+  if (S.bl.focus) { ctx.strokeStyle = '#d1242f'; ctx.lineWidth = 4; for (const q of S.bl.focus.rings) { ring(q); ctx.stroke(); } }
+  if (S.view.s > 0.5) { ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#d1242f';
+    for (const m of r.missing) { const q = m.rings[0]; let sx = 0, sy = 0; for (const p of q) { sx += p.x; sy += p.y; } ctx.fillText('遺漏 ' + m.label, toSx(sx / q.length), toSy(sy / q.length)); } }
+  ctx.restore();
+}
+$('btnBlDir').onclick = () => $('blDir').click(); $('btnBlAdd').onclick = () => $('blIn').click();
+$('blIn').onchange = e => { loadBaseline([...e.target.files]); e.target.value = ''; }; $('blDir').onchange = e => { loadBaseline([...e.target.files]); e.target.value = ''; };
+$('btnBlClear').onclick = () => { S.bl = { sets: [], res: null, focus: null }; blPanel(); refresh(); };
+$('btnBlRun').onclick = () => { try { const r = blRun(); msg(`比對完成：遺漏 ${r.missing.length}、面積超限 ${r.flagged.length}`); } catch (e) { msg(e.message); } };
+$('btnBlCsv').onclick = () => download(caseBase() + '_接圖前比對.csv', '﻿' + Core.baselineCsv(S.bl.res), 'text/csv;charset=utf-8');
+$('chkBlMap').onchange = draw;
+$('blSets').addEventListener('click', e => { const b = e.target.closest('[data-blrm]'); if (!b) return; S.bl.sets.splice(+b.dataset.blrm, 1); S.bl.res = null; blPanel(); refresh(); });
+$('blList').addEventListener('click', e => { const tr = e.target.closest('tr[data-bl]'); if (!tr) return; const [k, i] = tr.dataset.bl.split(':'); blFocus(k, +i); });
+$('dlgBl').addEventListener('close', () => { S.bl.focus = null; draw(); });
 const nbArgs = () => S.nb.map(n => ({ name: n.name, ds: n.ds, authoritative: n.authoritative }));
 const seamOpts = (o = {}) => { const v = (id, k) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x >= 0 ? x : Core.SEAM_DEFAULT[k]; };
   return { tol: o.tol ?? v('seamTol', 'tol'), search: o.search ?? v('seamSearch', 'search'), snap: o.snap ?? v('seamSnap', 'snap') }; };
@@ -1856,6 +1935,13 @@ const api = {
   listNeighbors: () => S.nb.map(n => ({ name: n.name, source: n.ds.source, parcels: n.ds.parcels.length, points: n.ds.points.size, boundary_points: n.seg.vids.size, visible: n.visible, authoritative: n.authoritative, color: n.color })),
   // files: [{name:'KC1120.D14', base64:'…'} | {name:'KC1120.BNP', text:'…'}]，需 D14+D13（建議 D11、D12）或 COA+BNP
   addNeighbor: ({ files = [] } = {}) => loadNeighbors(files.map(toFile)),
+  // ── 接圖前比對（MCP）：addBaseline（每次一組，可多個資料夾）→ compareBaseline（遺漏＋面積超限）→ getBaselineReport ──
+  addBaseline: ({ files = [] } = {}) => loadBaseline(files.map(toFile)),
+  clearBaseline: () => { S.bl = { sets: [], res: null, focus: null }; refresh(); return { sets: 0 }; },
+  compareBaseline: (o = {}) => { const r = blRun(o); return api.getBaselineReport(); },
+  getBaselineReport: () => { const r = S.bl.res; if (!r) return null; const strip = l => l.map(({ rings, ...x }) => x);
+    return { ...r, missing: strip(r.missing), partial: strip(r.partial), unreg: strip(r.unreg), area: undefined, flagged: r.flagged, sets: S.bl.sets.map(s => s.name) }; },
+
   removeNeighbor: ({ name }) => { const i = S.nb.findIndex(n => n.name.toLowerCase() === String(name).toLowerCase()); if (i < 0) throw new Error('找不到鄰段 ' + name); S.nb.splice(i, 1); S.seam = null; refresh(); return api.listNeighbors(); },
   setNeighbor: ({ name, visible, authoritative }) => { const n = S.nb.find(n => n.name.toLowerCase() === String(name).toLowerCase()); if (!n) throw new Error('找不到鄰段 ' + name); if (visible != null) n.visible = !!visible; if (authoritative != null) n.authoritative = !!authoritative; refresh(); return api.listNeighbors(); },
   // 參數：tol 重合容差、search 搜尋距離、snap 吸附上限（公尺）；省略用畫面上的設定
