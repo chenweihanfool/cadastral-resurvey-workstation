@@ -611,4 +611,33 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
     bnp: 'KC\n  48  15  1   3     1     2     3\n  48   0  1   3     1     2     3\n', par: null });
   assert.deepEqual(kc.parcels.map(p => p.label), ['48-15', '48']); assert.deepEqual(Core.parcelNo(kc.parcels[0]), { m: 48, c: 15 });
 }
+// ── 遺漏地號復原：從未登記地切出、未登記地剩下的部分、地中地、遇到登記地停下且不留痕跡 ──
+{
+  const Y = 2706000, X = 222000, mk = () => {
+    const pts = rd(F_D14, [pt(1, Y, X), pt(2, Y, X + 100), pt(3, Y + 100, X + 100), pt(4, Y + 100, X), pt(5, Y, X + 200), pt(6, Y + 100, X + 200)]);
+    const bnd = rd(F_D13, [ring(336, 9001, 0, [1, 2, 3, 4]), ring(336, 7, 0, [2, 5, 6, 3])]);
+    const par = rd(F_D11, [{ SECTION_O: 336, PAR_O_M: 9001, PAR_O_C: 0, PAR_N_M: 9001, PAR_N_C: 0, SECTION_N: 336, AREA_OLD: 0, AREA_NEW: 1 }, { SECTION_O: 336, PAR_O_M: 7, PAR_O_C: 0, PAR_N_M: 7, PAR_N_C: 0, SECTION_N: 336, AREA_OLD: 1, AREA_NEW: 1 }]);
+    return { pts, bnd, par, ds: Core.datasetFromD({ pts, bnd, par }) };
+  };
+  const R = (x0, y0, x1, y1) => [{ x: X + x0, y: Y + y0 }, { x: X + x1, y: Y + y0 }, { x: X + x1, y: Y + y1 }, { x: X + x0, y: Y + y1 }];
+  // 1. 橫切整條（南北兩端貼著 9001 的邊，坐標偏 0.1 m）→ 9001 被切成東西兩塊，另一塊編新子號
+  let { ds, pts, bnd, par } = mk(); const sum0 = ds.parcels.reduce((t, p) => t + p.area, 0);
+  const x = Core.restoreMissing(ds, { label: '5-3', reg: 3990, rings: [R(20.1, -0.1, 60.1, 100.1)] });
+  near(x.area, 4000, 1e-6, '切出 40×100'); assert.deepEqual(x.from.map(f => f.label), ['9001']); assert.equal(x.pieces.length, 1);
+  const lab = l => ds.parcels.find(p => !p.deleted && p.label === l);
+  near(lab('9001').area + lab(x.pieces[0]).area, 6000, 1e-6); near(lab('7').area, 10000, 1e-9, '登記地不動'); assert.equal(lab('5-3').areaReg, 3990);
+  near(ds.parcels.filter(p => !p.deleted).reduce((t, p) => t + p.area, 0), sum0, 1e-6, '總面積不變');
+  assert.equal(Core.freeRegions(ds).length, 0); assert.deepEqual(Core.ringConflicts(ds), { cross: [], overlap: [] });
+  const ch = Core.changedDFiles(ds, { pts, bnd, par, lin: null }), b11 = Core.parseDbf(ch.files.d11.bytes), r53 = b11.rows.find(r => r.PAR_N_M === 5);
+  assert.ok(r53 && r53.PAR_N_C === 3 && Math.abs(r53.AREA_OLD - 0.399) < 1e-9, 'D11 新記錄帶登記面積');
+  Core.applyDelta(ds, x.delta, 'undo'); near(lab('9001').area, 10000, 1e-9); assert.ok(!lab('5-3'), '可復原');
+  // 2. 整個在 9001 內部 → 地中地
+  ({ ds } = mk()); const h = Core.restoreMissing(ds, { label: '8', reg: 400, rings: [R(30, 30, 50, 50)] });
+  assert.ok(h.hole); near(lab('8').area, 400, 1e-6); near(lab('9001').area, 9600, 1e-6, '外圈扣掉地中地');
+  // 3. 一半壓在登記地 7 上 → 不做，資料不變
+  ({ ds } = mk()); const before = JSON.stringify(ds.parcels.map(p => p.ids));
+  assert.throws(() => Core.restoreMissing(ds, { label: '9', reg: 100, rings: [R(80, 40, 120, 60)] }), /登記地/);
+  assert.equal(JSON.stringify(ds.parcels.map(p => p.ids)), before); assert.equal(ds.points.size, 6);
+  assert.throws(() => Core.restoreMissing(ds, { label: '7', rings: [R(10, 10, 20, 20)] }), /已存在/);
+}
 console.log('SYNTHETIC OK');

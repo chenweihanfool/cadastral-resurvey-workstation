@@ -40,6 +40,7 @@ select{border:1px solid var(--line);background:var(--bg);color:var(--ink);border
 label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
 table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
 th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+#blList td.small{white-space:normal;text-align:left;min-width:90px}
 #ringList td,#ringList th{text-align:left;vertical-align:top}#ringList td:nth-child(3){white-space:normal;min-width:220px}
 th:first-child,td:first-child{text-align:left} th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
 tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-child{box-shadow:inset 3px 0 var(--sel)}
@@ -223,7 +224,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div class="small muted" style="margin-top:2px">預設為 1/1,200 的係數（0.25、0.07）；其他比例尺請自行改係數。</div>
       <div class="row small" style="margin-top:6px"><button class="btn primary" id="btnBlRun">開始比對</button><button class="btn" id="btnBlCsv" disabled>報告 CSV</button><label class="chk"><input type="checkbox" id="chkBlMap" checked>圖上標記</label></div>
       <div id="blSum" class="small" style="margin:6px 0"></div>
-      <div id="blList" style="max-height:44vh;overflow:auto"></div>
+      <div id="blList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
       <div class="small muted" style="margin-top:4px">圖上：紅＝遺漏（接圖前有、現在沒有）、橘＝只有一部分在圖內的接圖前宗地、粉紅框＝面積超限。點表格一列可放大檢視。</div></section>
     </div></dialog>
 <dialog class="fp" id="dlgRef"><div class="fphead"><b>現況點參考線</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>現況點參考線</h2>
