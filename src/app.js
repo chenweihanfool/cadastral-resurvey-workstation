@@ -25,6 +25,7 @@ const S = {
   printing: false,
   style: null,                             // 圖層與樣式（見 STYLE_DEF）
   clean: null,                             // 清理預覽（圖上標示將被刪的點）
+  owner: null,                             // 所有權人（EXAM.MDB）：{name, ot（Core.ownerTables）, res（分析結果）}
   bl: { sets: [], res: null, focus: null }, // 接圖前比對：參考圖資各組 [{name, ds:[資料集]}]、比對結果、目前聚焦的項目
 };
 
@@ -519,6 +520,7 @@ function render() {
       ctx.lineWidth = 2; for (const q of S.clean.pts) { const sx = toSx(q.x), sy = toSy(q.y); if (sx < -8 || sy < -8 || sx > W + 8 || sy > H + 8) continue; ctx.strokeStyle = q.add ? '#2f9e44' : q.u ? '#f08c00' : '#9c36b5'; ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 7); if (q.add) { ctx.moveTo(sx - 5, sy); ctx.lineTo(sx + 5, sy); ctx.moveTo(sx, sy - 5); ctx.lineTo(sx, sy + 5); } else { ctx.moveTo(sx - 5, sy - 5); ctx.lineTo(sx + 5, sy + 5); ctx.moveTo(sx + 5, sy - 5); ctx.lineTo(sx - 5, sy + 5); } ctx.stroke(); }
     }
     if ($('dlgBl').open && S.bl.res && $('chkBlMap').checked && !S.printing) drawBaseline(ds);
+    if ($('dlgOwn').open && S.owner && S.owner.res && $('chkOwnMap').checked) drawOwners(ds);
     if ($('dlgUnreg').open && S.unreg && !S.printing) {   // 未登記地：黃＝未登記、橘＝需要分割（超過點數或太細長）、紅＝空隙
       ctx.save(); const n = unN();
       for (const u of S.unreg.parcels) { const p = ds.parcels[u.idx]; if (!p || p.deleted) continue; ctx.fillStyle = u.over ? 'rgba(240,140,0,.35)' : 'rgba(250,210,0,.25)'; tracePoly(ds, p.ids); ctx.fill(); }
@@ -661,6 +663,7 @@ function lineList() {
       `<td>${st.area == null ? '—' : st.area.toFixed(2)}</td><td><label class="chk"><input type="checkbox" class="lclosed" ${l.closed ? 'checked' : ''}>閉</label></td><td><button class="btn lzoom">看</button> <button class="btn ldel">刪</button></td></tr>`;
   }).join('');
 }
+let ownKeyState = '';
 function panel() {
   const ds = S.ds;
   const st = S.st = ds ? Core.structSummary(ds) : { added: 0, removed: 0, rings: 0 }, structEd = st.added + st.removed + st.rings > 0, edited = !!ds && (structEd || Core.movedPoints(ds).length > 0);
@@ -668,6 +671,7 @@ function panel() {
   actDis('undo', !S.undo.length); actDis('redo', !S.redo.length); actDis('reset', !edited); actDis('delpt', !S.sel.pt.size); actDis('err', !ds);
   $('btnExpD14').disabled = !ds || !S.dbf.pts || !edited; $('btnExpD13').disabled = !ds || !S.dbf.bnd || !st.rings; $('btnExpD12').disabled = !ds || !st.holes; $('btnExpCase').disabled = !ds || !S.dbf.pts; $('btnErr').disabled = !ds;
   $('chkDeltaAll').checked = S.style.delta.all;
+  if (S.owner && S.ds) { const k = S.undo.length + ':' + S.redo.length; if (k !== ownKeyState) { ownKeyState = k; ownRun(); if ($('dlgOwn').open) ownPanel(); } }
   ptPanel(); if ($('dlgUnreg').open) { const k = S.undo.length + ':' + S.redo.length; if (k !== unKey) { unKey = k; unregPanel(); } } if ($('dlgRing').open) { const k = S.undo.length + ':' + S.redo.length; if (k !== ringKey) { ringKey = k; ringPanel(); } } if ($('dlgClean').open) { const k = S.undo.length + ':' + S.redo.length + ':' + (S.ds && S.ds.points.size); if (k !== cleanKey) { cleanKey = k; cleanSoon(); } }
   $('btnExpJson').disabled = !ds && !S.survey.points.size;
   $('drop').style.display = (ds || S.survey.points.size || S.nb.length || S.img.length) ? 'none' : 'flex';
@@ -683,6 +687,7 @@ function panel() {
   if (S.sel.pt.size === 1 && !S.sel.edge.size && !S.sel.par.size) { const p = ds.points.get([...S.sel.pt][0]); info += NL + `點 ${p.id}　N ${p.y.toFixed(3)}　E ${p.x.toFixed(3)}`; }
   if (S.sel.edge.size === 1 && !S.sel.pt.size && !S.sel.par.size) { const e = ds.edges.get([...S.sel.edge][0]), a = ds.points.get(e.a), b = ds.points.get(e.b); info += NL + `線 ${e.a}–${e.b}　長 ${Math.hypot(a.x - b.x, a.y - b.y).toFixed(3)} m`; }
   $('selInfo').innerHTML = info.split(NL).map(s => `<div>${s}</div>`).join('');
+  if (S.owner && S.sel.par.size === 1) $('selInfo').insertAdjacentHTML('beforeend', ownerInfoHtml(ds.parcels[[...S.sel.par][0]]));
   { const sel = [...S.sel.par].map(i => ds.parcels[i]).filter(p => !p.deleted), b = $('btnDelHole'); b.hidden = !sel.length; b.textContent = sel.length === 1 && (sel[0].containers || []).length ? '刪除地中地（併入外圈）' : sel.length > 1 ? `刪除 ${sel.length} 宗` : '刪除宗地'; $('btnMergeSel').hidden = sel.length < 2; $('btnMergeSel').textContent = `合併 ${sel.length} 宗`; }
   $('pivotInfo').textContent = S.pivot ? `樞紐：N ${S.pivot.y.toFixed(3)}  E ${S.pivot.x.toFixed(3)}（自訂）` : '樞紐：移動對象的中心（Alt+點擊可自訂）';
   // 較差表
@@ -1081,13 +1086,13 @@ const actDis = (n, v) => document.querySelectorAll(`[data-act="${n}"]`).forEach(
 function openPanel(id) {
   document.querySelectorAll('dialog.fp[open]').forEach(d => { if (d.id !== id) d.close(); });
   const d = $(id); if (!d.open) d.show();
-  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); else if (id === 'dlgBl') blPanel(); refresh();
+  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); else if (id === 'dlgBl') blPanel(); else if (id === 'dlgOwn') ownPanel(); refresh();
 }
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
   undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
-  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'),
+  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'),
   help: () => $('help').showModal(),
 };
 document.addEventListener('click', e => {
@@ -1230,11 +1235,12 @@ const extOf = n => (n.split('.').pop() || '').toLowerCase();
 const readBuf = f => f.arrayBuffer().then(b => new Uint8Array(b));
 const readText = f => readBuf(f).then(u => { try { return new TextDecoder('utf-8', { fatal: true }).decode(u); } catch { return new TextDecoder('big5').decode(u); } });
 async function loadFiles(files) {
-  const by = {}, dup = [], texts = [], macs = [], ctlFiles = [], imgs = [];
+  const by = {}, dup = [], texts = [], macs = [], ctlFiles = [], imgs = [], mdbs = [];
   for (const f of files) {
     const x = extOf(f.name);
     if (/^(txt|csv|xyz|pts|dat|asc)$/.test(x)) { texts.push(f); continue; }
     if (IMG_RE.test(x) || WLD_RE.test(x)) { imgs.push(f); continue; }
+    if (x === 'mdb') { mdbs.push(f); continue; }
     if (x === 'mac') { macs.push(f); continue; }
     if (/^(ctl|ct2|cen|l02)$/.test(x)) { ctlFiles.push(f); continue; }
     if (!/^(d11|d12|d13|d14|d20|d21|d2b|d2c|d2d|coa|bnp|par)$/.test(x)) continue; if (by[x]) dup.push(f.name); else by[x] = f;
@@ -1263,6 +1269,7 @@ async function loadFiles(files) {
     names.d14 = by.d2c.name; names.d13 = by.d2b.name; names.d2c = by.d2c.name; names.d2b = by.d2b.name;
   }
   if (imgs.length) await loadImages(imgs);
+  if (!ds && mdbs.length && S.ds) { await loadOwners(mdbs[0]); return true; }
   if (!ds) {
     if (imgs.length) return true;
     if (macs.length) { openImport(await readText(macs[0]), macs[0].name, 'mac'); return true; }
@@ -1272,8 +1279,9 @@ async function loadFiles(files) {
   }
   S.caseFiles = caseFolderFiles(files, by.d14 || by.coa || by.d2c);
   S.bl.res = null; S.bl.focus = null; S.seam = null; S.clean = null; S.ringMark = null; S.redraw = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
+  S.owner = null; let ownMsg = ''; if (mdbs.length) { const r = await loadOwners(mdbs.find(f => /exam/i.test(f.name)) || mdbs[0], true); ownMsg = r ? `；登記資料 ${r}` : ''; }
   fit(); refresh();
-  msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
+  msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + ownMsg + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
   return true;
 }
 // 案件資料夾：與主要 D 檔同一個資料夾（含子資料夾）的所有檔案，供「輸出完整案件資料夾」原樣複製。只選了個別檔案時 partial＝true
@@ -1486,7 +1494,7 @@ function blPanel() {
   const sec = (title, open, head, rows) => rows.length ? `<details ${open ? 'open' : ''} style="margin:4px 0"><summary><b>${title}</b>（${rows.length}）</summary><table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></details>` : '';
   $('blList').innerHTML =
     (r.missing.length ? `<div class="row small" style="margin:4px 0"><button class="btn primary" id="btnBlFixAll" title="依接圖前界址從蓋住它的未登記地切出，建回原地號（登記面積照接圖前）；可一次復原">全部修復（${r.missing.length}）</button><span class="muted">只從未登記地（9000 號以上）切；位置上有登記地就不做，請人工處理</span></div>` : '') +
-    sec('遺漏：接圖前有、目前的圖沒有', true, ['地號', '登記㎡', '接圖前㎡', '在圖內', '現屬（㎡）', ''], r.missing.map((m, i) => `<tr data-bl="missing:${i}" style="cursor:pointer"><td><b>${esc(m.label)}</b></td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(0)}%</td><td class="small">${cov(m.cover)}</td><td><button class="btn" data-blfix="${i}" title="依接圖前界址從未登記地切出，建回 ${esc(m.label)}">修復</button></td></tr>`)) +
+    sec('遺漏：接圖前有、目前的圖沒有', true, ['地號', '登記㎡', '接圖前㎡', '在圖內', '現屬（㎡）', ''], r.missing.map((m, i) => `<tr data-bl="missing:${i}" style="cursor:pointer"><td><b>${esc(m.label)}</b></td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(0)}%</td><td class="small">${cov(m.cover)}${blRegNote(m.label)}</td><td><button class="btn" data-blfix="${i}" title="依接圖前界址從未登記地切出，建回 ${esc(m.label)}">修復</button></td></tr>`)) +
     sec(`面積較差超過 ${r.opt.ratio} 倍公差`, true, ['地號', '登記㎡', '現面積㎡', '較差㎡', '倍數', '接圖前倍數', '原因'], r.flagged.map(x => `<tr data-bl="par:${x.idx}" style="cursor:pointer"><td>${esc(x.label)}</td><td>${n(x.reg, 0)}</td><td>${n(x.area)}</td><td>${x.diff >= 0 ? '+' : ''}${n(x.diff)}</td><td><b>${n(x.ratio)}</b></td><td>${x.refRatio == null ? '' : n(x.refRatio) + (x.pieces > 1 ? `<span class="muted">（${x.pieces} 塊）</span>` : '')}</td><td style="color:${BL_CAUSE[x.cause] || 'inherit'}">${x.cause}</td></tr>`)) +
     sec('部分在區內（只有一部分落在目前的圖內，請確認區界）', false, ['地號', '登記㎡', '接圖前㎡', '在圖內', '區內部分現屬（㎡）'], r.partial.map((m, i) => `<tr data-bl="partial:${i}" style="cursor:pointer"><td>${esc(m.label)}</td><td>${n(m.reg, 0)}</td><td>${n(m.area, 0)}</td><td>${(m.inside * 100).toFixed(1)}%</td><td class="small">${cov(m.cover)}</td></tr>`)) +
     sec('登記地被未登記地佔用（超過該宗公差）', false, ['地號', '登記㎡', '被佔㎡', '公差㎡', '佔用的未登記地（㎡）'], r.occupied.map(o => `<tr data-bl="par:${o.idx}" style="cursor:pointer"><td>${esc(o.label)}</td><td>${n(o.reg, 0)}</td><td>${n(o.occ)}</td><td>${n(o.tol)}</td><td class="small">${cov(o.cover)}</td></tr>`)) +
@@ -1522,6 +1530,8 @@ $('blSets').addEventListener('click', e => { const b = e.target.closest('[data-b
 // 遺漏地號一鍵修復：依接圖前界址從蓋住它的未登記地切出、建回原地號；全部同一步復原，做完重新比對
 function blFix(items, ask = true) {
   if (!S.ds || !S.bl.res) throw new Error('請先比對'); if (!items.length) return { restored: [], failed: [] };
+  const notReg = S.owner ? items.filter(m => !blInRegister(m.label)).map(m => m.label) : [];
+  if (ask && notReg.length && !confirm(`登記資料（${S.owner.name}）沒有 ${notReg.join('、')}，可能已合併、分割或滅失，不一定是遺漏。仍要修復？`)) return null;
   if (ask && !confirm(`依接圖前界址把 ${items.map(m => m.label).join('、')} 從蓋住它的未登記地切出，建回原地號（登記面積照接圖前）？\n只從未登記地切；位置上有登記地就不做。可一次復原。`)) return null;
   const deltas = [], restored = [], failed = [];
   for (const m of items) { try { const x = Core.restoreMissing(S.ds, m); deltas.push(x.delta); restored.push({ label: x.label, area: x.area, from: x.from.map(f => f.label), pieces: x.pieces, deleted: x.deleted, added: x.added.length, hole: x.hole }); } catch (err) { failed.push({ label: m.label, reason: err.message }); } }
@@ -1535,6 +1545,63 @@ $('blList').addEventListener('click', e => { const fx = e.target.closest('[data-
   if (e.target.closest('#btnBlFixAll')) { try { blFix(S.bl.res.missing.slice()); } catch (err) { msg(err.message); } return; }
   const tr = e.target.closest('tr[data-bl]'); if (!tr) return; const [k, i] = tr.dataset.bl.split(':'); blFocus(k, +i); });
 $('dlgBl').addEventListener('close', () => { S.bl.focus = null; draw(); });
+// ── 所有權人分析（EXAM.MDB）：載入、分析、面板、著色、選取資訊 ─────────────────────────
+async function loadOwners(file, quiet = false) {
+  try {
+    const ot = Core.ownerTables(Core.parseMdb(await readBuf(file)));
+    S.owner = { name: file.name, ot, res: null }; ownRun();
+    const t = `${file.name}：土地標示 ${ot.landRows} 筆、權利人 ${ot.ownRows} 筆` + (S.owner.res ? `；非 9000 號沒有所有權人 ${S.owner.res.noOwner.length} 筆` : '');
+    if (!quiet) msg('已讀入登記資料 ' + t); ownPanel(); if ($('dlgBl').open) blPanel(); refresh(); return t;
+  } catch (e) { msg(`無法讀取 ${file.name}：${e.message}`); return ''; }
+}
+function ownRun() { if (S.owner && S.ds) S.owner.res = Core.ownerAnalysis(S.ds, S.owner.ot); return S.owner && S.owner.res; }
+const OWN_COLOR = { none: 'rgba(209,36,47,.55)', public: 'rgba(47,158,68,.35)', single: 'rgba(28,126,214,.18)', corp: 'rgba(156,54,181,.3)', shared: 'rgba(240,140,0,.3)', joint: 'rgba(194,37,92,.3)', unreg: 'rgba(140,140,140,.18)' };
+const OWN_TEXT = { ...Core.OWNER_CLASS, unreg: '未登記地（9000 號以上）' };
+const ownKey = label => { const m = /^(\d+)(?:-(\d+))?$/.exec(String(label)); const sec = (S.ds && (S.ds.parcels.find(p => p.section) || {}).section) || 0; return m ? `${sec}|${+m[1]}|${+(m[2] || 0)}` : ''; };
+const blInRegister = label => !S.owner || S.owner.ot.land.has(ownKey(label)) || S.owner.ot.own.has(ownKey(label));
+const blRegNote = label => (S.owner && !blInRegister(label) ? `<div style="color:#8a5a00">登記資料無此地號（可能已合併或滅失，不一定是遺漏）</div>` : '');
+function ownPanel() {
+  const o = S.owner; $('ownSrc').textContent = o ? `${o.name}：土地標示 ${o.ot.landRows} 筆、權利人 ${o.ot.ownRows} 筆` : '尚未載入';
+  $('btnOwnCsv').disabled = !(o && o.res);
+  if (!o || !S.ds) { $('ownSum').textContent = !S.ds ? '請先開啟地籍圖' : '請載入 EXAM.MDB'; $('ownList').innerHTML = ''; return; }
+  const r = o.res || ownRun(); if (!r) return;
+  $('ownSum').innerHTML = `<div style="margin-bottom:4px"><b style="color:${r.noOwner.length ? '#d1242f' : '#1a7f37'}">非 9000 號、沒有所有權人：${r.noOwner.length} 筆</b>　登記有、圖上沒有：${r.noLand.length} 筆　持分合計不為 1：${r.shareBad.length} 筆</div>` +
+    Object.keys(OWN_TEXT).filter(k => r.counts[k]).map(k => `<span style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 2px 0"><span style="width:12px;height:12px;border:1px solid #888;background:${OWN_COLOR[k]}"></span>${OWN_TEXT[k]} ${r.counts[k]}</span>`).join('');
+  const n = (v, d = 1) => (v == null ? '' : v.toFixed(d));
+  const sec = (title, open, head, rows) => `<details ${open ? 'open' : ''} style="margin:4px 0"><summary><b>${title}</b>（${rows.length}）</summary>` + (rows.length ? `<table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>` : '<div class="small muted">無</div>') + '</details>';
+  $('ownList').innerHTML =
+    sec('非 9000 號、圖上有，但沒有所有權人', true, ['地號', '原地號', '面積㎡', '登記㎡', '說明'], r.noOwner.map(x => `<tr data-own="${x.idx}" style="cursor:pointer"><td><b>${esc(x.label)}</b></td><td>${esc(x.oldLabel)}</td><td>${n(x.area)}</td><td>${n(x.reg, 0)}</td><td class="small">${x.inLand ? '有土地標示、沒有所有權記錄' : '登記資料沒有此地號'}${x.others ? `；有 ${x.others} 筆他項權利` : ''}</td></tr>`)) +
+    sec('登記資料有、圖上沒有', r.noLand.length > 0, ['原地號', '所有權人數'], r.noLand.map(x => `<tr><td>${esc(x.label)}</td><td>${x.owners}</td></tr>`)) +
+    sec('持分合計不為 1（不含公同共有）', false, ['地號', '合計', '所有權人數'], r.shareBad.map(x => `<tr data-own="${x.idx}" style="cursor:pointer"><td>${esc(x.label)}</td><td>${x.sum}</td><td>${x.owners}</td></tr>`));
+}
+function ownerInfoHtml(p) {
+  if (!p || p.deleted) return ''; const ot = S.owner.ot, land = ot.land.get(p.key), list = ot.own.get(p.key) || [], o = list.filter(x => x.right === '所有權'), oth = list.filter(x => x.right !== '所有權');
+  const no = Core.parcelNo(p), cls = no && no.m >= 9000 ? 'unreg' : Core.ownerClass(list);
+  return `<div style="margin-top:6px;border-top:1px solid var(--line);padding-top:4px"><div><b>${esc(p.label)}</b>${p.oldLabel !== p.label ? `（原 ${esc(p.oldLabel)}）` : ''}　<span style="background:${OWN_COLOR[cls]};padding:0 4px">${OWN_TEXT[cls]}</span></div>` +
+    (land ? `<div>${esc(land.zone)}／${esc(land.use)}${land.other ? '　有他項權利' : ''}${land.bldg ? '　有建物登記' : ''}</div>` : `<div style="color:#8a5a00">${cls === 'unreg' ? '未登記地' : '登記資料沒有此地號'}</div>`) +
+    o.slice(0, 30).map(x => `<div>・${esc(x.name)}${x.mgr ? `（管理者 ${esc(x.mgr)}）` : ''}　${esc(x.scope)}${x.den && x.num && x.scope !== '全部' ? ` ${esc(x.num)}/${esc(x.den)}` : ''}　<span class="muted">${esc(x.kind)}</span></div>`).join('') + (o.length > 30 ? `<div class="muted">…共 ${o.length} 人</div>` : '') +
+    (oth.length ? `<div class="muted">他項權利：${oth.map(x => `${esc(x.right)}（${esc(x.name)}）`).join('、')}</div>` : '') + '</div>';
+}
+function drawOwners(ds) {
+  ctx.save();
+  for (const x of S.owner.res.parcels) { const p = ds.parcels[x.idx]; if (!p || p.deleted) continue; ctx.fillStyle = OWN_COLOR[x.cls]; ctx.beginPath(); p.ids.forEach((id, k) => { const q = ds.points.get(id); k ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)); }); ctx.closePath(); ctx.fill(); if (x.cls === 'none') { ctx.strokeStyle = '#d1242f'; ctx.lineWidth = 3; ctx.stroke(); } }
+  ctx.restore();
+}
+function ownCsv(r) {
+  const q = v => (/[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v)), out = [['類別', '地號', '原地號', '面積㎡', '登記面積㎡', '所有權型態', '所有權人數', '說明'].join(',')];
+  for (const x of r.noOwner) out.push(['沒有所有權人', x.label, x.oldLabel, x.area.toFixed(2), x.reg == null ? '' : x.reg, '', 0, x.inLand ? '有土地標示、沒有所有權記錄' : '登記資料沒有此地號'].map(q).join(','));
+  for (const x of r.noLand) out.push(['登記有、圖上沒有', '', x.label, '', '', '', x.owners, ''].map(q).join(','));
+  for (const x of r.shareBad) out.push(['持分合計不為 1', x.label, '', '', '', '', x.owners, x.sum].map(q).join(','));
+  for (const x of r.parcels) { const p = S.ds.parcels[x.idx]; out.push(['宗地', p.label, p.oldLabel, p.area.toFixed(2), p.areaReg == null ? '' : p.areaReg, OWN_TEXT[x.cls], (S.owner.ot.own.get(p.key) || []).filter(o => o.right === '所有權').length, ''].map(q).join(',')); }
+  return out.join('\r\n') + '\r\n';
+}
+$('btnOwnAdd').onclick = () => $('ownIn').click(); $('ownIn').onchange = e => { const f = e.target.files[0]; if (f) loadOwners(f); e.target.value = ''; };
+$('chkOwnMap').onchange = draw;
+$('btnOwnCsv').onclick = () => download(caseBase() + '_所有權人分析.csv', '﻿' + ownCsv(S.owner.res), 'text/csv;charset=utf-8');
+$('ownList').addEventListener('click', e => { const tr = e.target.closest('tr[data-own]'); if (!tr) return; const i = +tr.dataset.own; clearSel(); S.sel.par.add(i); zoomTo([i]); refresh(); });
+const ownFind = () => { if (!S.owner || !S.ds) return msg('請先開啟地籍圖並載入 EXAM.MDB'); const q = $('ownQ').value.trim(), hit = Core.findOwner(S.ds, S.owner.ot, q);
+  clearSel(); hit.forEach(i => S.sel.par.add(i)); if (hit.length) zoomTo(hit); $('ownFindInfo').textContent = q ? `${hit.length} 宗` : ''; refresh(); msg(q ? (hit.length ? `「${q}」的土地 ${hit.length} 宗：${hit.slice(0, 10).map(i => S.ds.parcels[i].label).join('、')}${hit.length > 10 ? '…' : ''}（已選取）` : `找不到「${q}」的土地`) : ''); };
+$('btnOwnFind').onclick = ownFind; $('ownQ').addEventListener('keydown', e => { if (e.key === 'Enter') ownFind(); });
 const nbArgs = () => S.nb.map(n => ({ name: n.name, ds: n.ds, authoritative: n.authoritative }));
 const seamOpts = (o = {}) => { const v = (id, k) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x >= 0 ? x : Core.SEAM_DEFAULT[k]; };
   return { tol: o.tol ?? v('seamTol', 'tol'), search: o.search ?? v('seamSearch', 'search'), snap: o.snap ?? v('seamSnap', 'snap') }; };
@@ -1953,6 +2020,11 @@ const api = {
   // ── 接圖前比對（MCP）：addBaseline（每次一組，可多個資料夾）→ compareBaseline（遺漏＋面積超限）→ getBaselineReport ──
   addBaseline: ({ files = [] } = {}) => loadBaseline(files.map(toFile)),
   restoreMissing: ({ labels } = {}) => { if (!S.bl.res) blRun(); const all = S.bl.res.missing, pick = labels ? all.filter(m => labels.map(String).includes(m.label)) : all.slice(); return blFix(pick, false); },
+  // ── 所有權人分析（MCP）：loadOwners({files:[EXAM.MDB]}) → getOwnerReport()（不含姓名）／getParcelOwners({label})（含姓名）／findOwner({name}) ──
+  loadOwners: async ({ files = [] } = {}) => { const f = files.map(toFile)[0]; if (!f) throw new Error('請給 MDB 檔'); await loadOwners(f, true); return api.getOwnerReport(); },
+  getOwnerReport: () => { if (!S.owner || !S.ds) return null; const r = S.owner.res || ownRun(); return { source: S.owner.name, counts: r.counts, no_owner: r.noOwner.map(({ idx, ...x }) => x), in_register_not_on_map: r.noLand, share_not_one: r.shareBad.map(({ idx, ...x }) => x) }; },
+  getParcelOwners: ({ label }) => { if (!S.owner) throw new Error('尚未載入 EXAM.MDB'); const p = S.ds.parcels.find(q => !q.deleted && (q.label === String(label) || q.oldLabel === String(label))); if (!p) throw new Error('找不到地號 ' + label); return { label: p.label, land: S.owner.ot.land.get(p.key) || null, rights: S.owner.ot.own.get(p.key) || [] }; },
+  findOwner: ({ name }) => { if (!S.owner) throw new Error('尚未載入 EXAM.MDB'); return Core.findOwner(S.ds, S.owner.ot, name).map(i => S.ds.parcels[i].label); },
   clearBaseline: () => { S.bl = { sets: [], res: null, focus: null }; refresh(); return { sets: 0 }; },
   compareBaseline: (o = {}) => { const r = blRun(o); return api.getBaselineReport(); },
   getBaselineReport: () => { const r = S.bl.res; if (!r) return null; const strip = l => l.map(({ rings, ...x }) => x);

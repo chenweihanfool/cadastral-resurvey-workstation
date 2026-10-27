@@ -40,7 +40,7 @@ select{border:1px solid var(--line);background:var(--bg);color:var(--ink);border
 label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
 table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
 th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
-#blList td.small{white-space:normal;text-align:left;min-width:90px}
+#blList td.small,#ownList td.small{white-space:normal;text-align:left;min-width:90px}
 #ringList td,#ringList th{text-align:left;vertical-align:top}#ringList td:nth-child(3){white-space:normal;min-width:220px}
 th:first-child,td:first-child{text-align:left} th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
 tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-child{box-shadow:inset 3px 0 var(--sel)}
@@ -109,7 +109,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <h1>地籍圖重測工作站</h1>
   <input type="file" id="fileIn" multiple hidden>
   <input type="file" id="dirIn" webkitdirectory hidden>
-  <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden><input type="file" id="blIn" multiple hidden><input type="file" id="blDir" webkitdirectory hidden>
+  <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden><input type="file" id="blIn" multiple hidden><input type="file" id="ownIn" accept=".mdb,.MDB" hidden><input type="file" id="blDir" webkitdirectory hidden>
   <nav id="menubar">
     <div class="menu"><button class="mbtn">檔案</button><div class="mlist">
       <button data-act="open">開啟檔案…</button><button data-act="folder">開啟資料夾…</button><hr>
@@ -123,7 +123,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
       <button data-act="sidebar">顯示／隱藏右側欄</button></div></div>
     <div class="menu"><button class="mbtn">處理</button><div class="mlist">
-      <button data-act="seam">鄰段接合…</button><button data-act="ref">現況點參考線…</button><hr><button data-act="bl">接圖前比對…<small>土地有無遺漏、面積超限</small></button></div></div>
+      <button data-act="seam">鄰段接合…</button><button data-act="ref">現況點參考線…</button><hr><button data-act="bl">接圖前比對…<small>土地有無遺漏、面積超限</small></button><button data-act="own">所有權人分析…<small>EXAM.MDB；無所有權人的土地</small></button></div></div>
     <div class="menu"><button class="mbtn">說明</button><div class="mlist">
       <button data-act="help">操作說明</button><button data-act="ver">版本歷程與更新</button></div></div>
   </nav>
@@ -227,6 +227,16 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="blList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
       <div class="small muted" style="margin-top:4px">圖上：紅＝遺漏（接圖前有、現在沒有）、橘＝只有一部分在圖內的接圖前宗地、粉紅框＝面積超限。點表格一列可放大檢視。</div></section>
     </div></dialog>
+<dialog class="fp" id="dlgOwn"><div class="fphead"><b>所有權人分析</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>登記資料（EXAM.MDB）</h2>
+      <div class="small muted" style="margin-bottom:6px">開啟地段資料夾時，資料夾內的 <code>.MDB</code>（土地標示資料表、權利人與土地關係資料表）會一併讀入；也可另外選檔。只在本機瀏覽器讀取，不會上傳。以「原段號＋原母號＋原子號」對應圖上宗地，只計「所有權」，抵押權等他項權利不算所有權人。</div>
+      <div class="row small"><button class="btn" id="btnOwnAdd">選擇 MDB…</button><span id="ownSrc" class="muted"></span></div></section>
+    <section><h2>分析</h2>
+      <div id="ownSum" class="small"></div>
+      <div class="row small" style="margin-top:6px"><label class="chk"><input type="checkbox" id="chkOwnMap" checked>圖上依所有權型態著色</label><button class="btn" id="btnOwnCsv" disabled title="地號、所有權型態、所有權人數、問題類別（不含姓名）">報告 CSV</button></div>
+      <div class="row small" style="margin-top:6px"><input id="ownQ" placeholder="權利人或管理者姓名" style="width:160px"><button class="btn" id="btnOwnFind">找出土地</button><span id="ownFindInfo" class="muted"></span></div>
+      <div id="ownList" style="margin-top:6px;max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
+      <div class="small muted" style="margin-top:4px">點一列放大到該宗；選取單一宗地時，右側「選取資訊」會列出標示與所有權人。</div></section>
+    </div></dialog>
 <dialog class="fp" id="dlgRef"><div class="fphead"><b>現況點參考線</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>現況點參考線</h2>
       <div class="row small"><button class="btn" id="btnSvFit">縮放至現況點</button><button class="btn" id="btnSvClear">清除</button></div>
       <table><thead><tr><th>參考線</th><th>點</th><th>長 m</th><th>面積 m²</th><th></th><th></th></tr></thead><tbody id="lineList"></tbody></table>
@@ -311,6 +321,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <p><b>載入</b>：把案件資料夾拖進視窗，或用「檔案→開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>
 <p><b>鄰段接合</b>：先開主要測區，再按「加入鄰段」（或「加入鄰段資料夾」，可選含多個案件資料夾的上層資料夾；也可 Shift＋拖入）。每個鄰段以不同顏色顯示。「檢查接合」逐點檢查主區段界點與鄰段段界：<b>重合</b>（落在鄰段界址點／界線上）、<b>重疊</b>（跑進鄰段宗地內）、<b>脫開</b>（離鄰段段界有縫）。鄰段已重測時勾選「以鄰段為準」，按「自動接合」把主區點吸附到鄰段界址點（可復原）；報告可輸出 CSV／JSON。AI 可用 <code>CadastralAPI.joinSeam()</code>。</p>
 <p><b>接圖前比對</b>：「處理→接圖前比對」加入接圖前的分幅資料（D 檔或 COA／BNP／PAR，可多組），按「開始比對」。<b>遺漏</b>＝接圖前有、目前的圖沒有，且接圖前的位置有一半以上落在目前的圖內（列出現在蓋住它的宗地，常見是被補成未登記地）；只有一小部分在圖內的另列「部分在區內」待確認。另列出登記地被未登記地佔用超過公差者，以及面積較差超過公差指定倍數（預設 5 倍，公差 (0.25＋0.07·⁴√F)·√F）的宗地，並用接圖前面積判斷是「接圖前即不符」還是「接圖後產生」。分幅切開的同一地號（子號 +1000、+2000…）會自動併回。</p>
+<p><b>所有權人分析</b>：地段資料夾內有 <code>EXAM.MDB</code> 時，開啟資料夾會一併讀入（也可在「處理→所有權人分析」另外選檔）。列出<b>非 9000 號、圖上有但沒有所有權人</b>的土地、登記資料有但圖上沒有的地號、持分合計不為 1 者；圖上可依所有權型態著色（無所有權人、公有、單獨所有、法人、分別共有、公同共有、未登記地），可依姓名找出土地；選取單一宗地時，選取資訊列出使用分區、使用地類別與所有權人。接圖前比對的遺漏地號若登記資料裡沒有，會註明並在修復前提醒。</p>
 <p><b>影像疊圖</b>：「檔案→資料來源與匯入」的「載入影像」選 JPG（或 PNG）與同名 JGW（PGW／WLD），可一次選整個資料夾的影像——全部先登記但預設不顯示，到「檢視→影像圖層」逐張勾選顯示、調透明度、選「向量之下／之上」、用 ▲▼ 調上下層。用上方「移影像」工具 (I) 拖曳作用中影像平移對位，或用方向鍵、輸入 ΔN／ΔE；影像圖層面板即時顯示左上像元中心坐標與位移，「輸出成果」面板可下載調整後的 JGW。影像畫在底圖之上、向量圖之下，可調不透明度。</p>
 <p><b>選取</b>：上方「點／線／面」可複選，決定點擊與框選能選到什麼。<kbd>Shift</kbd> 點擊加選／取消；在空白處拖曳框選。</p>
 <p><b>移動</b>：拖曳已選取的要素，或用方向鍵微調、或輸入 ΔN/ΔE。共用的界址點會讓相鄰地號一起變動，面積即時更新。選「線」會移動線的兩端點，選「面」會移動整宗地所有界址點。</p>
