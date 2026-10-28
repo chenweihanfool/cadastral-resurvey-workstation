@@ -728,4 +728,64 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const blank = Core.inkCheck(two, () => ({ rgba: new Uint8ClampedArray(40 * 40 * 4).fill(235), w: 40, h: 40, wf: { a: 2, b: 0, d: 0, e: -2, c: X - 20, f: Y + 60 } }), { block: 100, shift: 1 });
   assert.equal(blank.flagged.length, 0); assert.equal(blank.poor, 1); near(blank.checkedLen, 0, 1e-9);
 }
+
+// ── 未登記地分割 v0.24.0：最小面積、橫切、碎塊歸併 ──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings) => Core.datasetFromD({ pts: rd(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings) });
+  // 寬 1 m、長 300 m 的水溝（9001-1），兩長邊每 10 m 一點
+  const P = [], top = [], bot = []; for (let i = 0; i <= 30; i++) { P.push([1 + i, 0, i * 10], [101 + i, 1, i * 10]); bot.push(1 + i); top.push(101 + i); }
+  const rings = []; const ids = bot.concat(top.slice().reverse()); for (let i = 0; i < ids.length; i += 8) rings.push(ring(1, 9001, 1, ids.slice(i, i + 8)));
+  const old = mk(P, rings), r0 = Core.splitParcel(old, 0, 30, 6), n0 = old.parcels.filter(p => !p.deleted).length;
+  assert.ok(n0 >= 20 && Math.min(...old.parcels.filter(p => !p.deleted).map(p => p.area)) < 15, '不設最小面積：照長寬比 6 切成一堆小塊 ' + n0);
+  const ds = mk(P, rings), r = Core.splitParcel(ds, 0, 30, 6, { minArea: 50 }), live = ds.parcels.filter(p => !p.deleted);
+  assert.ok(live.length >= 4 && live.length <= 6, '最小面積 50：300 m² 切成 4～6 塊 ' + live.length);
+  for (const p of live) assert.ok(p.area >= 50 - 1e-6, `${p.label} ${p.area.toFixed(1)} m² ≥ 50`);
+  near(live.reduce((t, p) => t + p.area, 0), 300, 1e-6, '面積總和不變');
+  const sm = Core.unregSummary(ds, 30, 6, 50); assert.ok(sm.parcels.every(p => !p.long), '切完的塊不足 2 倍最小面積：不再列為太細長');
+  // 橫切：20×60 的長方形，長寬比上限 2：只能橫切（不可沿對角線切出三角）
+  const R = mk([[1, 0, 0], [2, 0, 20], [3, 0, 40], [4, 0, 60], [5, 20, 60], [6, 20, 40], [7, 20, 20], [8, 20, 0]], [ring(1, 9002, 1, [1, 2, 3, 4, 5, 6, 7, 8])]);
+  Core.splitParcel(R, 0, 30, 2, { minArea: 50 });
+  const rp = R.parcels.filter(q => !q.deleted); assert.deepEqual(rp.map(p => Math.round(p.area)).sort(), [400, 800]);
+  for (const p of rp) { const m = Core.minRect(p.ids, R.points); near(m.long * m.short, p.area, 1e-6, `${p.label} 是矩形（橫切）`); }
+  // 碎塊歸併：3 m² 的 9003-2 併入共用界線最長的 9003-1；只鄰登記地的 9003-3 留下
+  const A = mk([[1, 0, 0], [2, 0, 20], [3, 20, 20], [4, 20, 0], [5, 0, 21], [6, 3, 21], [7, 3, 20], [8, 50, 50], [9, 50, 51], [10, 52, 51], [11, 52, 50], [12, 50, 30], [13, 52, 30]],
+    [ring(1, 9003, 1, [1, 2, 7, 3, 4]), ring(1, 9003, 2, [2, 5, 6, 7]), ring(1, 9003, 3, [8, 9, 10, 11]), ring(1, 5, 0, [12, 8, 11, 13])]);
+  const ab = Core.absorbSlivers(A, 50);
+  assert.deepEqual(ab.merged, [{ from: '9003-2', into: '9003-1' }]); assert.deepEqual(ab.left, ['9003-3']);
+  near(A.parcels[0].area, 403, 1e-6);
+}
+
+// ── 比對報告 HTML ──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings) => Core.datasetFromD({ pts: rd(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings) });
+  const P = [[1, 0, 0], [2, 0, 20], [3, 20, 20], [4, 20, 0], [5, 0, 40], [6, 20, 40]];
+  const cur = mk(P, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 9001, 1, [2, 5, 6, 3])]), ref = mk(P, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 3, 0, [2, 5, 6, 3])]);
+  const r = Core.compareBaseline(cur, [ref], { identity: true }); assert.deepEqual(r.missing.map(m => m.label), ['3']);
+  const html = Core.baselineReportHtml(cur, r, { caseName: 'T<1>', date: '2026-10-28' });
+  assert.ok(html.startsWith('<!doctype html>') && html.includes('id="missing-0"') && html.includes('<svg') && html.includes('T&lt;1&gt;'), '遺漏一筆、附局部圖、地號跳脫');
+  assert.ok(!html.includes('</script>') || html.indexOf('</script>') > html.indexOf('<script>'), 'script 完整');
+  assert.ok(Core.baselineReportHtml(cur, null, { chk: [] }).includes('沒有需要處理的項目'));
+}
+
+// ── 鄰段接合 v0.24.0：數值區照抄、圖解區只防重疊 ──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings) => Core.datasetFromD({ pts: rd(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings) });
+  // 本段 1：0–10 方塊，上緣有 (10,0)、(10,5)［鄰段沒有］、(10.3,9.8)［跑進鄰段］
+  const main = () => mk([[1, 0, 0], [2, 0, 10], [3, 10.3, 9.8], [4, 10, 5], [5, 10, 0]], [ring(1, 1, 0, [1, 2, 3, 4, 5])]);
+  // 鄰段 7：上方 10–20，下緣 (10,0)、(10,3)［本段沒有］、(10,10)
+  const nb = (dy = 0, dx = 0) => mk([[1, 10 + dy, 0 + dx], [2, 10 + dy, 3 + dx], [3, 10 + dy, 10 + dx], [4, 20 + dy, 10 + dx], [5, 20 + dy, 0 + dx]], [ring(2, 7, 0, [1, 2, 3, 4, 5])]);
+  const top = ds => [...ds.points.values()].filter(q => Math.abs(q.y - (Y + 10)) < 1e-6 && ds.pointParcels.get(q.id)).map(q => +(q.x - X).toFixed(3)).sort((a, b) => a - b);
+  const m1 = main(), N = [{ name: 'N', ds: nb(), mode: 'numeric' }];
+  const j = Core.seamJoin(m1, N, { snap: 1 }); assert.ok(j.moves.some(m => m.id === 3), '脫開的點吸附到鄰段點');
+  const ex = Core.seamExact(m1, N, { snap: 1 }); assert.equal(ex.added.length, 1); assert.deepEqual(ex.removed, [4]);
+  assert.deepEqual(top(m1), [0, 3, 10], '數值區：接縫上的點與鄰段完全相同（不多不少）'); near(m1.parcels[0].area, 100, 1e-6);
+  // 圖解區：鄰段整體偏了 (ΔN +0.6, ΔE +2)；本段 (10,5) 往上凸 0.3（平移後跑進鄰段）
+  const m2 = mk([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10.3, 5], [5, 10, 0]], [ring(1, 1, 0, [1, 2, 3, 4, 5])]), G = [{ name: 'G', ds: nb(0.6, 2), mode: 'graphic' }];
+  const sh = Core.seamShift(m2, G[0].ds, {}); assert.ok(Math.abs(sh.dy + 0.6) < 0.25, '平移量把鄰段拉回本段附近 ' + sh.dy.toFixed(3));
+  const j2 = Core.seamJoin(m2, G, { snap: 1 }), pushed = j2.moves.filter(m => m.type === 'push');
+  assert.deepEqual(pushed.map(m => m.id), [4], '只推重疊的點'); near(m2.points.get(4).y, Y + 10.6 + sh.dy, 1e-6, '推回平移後的鄰段界線');
+  assert.equal(m2.points.get(3).y, Y + 10, '脫開的點不動');
+  assert.equal(Core.seamExact(m2, G).added.length, 0, '圖解區不補點'); assert.equal(Core.seamGuard(m2, G).protect.size, 0, '圖解區接縫點不受保護（可去雜點）');
+  assert.equal(Core.seamJoin(main(), [{ name: 'X', ds: nb(), mode: 'none' }]).moves.length, 0, '只比對不動');
+}
 console.log('SYNTHETIC OK');

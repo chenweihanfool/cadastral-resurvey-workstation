@@ -10,7 +10,7 @@ const REPO = 'chenweihanfool/cadastral-resurvey-workstation';
 const S = {
   ds: null, ref: null, dbf: { pts: null, bnd: null }, names: {},
   img: [], imgActive: -1,                  // 疊合影像 [{name,w,h,bmp,wf,wf0,visible,opacity,located}]
-  nb: [], seam: null, seamStale: false,      // 鄰段 [{name,ds,color,visible,authoritative,seg}]；接合檢查報告
+  nb: [], seam: null, seamStale: false,      // 鄰段 [{name,ds,color,visible,mode（numeric 數值區／graphic 圖解區／none 只比對）,seg}]；接合檢查報告
   survey: Core.newSurvey(),                // 現況點與手動參考線
   controls: new Map(),                     // 已知點庫：控制點(CTL/D20)、補點(CT2)…  name → {name,y,x,src}
   view: { cx: 0, cy: 0, s: 1 },           // cx=東, cy=北, s=像素/公尺
@@ -814,14 +814,14 @@ $('btnRingCheck').onclick = ringPanel; $('btnRedraw').onclick = startRedraw;
 $('dlgRing').addEventListener('close', () => { S.ringMark = null; draw(); });
 
 // ── 未登記土地（9000 號以上）：清單、合併、每筆 ≤ N 點分割、空隙與凹口建為新地號（核心在 Core.unregSummary／splitParcel／mergeParcels／fillRegion／pocketRegion）──
-const unN = () => Math.max(3, parseInt($('unN').value, 10) || 10), unRatio = () => Math.max(0, parseFloat($('unRatio').value) || 0), unMother = () => Math.max(9000, parseInt($('unMother').value, 10) || 9001);
+const unN = () => Math.max(3, parseInt($('unN').value, 10) || 10), unRatio = () => Math.max(0, parseFloat($('unRatio').value) || 0), unMother = () => Math.max(9000, parseInt($('unMother').value, 10) || 9001), unMin = () => Math.max(0, parseFloat($('unMin').value) || 0);
 function pushMulti(deltas, label) {   // 多步驟的一鍵操作：一次復原
   deltas = deltas.filter(Boolean); if (!deltas.length) return;
   pushUndo({ undoFn: () => { for (const d of deltas.slice().reverse()) Core.applyDelta(S.ds, d, 'undo'); pruneSel(); }, redoFn: () => { for (const d of deltas) Core.applyDelta(S.ds, d, 'redo'); pruneSel(); }, label });
 }
 function unregPanel() {
   const ds = S.ds; if (!ds) { $('unSum').textContent = '尚未載入圖資'; $('unList').innerHTML = ''; S.unreg = null; return; }
-  const n = unN(), lim = unRatio(), r = S.unreg = Core.unregSummary(ds, n, lim), over = r.parcels.filter(p => p.over);
+  const n = unN(), lim = unRatio(), r = S.unreg = Core.unregSummary(ds, n, lim, unMin()), over = r.parcels.filter(p => p.over);
   $('unSum').innerHTML = `未登記地 <b>${r.parcels.length}</b> 筆（共 ${r.parcels.reduce((s, p) => s + p.area, 0).toFixed(2)} m²），需要分割 <b class="${over.length ? 'neg' : ''}">${over.length}</b> 筆（超過 ${n} 點 ${r.parcels.filter(p => p.overPts).length} 筆${lim ? `、長寬比超過 ${lim} 的 ${r.parcels.filter(p => p.long).length} 筆` : ''}）；宗地之間沒有地號的封閉空隙 <b>${r.gaps.length}</b> 處。` +
     '<div class="muted">圖上：黃＝未登記地、橘＝需要分割（超過點數或太細長）、紅＝空隙。與段外相通的長條（凹口）請用下方「封閉凹口」畫封口線。</div>';
   const rows = r.parcels.slice().sort((a, b) => (b.over - a.over) || String(a.label).localeCompare(String(b.label), 'zh-Hant', { numeric: true }));
@@ -841,7 +841,7 @@ const unChecked = () => [...S.unSel].filter(i => S.ds.parcels[i] && !S.ds.parcel
 // 批次處理時讓出主執行緒（約每 80 ms）並顯示進度，避免瀏覽器判定「網頁沒有回應」；處理期間停用按鈕
 const unBusy = on => ['btnUnSplit', 'btnUnMerge', 'btnUnRefresh'].forEach(id => { $(id).disabled = on; });
 function yielder(label, total) { let t = performance.now(); return async k => { if (performance.now() - t < 80) return; msg(`${label}… ${k}／${total}`); await new Promise(r => setTimeout(r, 0)); t = performance.now(); }; }
-async function splitAsync(ds, i, n, lim, tick, k) { const g = Core.splitSteps(ds, i, n, lim); for (;;) { const r = g.next(); if (r.done) return r.value; await tick(k); } }   // 每切一刀檢查是否該讓出主執行緒
+async function splitAsync(ds, i, n, lim, tick, k) { const g = Core.splitSteps(ds, i, n, lim, { minArea: unMin() }); for (;;) { const r = g.next(); if (r.done) return r.value; await tick(k); } }   // 每切一刀檢查是否該讓出主執行緒
 $('btnUnSplit').onclick = () => unregSplit();
 async function unregSplit() {   // 分割勾選的；沒勾選＝全部超過點數或長寬比上限者
   if (!S.ds || $('btnUnSplit').disabled) return null; if (!S.unreg) unregPanel(); const n = unN(), lim = unRatio(), list = unChecked().length ? unChecked() : S.unreg.parcels.filter(p => p.over).map(p => p.idx);
@@ -849,9 +849,10 @@ async function unregSplit() {   // 分割勾選的；沒勾選＝全部超過點
   const deltas = [], made = [], fail = [], left = [];
   unBusy(true); const tick = yielder('分割中', list.length);
   for (const [k, i] of list.entries()) { await tick(k); const p = S.ds.parcels[i]; try { const r = await splitAsync(S.ds, i, n, lim, tick, k); if (r.delta) { deltas.push(r.delta); made.push(`${p.label}→${r.pieces.length + 1} 筆` + (r.delta.added.length ? `（新增 ${r.delta.added.length} 點）` : '')); } if (r.unresolved != null) left.push(`${p.label}（${r.unresolved.toFixed(1)}）`); } catch (err) { fail.push(`${p.label}（${err.message}）`); } }
+  let ab = null; if ($('unAbsorb').checked && unMin() > 0) { ab = Core.absorbSlivers(S.ds, unMin()); deltas.push(...ab.deltas); }
   unBusy(false); pushMulti(deltas, `未登記地分割 ≤${n} 點` + (lim ? `、長寬比 ≤${lim}` : '')); S.unSel.clear();
-  msg((made.length ? `已分割 ${made.length} 筆：${made.slice(0, 8).join('、')}${made.length > 8 ? '…' : ''}` : '沒有分割任何宗地') + (left.length ? `；形狀切不開、仍超過長寬比 ${left.length} 筆：${left.slice(0, 5).join('、')}` : '') + (fail.length ? `；未處理 ${fail.length} 筆：${fail.slice(0, 3).join('、')}` : '') + '。可一次復原' + (deltas.some(d => d.added.length) ? '；有新增界址點，輸出完整案件資料夾時 D14 一併更新' : ''));
-  if ($('dlgUnreg').open) unregPanel(); return { split: made.length, left: left.length, failed: fail.length };
+  msg((made.length ? `已分割 ${made.length} 筆：${made.slice(0, 8).join('、')}${made.length > 8 ? '…' : ''}` : '沒有分割任何宗地') + (left.length ? `；形狀切不開、仍超過長寬比 ${left.length} 筆：${left.slice(0, 5).join('、')}` : '') + (fail.length ? `；未處理 ${fail.length} 筆：${fail.slice(0, 3).join('、')}` : '') + '。可一次復原' + (deltas.some(d => d.added && d.added.length) ? '；有新增界址點，輸出完整案件資料夾時 D14 一併更新' : '') + (ab ? `；碎塊併入相鄰未登記地 ${ab.merged.length} 筆` + (ab.left.length ? `，只鄰登記地而留下 ${ab.left.length} 筆（${ab.left.slice(0, 5).join('、')}）` : '') : ''));
+  if ($('dlgUnreg').open) unregPanel(); return { split: made.length, left: left.length, failed: fail.length, absorbed: ab ? ab.merged.length : 0, small_left: ab ? ab.left : [] };
 }
 $('btnUnMerge').onclick = () => unregMerge();
 async function unregMerge(ask = true) {   // 合併勾選的；沒勾選＝相連的未登記地各併成一筆（不限同母號）
@@ -879,6 +880,7 @@ async function unregMerge(ask = true) {   // 合併勾選的；沒勾選＝相�
       if (auto) { const k = ds.parcels.find(p => p.label === r.keep && !p.deleted); const s = await splitAsync(ds, k.idx, n, lim, tick, gi); if (s.delta) { deltas.push(s.delta); t += `→再切成 ${s.pieces.length + 1} 筆`; } }
       done.push(t); } catch (err) { fail.push(`${g.map(i => ds.parcels[i].label).slice(0, 3).join('、')}…（${err.message}）`); }
   }
+  let ab = null; if (auto && $('unAbsorb').checked && unMin() > 0) { ab = Core.absorbSlivers(ds, unMin()); deltas.push(...ab.deltas); if (ab.merged.length) done.push(`碎塊併入 ${ab.merged.length} 筆`); }
   unBusy(false); pushMulti(deltas, '未登記地合併'); S.unSel.clear();
   msg((done.length ? `已合併 ${done.length} 組：${done.slice(0, 6).join('、')}${done.length > 6 ? '…' : ''}` : '沒有合併任何宗地') + (fail.length ? `；未處理 ${fail.length} 組：${fail.slice(0, 2).join('；')}` : '') + '。可一次復原'); unregPanel(); refresh();
   return { merged: done.length, failed: fail.length };
@@ -1444,7 +1446,7 @@ function outPanel() {
       hint = '目前沒有異動點，所以輸出鈕是灰色。先移動點、增刪界址點，或按「自動接合」。';
       if (j) {
         const un = j.unresolved, beyond = un.filter(u => u.reason === 'beyond_snap').length, conf = un.filter(u => u.reason === 'conflict').length;
-        hint = '上次自動接合沒有移動任何點：' + [j.skipped.length ? `未勾選「以鄰段為準」的鄰段：${j.skipped.join('、')}` : '', beyond ? `${beyond} 點超出吸附上限（可到「處理」調高「吸附」）` : '', conf ? `${conf} 點與別點搶同一鄰段點` : ''].filter(Boolean).join('；') + '。';
+        hint = '上次自動接合沒有移動任何點：' + [j.skipped.length ? `設為「只比對」的鄰段：${j.skipped.join('、')}` : '', beyond ? `${beyond} 點超出吸附上限（可到「處理」調高「吸附」）` : '', conf ? `${conf} 點與別點搶同一鄰段點` : ''].filter(Boolean).join('；') + '。';
       }
     } else if (S.dbf.pts) { const ch = Core.changedDFiles(ds, S.dbf); hint = `「輸出完整案件資料夾」會換掉：${Object.keys(ch.files).map(x => S.names[x] || x.toUpperCase()).join('、') || '（無）'}，其餘檔案原樣複製；用 NECEXE 開啟新資料夾後重算面積。` + (S.caseFiles && S.caseFiles.partial ? '目前是個別開啟的檔案，資料夾只會有選取的檔案；要完整資料夾請改用「開啟資料夾」。' : ''); }
     else hint = '主要測區不是由 D14 載入（COA／BNP），無法輸出 D14；請用「異動點位 CSV」或「輸出 JSON」。';
@@ -1490,7 +1492,7 @@ function blRun(o = {}) {
 const BL_CAUSE = { '接圖前即不符': '#8a5a00', '接圖後產生': '#d1242f', '跨分幅，請人工判斷': '#6741d9', '接圖前無此宗': '#6741d9' };
 function blPanel() {
   $('blSets').innerHTML = S.bl.sets.length ? S.bl.sets.map((s, i) => `<div class="row" style="margin:2px 0"><b>${esc(s.name)}</b><span class="muted">${s.ds.reduce((t, d) => t + d.parcels.length, 0)} 宗（${esc(s.ds[0].source)}）</span><button class="btn" data-blrm="${i}" title="移除這組">✕</button></div>`).join('') : '<span class="muted">尚未加入</span>';
-  const r = S.bl.res; $('btnBlCsv').disabled = !r; $('btnBlRun').disabled = !S.ds || !S.bl.sets.length;
+  const r = S.bl.res; $('btnBlCsv').disabled = $('btnBlHtml').disabled = !r; $('btnBlRun').disabled = !S.ds || !S.bl.sets.length;
   if (!r) { $('blSum').textContent = !S.ds ? '請先開啟目前的圖' : S.bl.sets.length ? '按「開始比對」' : ''; $('blList').innerHTML = ''; return; }
   const f = r.fit, n = (v, d = 1) => (v == null ? '' : v.toFixed(d)), causes = {}; for (const x of r.flagged) causes[x.cause] = (causes[x.cause] || 0) + 1;
   $('blSum').innerHTML = `接圖前 ${r.refParcels} 宗（併回分幅後 ${r.refGroups} 個地號）；目前的圖 ${r.curParcels} 宗。` +
@@ -1532,6 +1534,15 @@ $('blIn').onchange = e => { loadBaseline([...e.target.files]); e.target.value = 
 $('btnBlClear').onclick = () => { S.bl = { sets: [], res: null, focus: null }; blPanel(); refresh(); };
 $('btnBlRun').onclick = () => { try { const r = blRun(); msg(`比對完成：遺漏 ${r.missing.length}、面積超限 ${r.flagged.length}`); } catch (e) { msg(e.message); } };
 $('btnBlCsv').onclick = () => download(caseBase() + '_接圖前比對.csv', '﻿' + Core.baselineCsv(S.bl.res), 'text/csv;charset=utf-8');
+// 互動報告（HTML）：接圖前比對＋舊圖檢核（有做的話），每筆一張卡片附局部圖，可篩選、勾已處理、寫備註、列印成 PDF
+function reportHtml() {
+  if (!S.ds || (!S.bl.res && !S.chk.res)) throw new Error('請先做接圖前比對或舊圖檢核');
+  const d = new Date(), pad = n => String(n).padStart(2, '0'), both = S.bl.res && S.chk.res;
+  return Core.baselineReportHtml(S.ds, S.bl.res, { chk: S.chk.res ? S.chk.res.rows.filter(x => !S.chk.ok.has(x.label)) : null, caseName: caseBase(), version: '地籍圖重測工作站 ' + APP_VERSION,
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`, title: both ? '接圖前比對與舊圖檢核報告' : S.bl.res ? '接圖前比對報告' : '舊圖檢核報告' });
+}
+function downloadReport() { try { download(caseBase() + '_比對報告.html', reportHtml(), 'text/html;charset=utf-8'); msg('已輸出比對報告（HTML）：用瀏覽器開啟，可篩選、勾已處理、寫備註，按「列印／另存 PDF」'); } catch (e) { msg(e.message); } }
+$('btnBlHtml').onclick = downloadReport; $('btnChkHtml').onclick = downloadReport;
 $('chkBlMap').onchange = draw;
 $('blSets').addEventListener('click', e => { const b = e.target.closest('[data-blrm]'); if (!b) return; S.bl.sets.splice(+b.dataset.blrm, 1); S.bl.res = null; blPanel(); refresh(); });
 // 遺漏地號一鍵修復：依接圖前界址從蓋住它的未登記地切出、建回原地號；全部同一步復原，做完重新比對
@@ -1609,7 +1620,8 @@ $('ownList').addEventListener('click', e => { const tr = e.target.closest('tr[da
 const ownFind = () => { if (!S.owner || !S.ds) return msg('請先開啟地籍圖並載入 EXAM.MDB'); const q = $('ownQ').value.trim(), hit = Core.findOwner(S.ds, S.owner.ot, q);
   clearSel(); hit.forEach(i => S.sel.par.add(i)); if (hit.length) zoomTo(hit); $('ownFindInfo').textContent = q ? `${hit.length} 宗` : ''; refresh(); msg(q ? (hit.length ? `「${q}」的土地 ${hit.length} 宗：${hit.slice(0, 10).map(i => S.ds.parcels[i].label).join('、')}${hit.length > 10 ? '…' : ''}（已選取）` : `找不到「${q}」的土地`) : ''); };
 $('btnOwnFind').onclick = ownFind; $('ownQ').addEventListener('keydown', e => { if (e.key === 'Enter') ownFind(); });
-const nbArgs = () => S.nb.map(n => ({ name: n.name, ds: n.ds, authoritative: n.authoritative }));
+const nbArgs = () => S.nb.map(n => ({ name: n.name, ds: n.ds, mode: n.mode, authoritative: n.mode === 'numeric', shift: n.mode === 'graphic' ? n.shift || null : null }));
+const NB_MODE = { numeric: '數值區（照抄）', graphic: '圖解區（防重疊）', none: '只比對' };
 const seamOpts = (o = {}) => { const v = (id, k) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x >= 0 ? x : Core.SEAM_DEFAULT[k]; };
   return { tol: o.tol ?? v('seamTol', 'tol'), search: o.search ?? v('seamSearch', 'search'), snap: o.snap ?? v('seamSnap', 'snap') }; };
 // 以「同資料夾＋同主檔名」分組，一次可加入多個地段（例如選取含多個案件資料夾的上層資料夾）
@@ -1631,7 +1643,7 @@ async function loadNeighbors(files) {
     } catch (e) { skipped.push(g.name + '（' + e.message + '）'); continue; }
     if (!ds || !ds.parcels.length) { skipped.push(g.name + '（缺 D14+D13 或 COA+BNP，或沒有宗地）'); continue; }
     const old = S.nb.findIndex(n => n.name.toLowerCase() === g.name.toLowerCase());
-    const n = { name: g.name, ds, color: old >= 0 ? S.nb[old].color : NB_COLORS[S.nb.length % NB_COLORS.length], visible: true, authoritative: true, seg: Core.boundarySegments(ds) };
+    const n = { name: g.name, ds, color: old >= 0 ? S.nb[old].color : NB_COLORS[S.nb.length % NB_COLORS.length], visible: true, mode: old >= 0 ? S.nb[old].mode : 'numeric', seg: Core.boundarySegments(ds) };
     if (old >= 0) S.nb[old] = n; else S.nb.push(n);
     added.push(g.name);
   }
@@ -1698,31 +1710,38 @@ function drawSeam() {
 }
 function runSeam(o = {}) {
   if (!S.ds) throw new Error('請先載入主要測區'); if (!S.nb.length) throw new Error('請先加入鄰段');
-  S.seam = Core.seamAnalyze(S.ds, nbArgs(), seamOpts(o)); S.seamStale = false; refresh(); return S.seam;
+  S.seam = Core.seamAnalyze(S.ds, nbArgs(), seamOpts(o)); for (const r of S.seam.neighbors) { const n = S.nb.find(q => q.name === r.name); if (n && r.shift) n.shift = r.shift; } S.seamStale = false; refresh(); return S.seam;
 }
 function joinSeam(o = {}) {
   if (!S.ds) throw new Error('請先載入主要測區'); if (!S.nb.length) throw new Error('請先加入鄰段');
-  const j = Core.seamJoin(S.ds, nbArgs(), seamOpts(o)), first = new Map();
+  const j = Core.seamJoin(S.ds, nbArgs(), seamOpts(o)), first = new Map(); for (const [name, sh] of Object.entries(j.shifts)) { const n = S.nb.find(q => q.name === name); if (n) n.shift = sh; }
   for (const m of j.moves) if (!first.has(m.id)) first.set(m.id, m.from);
   const before = [...first].map(([id, f]) => [id, f.y, f.x]), after = [...first.keys()].map(id => { const p = S.ds.points.get(id); return [id, p.y, p.x]; });
   commit(before, after, '鄰段接合');
-  const skipped = S.nb.filter(n => !n.authoritative).map(n => n.name);
-  S.seam = { ...j.after, join: { before: j.before.totals, moves: j.moves, unresolved: j.unresolved, skipped } }; S.seamStale = false; refresh();
-  msg(first.size ? `鄰段接合：移動 ${first.size} 點；仍有 ${j.after.totals.overlap + j.after.totals.gap} 點重疊／脫開（未處理 ${j.unresolved.length}）。到「輸出」分頁輸出 D14` : `鄰段接合：沒有移動任何點（${skipped.length ? '有鄰段未勾選「以鄰段為準」；' : ''}未處理 ${j.unresolved.length}）`);
-  return { before: j.before.totals, after: j.after.totals, moves: j.moves, unresolved: j.unresolved, report: S.seam };
+  // 數值區：補上鄰段有、本段缺的接縫點，刪掉本段多出來的（不多不少）
+  const ex = Core.seamExact(S.ds, nbArgs(), seamOpts(o)); if (ex.added.length || ex.removed.length) { pushStruct(ex.delta, '鄰段接合：數值區補點／刪點'); pruneSel(); }
+  const after2 = Core.seamAnalyze(S.ds, nbArgs(), seamOpts(o)), skipped = S.nb.filter(n => n.mode === 'none').map(n => n.name), pushed = j.moves.filter(m => m.type === 'push').length;
+  S.seam = { ...after2, join: { before: j.before.totals, moves: j.moves, unresolved: j.unresolved, skipped, added: ex.added, removed: ex.removed, kept: ex.kept } }; S.seamStale = false; refresh();
+  const t = after2.totals, parts = [`吸附 ${first.size - pushed} 點`];
+  if (S.nb.some(n => n.mode === 'numeric')) parts.push(`數值區補點 ${ex.added.length}、刪點 ${ex.removed.length}` + (ex.kept.length ? `（T 字點等保留 ${ex.kept.length}）` : ''));
+  if (S.nb.some(n => n.mode === 'graphic')) parts.push(`圖解區推出重疊點 ${pushed}`);
+  msg(`鄰段接合：${parts.join('；')}；仍重疊 ${t.overlap}、脫開 ${t.gap}（圖解區脫開不處理）；未處理 ${j.unresolved.length}。可復原` + (skipped.length ? `；只比對：${skipped.join('、')}` : ''));
+  return { before: j.before.totals, after: t, moves: j.moves, unresolved: j.unresolved, added: ex.added, removed: ex.removed, kept: ex.kept, report: S.seam };
 }
 function nbPanel() {
   const sgn = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(3);
   $('nbList').innerHTML = S.nb.length ? S.nb.map((n, i) => `<div class="row" style="margin:3px 0"><span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${n.color}"></span><b>${esc(n.name)}</b>` +
     `<span class="muted">${n.ds.parcels.length} 宗／${n.ds.points.size} 點</span><label class="chk"><input type="checkbox" data-nb="${i}" data-k="visible"${n.visible ? ' checked' : ''}>顯示</label>` +
-    `<label class="chk" title="已重測的鄰段：段界以鄰段為準，主要測區的段界點會被吸附過去"><input type="checkbox" data-nb="${i}" data-k="authoritative"${n.authoritative ? ' checked' : ''}>以鄰段為準</label>` +
+    `<select data-nb="${i}" data-k="mode" title="數值區：接邊界址點完全照抄鄰段（吸附、補點、刪多餘點）。圖解區：平移鄰段比形狀，只把跑進鄰段的點推回去，脫開不處理、不補點，接縫上的直線點可清除。只比對：不動">${Object.entries(NB_MODE).map(([k, v]) => `<option value="${k}"${n.mode === k ? ' selected' : ''}>${v}</option>`).join('')}</select>` +
     `<button class="btn nbfit" data-nb="${i}">縮放</button><button class="btn nbdel" data-nb="${i}">✕</button></div>`).join('') : '<span class="muted">尚未加入鄰段 — 先開主要測區，再「加入鄰段」（可一次選含多個案件資料夾的上層資料夾）</span>';
+  $('seamNbList').innerHTML = S.nb.map((n, i) => `<div class="row" style="margin:2px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${n.color}"></span><b>${esc(n.name)}</b><select data-nb="${i}" data-k="mode">${Object.entries(NB_MODE).map(([k, v]) => `<option value="${k}"${n.mode === k ? ' selected' : ''}>${v}</option>`).join('')}</select>` +
+    (n.mode === 'graphic' && n.shift ? `<span class="muted">平移 ΔE ${n.shift.dx.toFixed(2)}、ΔN ${n.shift.dy.toFixed(2)} m</span>` : '') + '</div>').join('');
   $('btnSeamChk').disabled = $('btnSeamJoin').disabled = !S.ds || !S.nb.length; $('btnNbFit').disabled = !S.nb.length;
   const s = S.seam; $('btnSeamCsv').disabled = $('btnSeamJson').disabled = !s;
   if (!s) { $('seamSum').textContent = S.ds && S.nb.length ? '按「檢查接合」逐點檢查主區段界點與鄰段段界是否重合、重疊或脫開' : ''; $('seamTbl').innerHTML = ''; return; }
   const t = s.totals;
   $('seamSum').innerHTML = `檢查 ${t.checked} 點：<span style="color:${SEAM_COLOR.coincide}">重合 ${t.coincide}</span>／<span style="color:${SEAM_COLOR.overlap}">重疊 ${t.overlap}</span>／<span style="color:${SEAM_COLOR.gap}">脫開 ${t.gap}</span>；鄰段點主區缺 ${t.neighbor_missing_in_main}` +
-    (S.seamStale ? ' <b class="neg">（點位已變動，請重新檢查）</b>' : '') + (s.join ? `<br>上次接合：移動 ${new Set(s.join.moves.map(m => m.id)).size} 點，未處理 ${s.join.unresolved.length}（超出吸附上限 ${s.join.unresolved.filter(u => u.reason === 'beyond_snap').length}、搶同一鄰段點 ${s.join.unresolved.filter(u => u.reason === 'conflict').length}）` + (s.join.skipped.length ? `；未勾「以鄰段為準」：${esc(s.join.skipped.join('、'))}` : '') : '');
+    (S.seamStale ? ' <b class="neg">（點位已變動，請重新檢查）</b>' : '') + (s.join ? `<br>上次接合：移動 ${new Set(s.join.moves.map(m => m.id)).size} 點，未處理 ${s.join.unresolved.length}（超出吸附上限 ${s.join.unresolved.filter(u => u.reason === 'beyond_snap').length}、搶同一鄰段點 ${s.join.unresolved.filter(u => u.reason === 'conflict').length}）` + (s.join.added ? `；數值區補點 ${s.join.added.length}、刪點 ${s.join.removed.length}` : '') + (s.join.skipped.length ? `；只比對：${esc(s.join.skipped.join('、'))}` : '') : '');
   const showOk = $('seamShowOk').checked, rows = [];
   for (const n of s.neighbors) {
     for (const r of n.points) if (showOk || r.status !== 'coincide') rows.push({ n: n.name, t: 'p', id: r.id, st: r.status, v: r.gap_m, y: r.y, x: r.x, k: r.kind });
@@ -1735,7 +1754,8 @@ function nbPanel() {
 $('btnNbAdd').onclick = () => $('nbIn').click(); $('btnNbDir').onclick = () => $('nbDir').click();
 $('nbIn').onchange = e => { loadNeighbors([...e.target.files]); e.target.value = ''; }; $('nbDir').onchange = e => { loadNeighbors([...e.target.files]); e.target.value = ''; };
 $('btnNbFit').onclick = () => fit();
-$('nbList').addEventListener('change', e => { const i = e.target.dataset.nb; if (i == null) return; S.nb[i][e.target.dataset.k] = e.target.checked; if (e.target.dataset.k === 'authoritative') S.seamStale = !!S.seam; refresh(); });
+$('nbList').addEventListener('change', e => { const i = e.target.dataset.nb; if (i == null) return; const k = e.target.dataset.k; S.nb[i][k] = k === 'mode' ? e.target.value : e.target.checked; if (k === 'mode') { S.nb[i].shift = null; S.seamStale = !!S.seam; } refresh(); });
+$('seamNbList').addEventListener('change', e => { const i = e.target.dataset.nb; if (i == null) return; const k = e.target.dataset.k; S.nb[i][k] = k === 'mode' ? e.target.value : e.target.checked; if (k === 'mode') { S.nb[i].shift = null; S.seamStale = !!S.seam; } refresh(); });
 $('nbList').addEventListener('click', e => {
   const i = e.target.dataset.nb; if (i == null || e.target.tagName !== 'BUTTON') return;
   if (e.target.classList.contains('nbfit')) { const b = Core.bounds(S.nb[i].ds); fit({ x0: b.x0 - 5, x1: b.x1 + 5, y0: b.y0 - 5, y1: b.y1 + 5 }); }
@@ -2074,7 +2094,7 @@ function chkPanel() {
   const im = S.img.filter(q => q.located);
   $('chkSrc').innerHTML = `<div>分幅舊圖：${S.bl.sets.length ? S.bl.sets.map(s => `<b>${esc(s.name)}</b>`).join('、') : '<span class="muted">尚未載入（步驟 1「分幅舊圖」）</span>'}</div>` +
     `<div style="margin-top:4px">舊圖影像（勾選的用來比對墨線）：${im.length ? im.map(q => `<label class="chk" style="margin-right:8px"><input type="checkbox" data-chkimg="${esc(q.name)}"${isOldMapImg(q) ? ' checked' : ''}>${esc(q.name)}</label>`).join('') : '<span class="muted">尚未載入（步驟 1「舊圖影像」，需要 JGW 定位檔）</span>'}</div>`;
-  const r = S.chk.res; $('btnChkCsv').disabled = !r;
+  const r = S.chk.res; $('btnChkCsv').disabled = $('btnChkHtml').disabled = !r;
   if (!r) { $('chkSum').textContent = S.ds ? '按「開始檢核」' : '請先載入作業圖'; $('chkList').innerHTML = ''; return; }
   const c = chkCounts(), sh = r.shape, ik = r.ink, bl = r.bl;
   $('chkSum').innerHTML = `<b style="color:#d1242f">紅 ${c.red}</b>　<b style="color:#b7791f">黃 ${c.yellow}</b>　<span style="color:#6741d9">碎片 ${c.sliver}</span>　<span class="muted">共 ${c.total} 宗待確認</span>` +
@@ -2129,10 +2149,10 @@ const STEPS = [
     status: () => S.ds ? { st: 'done', text: `作業圖 ${S.ds.parcels.filter(p => !p.deleted).length} 宗；影像 ${S.img.length}（舊圖 ${chkImages().length}）；分幅舊圖 ${S.bl.sets.length} 組；鄰段 ${S.nb.length}${S.owner ? '；登記資料 ✓' : ''}` } : { st: 'todo', text: '尚未載入' } },
   { n: 2, title: '自動接圖', desc: '把分幅數化圖接成整段',
     status: () => !S.ds ? { st: 'todo', text: '' } : sheetPieces() ? { st: 'warn', text: `偵測到 ${sheetPieces()} 塊分幅塊（子號 ≥ 1000）：這張圖還沒接圖。自動接圖尚未提供，請先用 NECEXE 接圖後再載入` } : { st: 'na', text: '載入的圖沒有分幅塊，視為已接圖（自動接圖功能開發中）' } },
-  { n: 3, title: '鄰段接合', desc: '主區段界點吸附到「以鄰段為準」的鄰段', adv: 'seam', needNb: true,
-    run: async () => { runSeam(); const r = joinSeam(); return `移動 ${r.moves.length ? new Set(r.moves.map(m => m.id)).size : 0} 點；仍重疊／脫開 ${r.after.overlap + r.after.gap} 點`; } },
+  { n: 3, title: '鄰段接合', desc: '數值區鄰段：界址點完全照抄；圖解區鄰段：平移比形狀，只防重疊', adv: 'seam', needNb: true,
+    run: async () => { runSeam(); const r = joinSeam(); return `移動 ${r.moves.length ? new Set(r.moves.map(m => m.id)).size : 0} 點、補點 ${r.added.length}、刪點 ${r.removed.length}；仍重疊 ${r.after.overlap}、脫開 ${r.after.gap} 點`; } },
   { n: 4, title: '未登記土地合併分割', desc: '與鄰段的空隙建新地號 → 相連的未登記地合併 → 依點數與長寬比分割', adv: 'unreg',
-    confirm: () => { unregPanel(); const r = S.unreg; return `未登記地目前 ${r.parcels.length} 筆。將：與鄰段的空隙建新地號 → 相連的未登記地各併成一筆 → 再切成每筆 ≤ ${unN()} 點、長寬比 ≤ ${unRatio() || '不限'}（設定在「詳細設定…」）。\n已經合併分割過的圖會整批重新切，筆數可能大增。可一次一步復原。繼續？`; },
+    confirm: () => { unregPanel(); const r = S.unreg; return `未登記地目前 ${r.parcels.length} 筆。將：與鄰段的空隙建新地號 → 相連的未登記地各併成一筆 → 再切成每筆 ≤ ${unN()} 點、長寬比 ≤ ${unRatio() || '不限'}、每塊 ≥ ${unMin()} m²，小於 ${unMin()} m² 的碎塊併入相鄰未登記地（設定在「詳細設定…」）。\n已經合併分割過的圖會整批重新切，筆數可能大增。可一次一步復原。繼續？`; },
     run: async () => { const t = [], cnt = () => S.ds.parcels.filter(p => !p.deleted && (Core.parcelNo(p) || { m: 0 }).m >= 9000).length, n0 = cnt(); unregPanel();
       if (S.nb.length) { S.sgaps = Core.seamGaps(S.ds, nbArgs()); const g = fillAllGaps(false); t.push(`空隙建新地號 ${g.made}`); }
       S.unSel.clear(); unregPanel(); const m = await unregMerge(false); t.push(`合併 ${m ? m.merged : 0} 組`);
@@ -2224,7 +2244,7 @@ const api = {
   listLines: () => S.survey.lines.map(l => ({ id: l.id, name: l.name, points: l.points, closed: l.closed, ...Core.lineStats(S.survey, l) })),
   deleteLine: ({ id }) => deleteLine(id),
   // ── 鄰段接合（MCP）：listNeighbors → addNeighbor → joinSeam（自動接合並回傳報告）／checkSeam（只檢查）→ getSeamReport ──
-  listNeighbors: () => S.nb.map(n => ({ name: n.name, source: n.ds.source, parcels: n.ds.parcels.length, points: n.ds.points.size, boundary_points: n.seg.vids.size, visible: n.visible, authoritative: n.authoritative, color: n.color })),
+  listNeighbors: () => S.nb.map(n => ({ name: n.name, source: n.ds.source, parcels: n.ds.parcels.length, points: n.ds.points.size, boundary_points: n.seg.vids.size, visible: n.visible, mode: n.mode, color: n.color })),
   // files: [{name:'KC1120.D14', base64:'…'} | {name:'KC1120.BNP', text:'…'}]，需 D14+D13（建議 D11、D12）或 COA+BNP
   addNeighbor: ({ files = [] } = {}) => loadNeighbors(files.map(toFile)),
   // ── 接圖前比對（MCP）：addBaseline（每次一組，可多個資料夾）→ compareBaseline（遺漏＋面積超限）→ getBaselineReport ──
@@ -2251,11 +2271,13 @@ const api = {
         image: x.img ? { no_ink_m: f(x.img.offLen), checked_m: f(x.img.checked) } : null, suggestion: x.fix ? { merge_into: x.fix.label, reason: x.fix.why } : null })) }; },
   fixSliver: ({ label }) => { const x = S.chk.res && S.chk.res.rows.find(r => r.label === String(label)); if (!x) throw new Error('檢核結果沒有 ' + label); return applySliverFix(x); },
   confirmCheck: ({ label, confirmed = true }) => { if (!S.chk.res) throw new Error('尚未檢核'); confirmed ? S.chk.ok.add(String(label)) : S.chk.ok.delete(String(label)); chkPanel(); draw(); return { confirmed: [...S.chk.ok] }; },
+  exportReportHtml: () => reportHtml(),   // 接圖前比對＋舊圖檢核的互動報告（HTML 字串）
   getBaselineReport: () => { const r = S.bl.res; if (!r) return null; const strip = l => l.map(({ rings, ...x }) => x);
-    return { ...r, missing: strip(r.missing), partial: strip(r.partial), unreg: strip(r.unreg), area: undefined, flagged: r.flagged, sets: S.bl.sets.map(s => s.name) }; },
+    return { ...r, missing: strip(r.missing), partial: strip(r.partial), unreg: strip(r.unreg), occupied: strip(r.occupied), area: undefined, flagged: strip(r.flagged), sets: S.bl.sets.map(s => s.name) }; },
 
   removeNeighbor: ({ name }) => { const i = S.nb.findIndex(n => n.name.toLowerCase() === String(name).toLowerCase()); if (i < 0) throw new Error('找不到鄰段 ' + name); S.nb.splice(i, 1); S.seam = null; refresh(); return api.listNeighbors(); },
-  setNeighbor: ({ name, visible, authoritative }) => { const n = S.nb.find(n => n.name.toLowerCase() === String(name).toLowerCase()); if (!n) throw new Error('找不到鄰段 ' + name); if (visible != null) n.visible = !!visible; if (authoritative != null) n.authoritative = !!authoritative; refresh(); return api.listNeighbors(); },
+  setNeighbor: ({ name, visible, mode, authoritative }) => { const n = S.nb.find(n => n.name.toLowerCase() === String(name).toLowerCase()); if (!n) throw new Error('找不到鄰段 ' + name); if (visible != null) n.visible = !!visible;   // mode：numeric 數值區／graphic 圖解區／none 只比對（authoritative 為舊參數）
+    if (mode != null) { if (!NB_MODE[mode]) throw new Error('mode 需為 numeric／graphic／none'); n.mode = mode; n.shift = null; } else if (authoritative != null) n.mode = authoritative ? 'numeric' : 'none'; S.seamStale = !!S.seam; refresh(); return api.listNeighbors(); },
   // 參數：tol 重合容差、search 搜尋距離、snap 吸附上限（公尺）；省略用畫面上的設定
   checkSeam: o => runSeam(o || {}),
   joinSeam: o => joinSeam(o || {}),
@@ -2291,8 +2313,9 @@ const api = {
   exportErrReport: () => { if (!S.ds) throw new Error('尚未載入圖資'); return errReportText(); },
   ringIssues: () => { if (!S.ds) throw new Error('尚未載入圖資'); return Core.ringIssues(S.ds).map(o => ({ kind: o.kind, parcel: S.ds.parcels[o.p].label, inner: o.h != null ? S.ds.parcels[o.h].label : null, text: Core.ringIssueLine(S.ds, o), jumps: o.jumps || null })); },
   splitHole: ({ outer, inner }) => { const f = l => { const p = S.ds.parcels.find(q => q.label === l || q.oldLabel === l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }; const pi = f(outer), r = Core.splitHole(S.ds, pi, f(inner)); pushStruct(r.delta, `拆出地中地 ${inner}`); return { area: S.ds.parcels[pi].area, jumps: r.jumps, linked: r.linked }; },
-  unregSummary: ({ maxPts = 10, maxRatio = 2 } = {}) => { const r = Core.unregSummary(S.ds, maxPts, maxRatio); return { parcels: r.parcels.map(p => ({ label: p.label, points: p.pts, ratio: p.ratio, area: p.area, over: p.over, tooLong: p.long })), gaps: r.gaps.map(g => ({ points: g.ids, area: g.area })) }; },
-  splitParcel: ({ parcel, maxPts = 10, maxRatio = 2 }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitParcel(S.ds, p.idx, maxPts, maxRatio); if (r.delta) pushStruct(r.delta, `分割 ${parcel}`); return { pieces: r.pieces, addedPoints: r.delta ? r.delta.added.map(q => q.id) : [], unresolved: r.unresolved }; },
+  unregSummary: ({ maxPts = 10, maxRatio = 2, minArea = 0 } = {}) => { const r = Core.unregSummary(S.ds, maxPts, maxRatio, minArea); return { parcels: r.parcels.map(p => ({ label: p.label, points: p.pts, ratio: p.ratio, area: p.area, over: p.over, tooLong: p.long })), gaps: r.gaps.map(g => ({ points: g.ids, area: g.area })) }; },
+  absorbSlivers: ({ minArea = 50 } = {}) => { const r = Core.absorbSlivers(S.ds, minArea); pushMulti(r.deltas, '碎塊併入相鄰未登記地'); refresh(); return { merged: r.merged, left: r.left }; },
+  splitParcel: ({ parcel, maxPts = 10, maxRatio = 2, minArea = 0 }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitParcel(S.ds, p.idx, maxPts, maxRatio, { minArea }); if (r.delta) pushStruct(r.delta, `分割 ${parcel}`); return { pieces: r.pieces, addedPoints: r.delta ? r.delta.added.map(q => q.id) : [], unresolved: r.unresolved }; },
   mergeParcels: ({ parcels }) => { const idx = parcels.map(l => { const p = findPar(l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }); const r = Core.mergeParcels(S.ds, idx); pushStruct(r.delta, '合併 ' + parcels.join('、')); return { keep: r.keep, merged: r.merged }; },
   seamGaps: () => { if (!S.ds) throw new Error('尚未載入圖資'); return Core.seamGaps(S.ds, nbArgs()).map(g => ({ area: g.area, points: g.nodes.length, new_points: g.nodes.filter(n => n.id == null).length })); },
   fillSeamGaps: ({ mother = 9001 } = {}) => { const ds = S.ds, deltas = [], labels = []; for (const g of Core.seamGaps(ds, nbArgs())) { const r = Core.fillSeamGap(ds, g, mother); deltas.push(r.delta); labels.push(r.label); } pushMulti(deltas, '與鄰段之間的空隙建為新地號'); return { labels }; },
