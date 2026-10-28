@@ -691,4 +691,41 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.deepEqual(Core.findOwner(ds, ot, '丙').map(i => ds.parcels[i].label), ['2']);
   assert.deepEqual(Core.shareSum([{ num: '1', den: '6' }, { num: '1', den: '3' }, { num: '1', den: '2' }]), { n: 1n, d: 1n });
 }
+
+// ── 舊圖檢核：分幅向量形狀比對、影像墨線 ──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings) => Core.datasetFromD({ pts: rd(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings) });
+  // 作業圖：1、2 相鄰；3 是一整塊；9001-1、9001-2 相鄰（未登記地分割線不檢查）
+  const P = [[1, 0, 0], [2, 0, 20], [3, 20, 20], [4, 24, 0], [5, 0, 40], [6, 20, 40], [11, 0, 60], [12, 0, 80], [13, 20, 80], [14, 20, 60], [21, 40, 0], [22, 40, 20], [23, 60, 20], [24, 60, 0], [25, 40, 40], [26, 60, 40]];
+  const cur = mk(P, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [2, 5, 6, 3]), ring(1, 3, 0, [11, 12, 13, 14]), ring(1, 9001, 1, [21, 22, 23, 24]), ring(1, 9001, 2, [22, 25, 26, 23])]);
+  // 舊圖：1 的左上角在 (20,0)（作業圖跑到 24）；2 在舊圖被 30 處的線分成 2 與 5；3 被分幅切成 3 與 3-1000（切線不算）；未登記地是一整塊
+  const R = [[1, 0, 0], [2, 0, 20], [3, 20, 20], [4, 20, 0], [5, 0, 40], [6, 20, 40], [7, 0, 30], [8, 20, 30], [11, 0, 60], [12, 0, 80], [13, 20, 80], [14, 20, 60], [15, 0, 70], [16, 20, 70], [21, 40, 0], [23, 60, 40], [24, 60, 0], [25, 40, 40]];
+  const ref = mk(R, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [2, 7, 8, 3]), ring(1, 5, 0, [7, 5, 6, 8]), ring(1, 3, 0, [11, 15, 16, 14]), ring(1, 3, 1000, [15, 12, 13, 16]), ring(1, 9001, 0, [21, 25, 23, 24])]);
+  const r = Core.shapeCheck(cur, [ref], { identity: true, maxShift: 0 }), by = l => r.flagged.find(x => x.label === l);
+  assert.ok(by('1') && by('1').offLen > 3, '1 的界址線離舊圖超過 1 m');
+  assert.ok(by('2') && Math.abs(by('2').innerLen - 15) < 1.5, '舊圖的 2／5 分界線穿過作業圖 2 的內部（兩端各 2.5 m 貼近界址線不算） ' + (by('2') && by('2').innerLen));
+  assert.ok(!by('3'), '分幅切線不是界址');
+  assert.ok(!r.flagged.some(x => x.label.startsWith('9001')), '未登記地之間的分割線不檢查');
+  // 局部平移：整宗平移 2 m 不算形狀跑掉
+  const moved = mk(P.map(([n, y, x]) => [n, y + 2, x]), [ring(1, 3, 0, [11, 12, 13, 14])]);
+  const r2 = Core.shapeCheck(moved, [ref], { identity: true }); assert.equal(r2.flagged.length, 0, '整宗平移 2 m 由局部平移吸收');
+  // 影像：0.25 m/px 白底，沿作業圖 1、2 的界址線畫黑線，但 2 的東邊（x＝40）不畫
+  const W = 240, H = 200, px = 0.25, wf = { a: px, b: 0, d: 0, e: -px, c: X - 5 + px / 2, f: Y + 40 - px / 2 }, img = new Uint8ClampedArray(W * H * 4).fill(235);
+  const toPx = (y, x) => [Math.round((X + x - wf.c) / px), Math.round((wf.f - (Y + y)) / px)];
+  const line = (a, b) => { const [u0, v0] = toPx(...a), [u1, v1] = toPx(...b), n = Math.max(Math.abs(u1 - u0), Math.abs(v1 - v0)); for (let k = 0; k <= n; k++) { const u = Math.round(u0 + (u1 - u0) * k / n), v = Math.round(v0 + (v1 - v0) * k / n); const i = (v * W + u) * 4; img[i] = img[i + 1] = img[i + 2] = 40; } };
+  const two = mk([[1, 0, 0], [2, 0, 20], [3, 20, 20], [4, 20, 0], [5, 0, 40], [6, 20, 40]], [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [2, 5, 6, 3])]);
+  for (const [a, b] of [[[0, 0], [0, 20]], [[0, 20], [20, 20]], [[20, 20], [20, 0]], [[20, 0], [0, 0]], [[0, 20], [0, 40]], [[20, 20], [20, 40]]]) line(a, b);   // [y, x]；2 的東邊 x=40 不畫
+  for (let i = 3; i < img.length; i += 4) img[i] = 255;
+  const getRegion = (x0, y0, x1, y1) => { const u0 = Math.max(0, Math.floor((x0 - wf.c) / px)), u1 = Math.min(W, Math.ceil((x1 - wf.c) / px)), v0 = Math.max(0, Math.floor((wf.f - y1) / px)), v1 = Math.min(H, Math.ceil((wf.f - y0) / px));
+    if (u1 - u0 < 4 || v1 - v0 < 4) return null; const w = u1 - u0, h = v1 - v0, rgba = new Uint8ClampedArray(w * h * 4);
+    for (let v = 0; v < h; v++) rgba.set(img.subarray(((v + v0) * W + u0) * 4, ((v + v0) * W + u1) * 4), v * w * 4);
+    return { rgba, w, h, wf: { ...wf, c: wf.c + u0 * px, f: wf.f - v0 * px } }; };
+  const k = Core.inkCheck(two, getRegion, { block: 100, shift: 1, ratio: 0.15, minLen: 3 });   // 2 有 1/4 的界址線沒有墨線（預設門檻 30% 不列）
+  assert.deepEqual(k.flagged.map(x => x.label), ['2'], '只有 2 的右邊沒有墨線');
+  near(k.flagged[0].offLen, 20, 1e-6); near(k.offLen, 20, 1e-6); near(k.checkedLen, 140, 1e-6);
+  assert.equal(Core.oldMapReport(r, k)[0].label, '2');
+  // 整片空白（或對位偏太多）：不判斷，列為對位不良
+  const blank = Core.inkCheck(two, () => ({ rgba: new Uint8ClampedArray(40 * 40 * 4).fill(235), w: 40, h: 40, wf: { a: 2, b: 0, d: 0, e: -2, c: X - 20, f: Y + 60 } }), { block: 100, shift: 1 });
+  assert.equal(blank.flagged.length, 0); assert.equal(blank.poor, 1); near(blank.checkedLen, 0, 1e-9);
+}
 console.log('SYNTHETIC OK');

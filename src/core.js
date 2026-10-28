@@ -2045,20 +2045,26 @@ const Core = (() => {
       for (let gx = Math.floor(x0 / cell); gx <= Math.floor(x1 / cell); gx++) for (let gy = Math.floor(y0 / cell); gy <= Math.floor(y1 / cell); gy++) for (const p of grid.get(gx + ',' + gy) || []) { const b = box.get(p); if (b.x1 >= x0 && b.x0 <= x1 && b.y1 >= y0 && b.y0 <= y1) out.add(p); }
       return out; };
   }
+  // 作業圖宗地依地號分組：'m-c' → [宗地]
+  function curByLabel(cur) { const curBy = new Map(); for (const p of cur.parcels) { if (p.deleted || p.ids.length < 3) continue; const no = parcelNo(p); if (no) { const k = noLabel(no.m, no.c); (curBy.get(k) || curBy.set(k, []).get(k)).push(p); } } return curBy; }
+  // 接圖前圖資 → 作業圖的坐標轉換：同地號（非未登記地）形心，各組一起擬合（各組應同一坐標系統）。擬合不可靠就回傳 null（不轉換）
+  function baselineFit(cur, sets, merge = true, curBy = curByLabel(cur)) {
+    const src = [], dst = [];
+    for (const set of sets) for (const g of baselineGroups(set, null, merge).values()) { if (g.m >= UNREG_MIN || !curBy.has(g.key)) continue; const ps = curBy.get(g.key);
+      let sx = 0, sy = 0, sa = 0; for (const pc of g.pieces) { const c = ringCentroidXY(pc.ring); sx += c.x * pc.area; sy += c.y * pc.area; sa += pc.area; }
+      let tx = 0, ty = 0, ta = 0; for (const p of ps) { const c = polyCentroid(p.ids, cur.points); tx += c.x * p.area; ty += c.y * p.area; ta += p.area; }
+      if (sa > 0 && ta > 0) { src.push({ x: sx / sa, y: sy / sa }); dst.push({ x: tx / ta, y: ty / ta }); } }
+    const fit = fitAffine(src, dst);
+    return fit && !(fit.median > 5 || fit.used < Math.min(10, src.length * 0.5)) ? fit : null;
+  }
   // cur：作業圖（接完圖、刪完點、補完未登記地）。refs：接圖前圖資，每個元素是一組（一個資料集，或幾個資料集組成的陣列，例如 18 個單幅資料夾）。
   // 遺漏看所有組的聯集；面積原因取「該地號塊數最少」的那一組（例如同時載入切過版本與整幅時，以整幅的完整宗地判斷）。
   function compareBaseline(cur, refs, opt = {}) {
     const a = opt.a ?? AREA_TOL.a, b = opt.b ?? AREA_TOL.b, ratio = opt.ratio ?? 5, minIn = opt.minInside ?? 0.5, minTouch = opt.minTouch ?? 0.02, merge = opt.merge !== false;
     const sets = refs.map(r => (Array.isArray(r) ? r : [r])).filter(r => r.length), isU = no => no.m >= UNREG_MIN;
-    const curBy = new Map(); for (const p of cur.parcels) { if (p.deleted || p.ids.length < 3) continue; const no = parcelNo(p); if (no) { const k = noLabel(no.m, no.c); (curBy.get(k) || curBy.set(k, []).get(k)).push(p); } }
-    // 1. 坐標轉換：同地號（非未登記地）形心，各組一起擬合（各組應同一坐標系統）
-    const src = [], dst = [];
-    for (const set of sets) for (const g of baselineGroups(set, null, merge).values()) { if (isU(g) || !curBy.has(g.key)) continue; const ps = curBy.get(g.key);
-      let sx = 0, sy = 0, sa = 0; for (const pc of g.pieces) { const c = ringCentroidXY(pc.ring); sx += c.x * pc.area; sy += c.y * pc.area; sa += pc.area; }
-      let tx = 0, ty = 0, ta = 0; for (const p of ps) { const c = polyCentroid(p.ids, cur.points); tx += c.x * p.area; ty += c.y * p.area; ta += p.area; }
-      if (sa > 0 && ta > 0) { src.push({ x: sx / sa, y: sy / sa }); dst.push({ x: tx / ta, y: ty / ta }); } }
-    let fit = opt.identity ? null : fitAffine(src, dst);
-    if (fit && (fit.median > 5 || fit.used < Math.min(10, src.length * 0.5))) fit = null;   // 擬合不可靠就不轉換
+    const curBy = curByLabel(cur);
+    // 1. 坐標轉換
+    const fit = opt.identity ? null : baselineFit(cur, sets, merge, curBy);
     // 各組分組後合併：同一地號取塊數最少的那組（相同時取先載入的）
     const groups = new Map();
     for (const set of sets) for (const [k, g] of baselineGroups(set, fit ? fit.apply : null, merge)) { const o = groups.get(k); if (!o || g.pieces.length < o.pieces.length) groups.set(k, g); }
@@ -2249,6 +2255,190 @@ const Core = (() => {
   const ringCentroidXY = arr => { const o = arr[0]; let A = 0, cx = 0, cy = 0;
     for (let i = 0; i < arr.length; i++) { const p = arr[i], q = arr[(i + 1) % arr.length], px = p.x - o.x, py = p.y - o.y, qx = q.x - o.x, qy = q.y - o.y, c = px * qy - qx * py; A += c; cx += (px + qx) * c; cy += (py + qy) * c; }
     return A ? { x: o.x + cx / (3 * A), y: o.y + cy / (3 * A) } : { x: o.x, y: o.y }; };
+  // ── 舊圖檢核（v0.23.0）：作業圖的每條界址線對照「分幅舊圖向量」與「舊圖掃描影像」──────────
+  // 共同的取樣：作業圖每條界址線（圓弧以弦代）每 step m 取一點；兩側都是未登記地（9000 號以上）的線是分割時新畫的，舊圖本來就沒有，不檢查。
+  function checkSegments(cur, step = 1) {
+    const own = new Map();
+    for (const p of cur.parcels) { if (p.deleted || p.ids.length < 3) continue;
+      for (let i = 0; i < p.ids.length; i++) { const a = p.ids[i], b = p.ids[(i + 1) % p.ids.length]; if (a === b) continue; const k = segKey(a, b); let e = own.get(k); if (!e) own.set(k, e = { key: k, a, b, ps: [] }); if (!e.ps.includes(p.idx)) e.ps.push(p.idx); } }
+    const segs = [];
+    for (const e of own.values()) {
+      const A = cur.points.get(e.a), B = cur.points.get(e.b), len = Math.hypot(B.x - A.x, B.y - A.y); if (!len) continue;
+      const skip = e.ps.length === 2 && e.ps.every(i => mainNo(cur.parcels[i]) >= UNREG_MIN), n = Math.max(1, Math.round(len / step)), smp = [];
+      for (let j = 0; j < n; j++) { const t = (j + 0.5) / n; smp.push({ x: A.x + t * (B.x - A.x), y: A.y + t * (B.y - A.y), t }); }
+      segs.push({ key: e.key, a: e.a, b: e.b, A: { x: A.x, y: A.y }, B: { x: B.x, y: B.y }, len, ps: e.ps, skip, smp, w: len / n });
+    }
+    return segs;
+  }
+  // 線段格網索引：q(x, y, r) → 外框與該點 r 範圍重疊的線段
+  function segGrid(list, cell = 25) {
+    const g = new Map(), key = (i, j) => i + ',' + j;
+    for (const s of list) { for (let i = Math.floor(Math.min(s.A.x, s.B.x) / cell); i <= Math.floor(Math.max(s.A.x, s.B.x) / cell); i++) for (let j = Math.floor(Math.min(s.A.y, s.B.y) / cell); j <= Math.floor(Math.max(s.A.y, s.B.y) / cell); j++) { const k = key(i, j); (g.get(k) || g.set(k, []).get(k)).push(s); } }
+    return (x, y, r) => { const out = new Set(); for (let i = Math.floor((x - r) / cell); i <= Math.floor((x + r) / cell); i++) for (let j = Math.floor((y - r) / cell); j <= Math.floor((y + r) / cell); j++) for (const s of g.get(key(i, j)) || []) out.add(s); return out; };
+  }
+  const nearestOn = (x, y, cands) => { let best = null; for (const s of cands) { const dx = s.B.x - s.A.x, dy = s.B.y - s.A.y, l2 = dx * dx + dy * dy; let t = l2 ? ((x - s.A.x) * dx + (y - s.A.y) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t)); const px = s.A.x + t * dx, py = s.A.y + t * dy, d = Math.hypot(px - x, py - y); if (!best || d < best.d) best = { d, x: px, y: py, s }; } return best; };
+  // 連續的「不符」取樣併成線段（圖上標示用）：runs([{x,y,bad}]) → [[{x,y},{x,y}]]
+  function badRuns(seg, flags, dx = 0, dy = 0) {
+    const out = []; let st = -1; const at = t => ({ x: seg.A.x + t * (seg.B.x - seg.A.x) + dx, y: seg.A.y + t * (seg.B.y - seg.A.y) + dy }), n = flags.length;
+    for (let j = 0; j <= n; j++) { if (j < n && flags[j]) { if (st < 0) st = j; } else if (st >= 0) { out.push([at(st / n), at(j / n)]); st = -1; } }
+    return out;
+  }
+  // 宗地所在（點 → 包含它的最小宗地，地中地優先）
+  function parcelLocator(cur) {
+    const idx = parcelBoxIndex(cur, 50);
+    return (x, y) => { let best = null; for (const p of idx([{ x, y }])) if (pointInRing(p.ids, cur.points, y, x) && (!best || p.area < best.area)) best = p; return best; };
+  }
+  // 嚴重度：不符長度對門檻的倍數；≥1 列出、≥2 紅色
+  const SHAPE_DEFAULT = { tol: 1.0, search: 6, maxShift: 5, step: 1, innerTol: 2.5, minLen: 3, ratio: 0.15, sliver: 30 };
+  // 分幅舊圖向量比對：refs 同 compareBaseline（每組一個或多個資料集）。舊圖坐標以同地號形心擬合轉到作業圖（TWD67 也可）；
+  // 分幅切開的同一地號（子號 +1000k 併回後相同）之間的切線不是界址，不當成舊圖界線。
+  // 每宗先做局部平移（ICP，只平移、上限 maxShift）讓界址線最貼近舊圖界線，再量：
+  //   off＝離舊圖界線超過 tol 的界址線長度（作業圖有、舊圖沒有：多畫或形狀跑掉）
+  //   inner＝舊圖界線穿過宗地內部（離作業圖界址線超過 innerTol）的長度（舊圖有、作業圖沒有：少分、併錯）
+  function shapeCheck(cur, refs, opt = {}) {
+    const o = { ...SHAPE_DEFAULT, ...opt }, sets = refs.map(r => (Array.isArray(r) ? r : [r])).filter(r => r.length);
+    if (!sets.length) throw new Error('沒有分幅舊圖向量');
+    const fit = o.identity ? null : (o.fit || baselineFit(cur, sets, o.merge !== false));
+    const T = fit ? fit.apply : (x, y) => ({ x, y });
+    // 舊圖界線（去重、去分幅切線）
+    const refSegs = [], seen = new Set(), rk = q => Math.round(q.x * 100) + ',' + Math.round(q.y * 100);
+    for (const set of sets) {
+      const groups = baselineGroups(set, T, o.merge !== false);
+      for (const g of groups.values()) for (const pc of g.pieces) {
+        const others = g.pieces.filter(q => q !== pc);
+        for (let i = 0; i < pc.ring.length; i++) {
+          const A = pc.ring[i], B = pc.ring[(i + 1) % pc.ring.length], len = Math.hypot(B.x - A.x, B.y - A.y); if (len < 1e-6) continue;
+          const k = [rk(A), rk(B)].sort().join('|'); if (seen.has(k)) continue;
+          if (others.length) { const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, nx = -(B.y - A.y) / len * 0.3, ny = (B.x - A.x) / len * 0.3, inP = (r, x, y) => { let c = false; for (let a = 0, b = r.length - 1; a < r.length; b = a++) { const p = r[a], q = r[b]; if ((p.y > y) !== (q.y > y) && x < ((q.x - p.x) * (y - p.y)) / (q.y - p.y) + p.x) c = !c; } return c; };
+            if (others.some(q => inP(q.ring, mx + nx, my + ny) || inP(q.ring, mx - nx, my - ny))) continue; }   // 另一側是同地號的另一塊＝分幅切線
+          seen.add(k); refSegs.push({ A, B, len, label: g.key });
+        }
+      }
+    }
+    const refQ = segGrid(refSegs), segs = checkSegments(cur, o.step), curQ = segGrid(segs);
+    const res = new Map(), get = i => { let r = res.get(i); if (!r) { const p = cur.parcels[i]; res.set(i, r = { idx: i, label: p.label, area: p.area, perimeter: 0, checked: 0, offLen: 0, innerLen: 0, maxDev: 0, shift: { dx: 0, dy: 0 }, offSegs: [], innerSegs: [], offEdges: [] }); } return r; };
+    // 1. 每宗局部平移
+    const bySeg = new Map(); for (const s of segs) for (const i of s.ps) { (bySeg.get(i) || bySeg.set(i, []).get(i)).push(s); get(i).perimeter += s.len; }
+    for (const [i, list] of bySeg) {
+      const smp = []; for (const s of list) if (!s.skip) for (const q of s.smp) smp.push({ x: q.x, y: q.y, w: s.w });
+      const r = get(i); if (!smp.length) continue; let tx = 0, ty = 0;
+      for (let it = 0; it < 6; it++) {
+        const ds = []; for (const q of smp) { const x = q.x + tx, y = q.y + ty, nb = nearestOn(x, y, refQ(x, y, o.search)); if (nb && nb.d < o.search) ds.push({ dx: nb.x - x, dy: nb.y - y, d: nb.d, w: q.w }); }
+        if (ds.length < 3) break; const md = median(ds.map(d => d.d)), lim = Math.max(3 * md, o.tol); let sw = 0, sx = 0, sy = 0;
+        for (const d of ds) if (d.d <= lim) { sx += d.dx * d.w; sy += d.dy * d.w; sw += d.w; }
+        if (!sw) break; tx += sx / sw; ty += sy / sw; const m = Math.hypot(tx, ty); if (m > o.maxShift) { tx *= o.maxShift / m; ty *= o.maxShift / m; }
+        if (Math.hypot(sx / sw, sy / sw) < 0.01) break;
+      }
+      r.shift = { dx: tx, dy: ty };
+    }
+    // 2. 界址線離舊圖界線的距離（各宗用自己的平移）
+    for (const s of segs) { if (s.skip) continue;
+      for (const i of s.ps) { const r = get(i), { dx, dy } = r.shift, flags = s.smp.map(q => { const x = q.x + dx, y = q.y + dy, nb = nearestOn(x, y, refQ(x, y, o.search)), d = nb ? nb.d : o.search; r.maxDev = Math.max(r.maxDev, d); return d > o.tol; });
+        r.checked += s.len; const bad = flags.filter(Boolean).length * s.w; if (bad) { r.offLen += bad; r.offSegs.push(...badRuns(s, flags)); if (bad >= s.len / 2) r.offEdges.push(s.key); } } }
+    // 3. 舊圖界線穿過宗地內部
+    const loc = parcelLocator(cur);
+    for (const s of refSegs) {
+      const n = Math.max(1, Math.round(s.len / o.step)), w = s.len / n; let run = null;
+      const flush = () => { if (run) { const r = get(run.p.idx); r.innerLen += run.len; r.innerSegs.push([run.a, run.b]); run = null; } };
+      for (let j = 0; j < n; j++) {
+        const t = (j + 0.5) / n, x = s.A.x + t * (s.B.x - s.A.x), y = s.A.y + t * (s.B.y - s.A.y), nb = nearestOn(x, y, curQ(x, y, o.innerTol));
+        const p = nb && nb.d <= o.innerTol ? null : loc(x, y);
+        if (!p) { flush(); continue; }
+        const a = { x: s.A.x + (j / n) * (s.B.x - s.A.x), y: s.A.y + (j / n) * (s.B.y - s.A.y) }, b = { x: s.A.x + ((j + 1) / n) * (s.B.x - s.A.x), y: s.A.y + ((j + 1) / n) * (s.B.y - s.A.y) };
+        if (run && run.p === p) { run.b = b; run.len += w; } else { flush(); run = { p, a, b, len: w }; }
+      }
+      flush();
+    }
+    // 4. 判定
+    const list = [];
+    for (const r of res.values()) {
+      const offLim = Math.max(o.minLen, o.ratio * r.checked), innerLim = 2 * o.minLen;
+      r.score = Math.max(r.checked ? r.offLen / offLim : 0, r.innerLen / innerLim);
+      r.level = r.score >= 2 ? 'red' : r.score >= 1 ? 'yellow' : '';
+      r.sliver = r.area < o.sliver;
+      if (r.level) list.push(r);
+    }
+    list.sort((u, v) => v.score - u.score);
+    const slivers = [...res.values()].filter(r => r.sliver).sort((u, v) => u.area - v.area);
+    return { opt: o, fit: fit ? { X: fit.X, Y: fit.Y, used: fit.used, total: fit.total, median: fit.median, max: fit.max } : null, refSegs: refSegs.length, parcels: res.size, flagged: list, slivers,
+      counts: { red: list.filter(r => r.level === 'red').length, yellow: list.filter(r => r.level === 'yellow').length, slivers: slivers.length } };
+  }
+
+  // 影像墨線檢核：掃描舊圖上，作業圖的界址線底下應該有墨線（黑線或紅線）。
+  // 影像很大（整段可達上億像素），所以分塊：以 block m 方格為單位，每塊讀一個視窗（方格外擴 block/2＋搜尋範圍）的像素，
+  // 1. 墨線遮罩：亮度比周圍（半徑 bg m 的平均）暗 dark 以上，或紅色（R−G）比周圍高 red 以上；
+  // 2. 距離場：每個像素到最近墨線的距離（倒角距離，像素）；
+  // 3. 塊內平移：在 ±shift m 內找讓視窗內界址線最貼墨線的平移（舊圖紙張伸縮、掃描定位誤差；相鄰圖幅各自偏移，所以方格要小）；
+  // 4. 方格內的界址線逐點看平移後離墨線是否 ≤ tol m，支持比例 < 0.5 的線段列為「影像上沒有墨線」。
+  //    整個視窗平移後仍有一半以上的取樣找不到墨線（minFit）＝這一帶影像對不上（對位偏太多、空白、不是同一張圖），不判斷，另列「對位不良」。
+  const INK_DEFAULT = { block: 50, shift: 5, shiftStep: 0.25, cap: 2, tol: 0.6, bg: 3, dark: 14, red: 22, step: 0.4, minLen: 5, ratio: 0.3, minSup: 0.5, minFit: 0.5 };   // 影像比向量雜（文字、汙點、後來的分割線），門檻較寬：無墨線 ≥ 30% 且 ≥ 5 m 才列
+  function inkMask(rgba, w, h, opt = {}) {
+    const o = { ...INK_DEFAULT, ...opt }, N = w * h, L = new Float32Array(N), RG = new Float32Array(N), rad = Math.max(2, Math.round(o.bgPx || 12));
+    for (let i = 0; i < N; i++) { const r = rgba[4 * i], g = rgba[4 * i + 1], b = rgba[4 * i + 2]; L[i] = 0.299 * r + 0.587 * g + 0.114 * b; RG[i] = r - g; }
+    const blur = src => { const W1 = w + 1, I = new Float64Array(W1 * (h + 1)); for (let y = 0; y < h; y++) { let s = 0; for (let x = 0; x < w; x++) { s += src[y * w + x]; I[(y + 1) * W1 + x + 1] = I[y * W1 + x + 1] + s; } }
+      const out = new Float32Array(N); for (let y = 0; y < h; y++) { const y0 = Math.max(0, y - rad), y1 = Math.min(h, y + rad + 1); for (let x = 0; x < w; x++) { const x0 = Math.max(0, x - rad), x1 = Math.min(w, x + rad + 1); out[y * w + x] = (I[y1 * W1 + x1] - I[y0 * W1 + x1] - I[y1 * W1 + x0] + I[y0 * W1 + x0]) / ((y1 - y0) * (x1 - x0)); } } return out; };
+    const bL = blur(L), bR = blur(RG), m = new Uint8Array(N);
+    for (let i = 0; i < N; i++) if (rgba[4 * i + 3] > 0 && (bL[i] - L[i] > o.dark || RG[i] - bR[i] > o.red)) m[i] = 1;
+    return m;
+  }
+  // 倒角距離（兩趟，斜向 √2），單位像素
+  function distanceField(mask, w, h) {
+    const N = w * h, D = new Float32Array(N), S2 = Math.SQRT2; for (let i = 0; i < N; i++) D[i] = mask[i] ? 0 : 1e9;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; let v = D[i]; if (x > 0) v = Math.min(v, D[i - 1] + 1); if (y > 0) { v = Math.min(v, D[i - w] + 1); if (x > 0) v = Math.min(v, D[i - w - 1] + S2); if (x < w - 1) v = Math.min(v, D[i - w + 1] + S2); } D[i] = v; }
+    for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) { const i = y * w + x; let v = D[i]; if (x < w - 1) v = Math.min(v, D[i + 1] + 1); if (y < h - 1) { v = Math.min(v, D[i + w] + 1); if (x < w - 1) v = Math.min(v, D[i + w + 1] + S2); if (x > 0) v = Math.min(v, D[i + w - 1] + S2); } D[i] = v; }
+    return D;
+  }
+  // 分塊計畫：回傳 { segs, blocks:[{key, x0,y0,x1,y1（方格）, wx0,wy0,wx1,wy1（要讀的視窗）}] }
+  function inkPlan(cur, opt = {}) {
+    const o = { ...INK_DEFAULT, ...opt }, segs = checkSegments(cur, o.step).filter(s => !s.skip), B = o.block, blocks = new Map();
+    for (const s of segs) { const mx = (s.A.x + s.B.x) / 2, my = (s.A.y + s.B.y) / 2, i = Math.floor(mx / B), j = Math.floor(my / B), k = i + ',' + j; s.block = k;
+      if (!blocks.has(k)) { const m = B / 2 + o.shift + o.cap + 2; blocks.set(k, { key: k, x0: i * B, y0: j * B, x1: (i + 1) * B, y1: (j + 1) * B, wx0: i * B - m, wy0: j * B - m, wx1: (i + 1) * B + m, wy1: (j + 1) * B + m, segs: [] }); }
+      blocks.get(k).segs.push(s); }
+    const list = [...blocks.values()];
+    const q = segGrid(segs, B / 2); for (const b of list) b.win = [...q((b.wx0 + b.wx1) / 2, (b.wy0 + b.wy1) / 2, (b.wx1 - b.wx0) / 2)].filter(s => Math.max(s.A.x, s.B.x) >= b.wx0 && Math.min(s.A.x, s.B.x) <= b.wx1 && Math.max(s.A.y, s.B.y) >= b.wy0 && Math.min(s.A.y, s.B.y) <= b.wy1);
+    return { opt: o, segs, blocks: list };
+  }
+  // 處理一塊：region＝{ rgba, w, h, wf }（視窗的像素與它的 world file）；沒有影像（region 為 null）的塊不判定
+  function inkBlock(plan, b, region) {
+    const o = plan.opt; if (!region) { b.none = true; return b; }
+    const { rgba, w, h, wf } = region, px = Math.hypot(wf.a, wf.d), det = wf.a * wf.e - wf.b * wf.d;
+    const D = distanceField(inkMask(rgba, w, h, { ...o, bgPx: o.bg / px }), w, h);
+    const dist = (x, y) => { const X = x - wf.c, Y = y - wf.f, u = Math.round((wf.e * X - wf.b * Y) / det), v = Math.round((-wf.d * X + wf.a * Y) / det); return u < 0 || v < 0 || u >= w || v >= h ? null : D[v * w + u] * px; };
+    let n0 = 0; const cost = (dx, dy) => { let c = 0, n = 0; for (const s of b.win) for (const q of s.smp) { const d = dist(q.x + dx, q.y + dy); if (d == null) continue; c += Math.min(d, o.cap); n++; } n0 = n; return n ? c / n : o.cap; };
+    let best = { dx: 0, dy: 0, c: cost(0, 0) };
+    if (n0) {   // 先 1 m 間距粗搜，再在最佳點 ±1 m 內以 shiftStep 細搜
+      const scan = (cx, cy, r, st) => { for (let dx = cx - r; dx <= cx + r + 1e-9; dx += st) for (let dy = cy - r; dy <= cy + r + 1e-9; dy += st) { if (Math.abs(dx) > o.shift + 1e-9 || Math.abs(dy) > o.shift + 1e-9) continue; const c = cost(dx, dy); if (c < best.c - 1e-9) best = { dx, dy, c }; } };
+      scan(0, 0, Math.ceil(o.shift), 1); const b0 = best; scan(b0.dx, b0.dy, 1, o.shiftStep);
+    }
+    b.shift = { dx: best.dx, dy: best.dy }; b.cost = best.c;
+    let ok = 0, all = 0; for (const s of b.win) for (const q of s.smp) { const d = dist(q.x + best.dx, q.y + best.dy); if (d == null) continue; all++; if (d <= o.tol) ok++; }
+    b.fit = all ? ok / all : 0; b.poor = b.fit < o.minFit;
+    if (b.poor) { for (const s of b.segs) { s.flags = s.smp.map(() => null); s.sup = null; s.shift = b.shift; } return b; }
+    for (const s of b.segs) { s.flags = s.smp.map(q => { const d = dist(q.x + best.dx, q.y + best.dy); return d == null ? null : d > o.tol; }); const known = s.flags.filter(f => f != null); s.sup = known.length ? known.filter(f => !f).length / known.length : null; s.shift = b.shift; }
+    return b;
+  }
+  // 彙整各宗：無墨線長度（支持比例 < minSup 的線段）、判定等級
+  function inkResult(cur, plan) {
+    const o = plan.opt, res = new Map(), get = i => { let r = res.get(i); if (!r) { const p = cur.parcels[i]; res.set(i, r = { idx: i, label: p.label, area: p.area, checked: 0, offLen: 0, offSegs: [], offEdges: [], unknown: 0 }); } return r; };
+    for (const s of plan.segs) for (const i of s.ps) { const r = get(i); if (s.sup == null) { r.unknown += s.len; continue; } r.checked += s.len; if (s.sup < o.minSup) { r.offLen += s.len; r.offSegs.push([{ x: s.A.x, y: s.A.y }, { x: s.B.x, y: s.B.y }]); r.offEdges.push(s.key); } }
+    const list = [];
+    for (const r of res.values()) { const lim = Math.max(o.minLen, o.ratio * r.checked); r.score = r.checked ? r.offLen / lim : 0; r.level = r.score >= 2 ? 'red' : r.score >= 1 ? 'yellow' : ''; r.sliver = r.area < (o.sliver ?? SHAPE_DEFAULT.sliver); if (r.level || (r.sliver && r.offLen > 0)) list.push(r); }
+    list.sort((u, v) => v.score - u.score);
+    const blocks = plan.blocks.filter(b => !b.none && !b.poor), shifts = blocks.map(b => Math.hypot(b.shift.dx, b.shift.dy)), poor = plan.blocks.filter(b => b.poor);
+    return { opt: o, blocks: plan.blocks.length, covered: blocks.length, poor: poor.length, poorBoxes: poor.map(b => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, fit: b.fit })), shiftMedian: median(shifts), checkedLen: plan.segs.filter(s => s.sup != null).reduce((t, s) => t + s.len, 0), offLen: plan.segs.filter(s => s.sup != null && s.sup < o.minSup).reduce((t, s) => t + s.len, 0),
+      flagged: list, counts: { red: list.filter(r => r.level === 'red').length, yellow: list.filter(r => r.level === 'yellow').length, slivers: list.filter(r => r.sliver).length } };
+  }
+  // 同步版（Node 測試或已在記憶體的影像）：getRegion(x0, y0, x1, y1) → { rgba, w, h, wf } 或 null
+  function inkCheck(cur, getRegion, opt = {}) { const plan = inkPlan(cur, opt); for (const b of plan.blocks) inkBlock(plan, b, getRegion(b.wx0, b.wy0, b.wx1, b.wy1)); return inkResult(cur, plan); }
+  // 兩項檢核合併成一張表（每宗一列）：level 取較嚴重者
+  function oldMapReport(shape, ink) {
+    const rows = new Map(), rank = { red: 2, yellow: 1, '': 0 };
+    const row = r => { let x = rows.get(r.idx); if (!x) rows.set(r.idx, x = { idx: r.idx, label: r.label, area: r.area, level: '', score: 0, vec: null, img: null }); return x; };
+    if (shape) for (const r of shape.flagged.concat(shape.slivers)) { const x = row(r); x.vec = r; }
+    if (ink) for (const r of ink.flagged) { const x = row(r); x.img = r; }
+    for (const x of rows.values()) { for (const r of [x.vec, x.img]) if (r && rank[r.level] > rank[x.level]) x.level = r.level; x.score = Math.max(x.vec ? x.vec.score : 0, x.img ? x.img.score : 0); x.sliver = x.area < SHAPE_DEFAULT.sliver; }
+    return [...rows.values()].filter(x => x.level || (x.sliver && (x.img ? x.img.offLen > 0 : false))).sort((u, v) => rank[v.level] - rank[u.level] || v.score - u.score);
+  }
   function baselineCsv(r) {
     const q = v => (v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v)), f = (v, d = 2) => (v == null ? '' : v.toFixed(d));
     const cov = l => l.map(h => `${h.label}(${h.area.toFixed(0)})`).join(' ');
@@ -2284,6 +2474,7 @@ const Core = (() => {
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, intersectArea, compareBaseline, baselineCsv, restoreMissing,
+    baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
     parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner };
 })();
 if (typeof module !== 'undefined') module.exports = Core;

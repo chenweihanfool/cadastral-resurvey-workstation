@@ -21,7 +21,20 @@ header h1{font-size:15px;margin:0 8px 0 0;white-space:nowrap}
 .seg button{border:0;background:var(--panel);color:var(--ink);padding:5px 10px;cursor:pointer;font:inherit;border-right:1px solid var(--line)}
 .seg button:last-child{border-right:0}.seg button.on{background:var(--accent);color:var(--accent-ink)}
 .sep{width:1px;height:22px;background:var(--line);margin:0 2px}
-main{display:grid;grid-template-columns:1fr 360px;min-height:0}main.nosb{grid-template-columns:1fr}main.nosb aside{display:none}
+main{display:grid;grid-template-columns:var(--fw,320px) minmax(0,1fr) var(--sw,360px);min-height:0}main>#flow{grid-column:1;grid-row:1}main>#stage{grid-column:2;grid-row:1}main>aside{grid-column:3;grid-row:1}
+main.nosb{--sw:0px}main.nosb aside{display:none}main.noflow{--fw:0px}main.noflow #flow{display:none}
+/* 作業流程欄 */
+#flow{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:auto}
+#flowTabs{margin:10px 12px 4px;display:flex}#flowTabs button{flex:1}
+#flow .stage{padding:0 12px 12px}#flow .stage h3{font-size:12px;color:var(--muted);font-weight:600;margin:10px 0 4px;letter-spacing:.04em}
+.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+.step{position:relative;padding:10px 0 10px 34px;border-bottom:1px solid var(--line)}
+.step .sh{display:flex;align-items:center;gap:6px}.step .sh b{font-size:14px}
+.step .sn{position:absolute;left:0;top:9px;width:24px;height:24px;border-radius:50%;background:var(--bg);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
+.step .chip{margin-left:auto;font-size:11px;border:1px solid;border-radius:10px;padding:0 7px;white-space:nowrap}
+.step .sd{font-size:12px;color:var(--muted);margin:2px 0 6px}.step .sr{color:var(--ink);margin-top:5px;white-space:pre-wrap}.step .sr:empty{display:none}
+.plan{list-style:none;margin:0;padding:0}.plan li{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}.plan li .muted{margin-left:auto;font-size:11px}
+
 #stage{position:relative;min-width:0;min-height:0;background:var(--canvas)}
 #cv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
 #tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;display:none;white-space:pre;z-index:3;box-shadow:0 2px 8px #0003}
@@ -100,20 +113,20 @@ dialog.fp[open]{display:flex;flex-direction:column;z-index:15}
 .srow input[type=color]{width:30px;height:22px;padding:0;border:1px solid var(--line);border-radius:4px;background:none;cursor:pointer}.srow input[type=number]{width:56px}
 .srow .sx{border:0;background:none;color:var(--muted);cursor:pointer;padding:0 2px}.srow .sx:hover{color:var(--bad)}
 kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;font-size:12px}
-@media (max-width:900px){main,main.nosb{grid-template-columns:1fr;grid-template-rows:minmax(280px,1fr) auto}#stage{min-height:280px}aside{max-height:45vh;border-left:0;border-top:1px solid var(--line)}}
+@media (max-width:900px){main,main.nosb,main.noflow{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(280px,1fr) auto}main>#flow{grid-column:1;grid-row:1;max-height:42vh;border-right:0;border-bottom:1px solid var(--line)}main>#stage{grid-column:1;grid-row:2;min-height:280px}main>aside{grid-column:1;grid-row:3;max-height:45vh;border-left:0;border-top:1px solid var(--line)}}
 </style>
 </head>
 <body>
 <div id="printArea"></div>
 <div id="app">
 <header>
-  <h1>地籍圖重測工作站</h1>
+  <button class="btn" id="btnFlow" title="顯示／隱藏作業流程欄">☰ 流程</button><h1>地籍圖重測工作站</h1>
   <input type="file" id="fileIn" multiple hidden>
-  <input type="file" id="dirIn" webkitdirectory hidden>
+  <input type="file" id="dirIn" webkitdirectory hidden><input type="file" id="projDir" webkitdirectory hidden>
   <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden><input type="file" id="blIn" multiple hidden><input type="file" id="ownIn" accept=".mdb,.MDB" hidden><input type="file" id="blDir" webkitdirectory hidden>
   <nav id="menubar">
     <div class="menu"><button class="mbtn">檔案</button><div class="mlist">
-      <button data-act="open">開啟檔案…</button><button data-act="folder">開啟資料夾…</button><hr>
+      <button data-act="project">開啟專案資料夾…<small>案件、影像、分幅、鄰段一次讀入</small></button><button data-act="open">開啟檔案…</button><button data-act="folder">開啟案件資料夾…</button><hr>
       <button data-act="data">資料來源與匯入…<small>鄰段、影像、控制點</small></button><button data-act="imp">匯入現況點…</button><hr>
       <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
@@ -122,9 +135,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <button data-act="move">移動／旋轉／對位…</button></div></div>
     <div class="menu"><button class="mbtn">檢視</button><div class="mlist">
       <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
-      <button data-act="sidebar">顯示／隱藏右側欄</button></div></div>
+      <button data-act="flow">顯示／隱藏作業流程欄</button><button data-act="sidebar">顯示／隱藏右側欄</button></div></div>
     <div class="menu"><button class="mbtn">處理</button><div class="mlist">
-      <button data-act="seam">鄰段接合…</button><button data-act="ref">現況點參考線…</button><hr><button data-act="bl">接圖前比對…<small>土地有無遺漏、面積超限</small></button><button data-act="own">所有權人分析…<small>EXAM.MDB；無所有權人的土地</small></button></div></div>
+      <button data-act="seam">鄰段接合…</button><button data-act="ref">現況點參考線…</button><hr><button data-act="chk">舊圖檢核…<small>分幅向量、影像墨線</small></button><button data-act="bl">接圖前比對…<small>土地有無遺漏、面積超限</small></button><button data-act="own">所有權人分析…<small>EXAM.MDB；無所有權人的土地</small></button></div></div>
     <div class="menu"><button class="mbtn">說明</button><div class="mlist">
       <button data-act="help">操作說明</button><button data-act="ver">版本歷程與更新</button></div></div>
   </nav>
@@ -139,8 +152,26 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <button class="btn" id="btnSide" title="顯示／隱藏右側欄">側欄</button>
 </header>
 <main>
+  <nav id="flow" aria-label="作業流程">
+    <div class="seg" id="flowTabs"><button data-stage="stPrep" class="on">圖資準備</button><button data-stage="stAdj">重測調整</button><button data-stage="stOut">成果</button></div>
+    <div class="stage" id="stPrep"><ol class="steps" id="steps"></ol>
+      <div class="row" style="margin-top:10px"><button class="btn" id="wfRunAll" title="依序執行步驟 3～6；任何一步失敗就停下">依序執行 3～6</button><span class="small muted">每一步都可復原（Ctrl+Z）</span></div>
+      <div class="small muted" style="margin-top:8px">步驟 6 完成，重測前的圖資準備才算完成。</div></div>
+    <div class="stage" id="stAdj" hidden><h3>重測調整（陸續開發）</h3><ul class="plan">
+      <li><button class="btn" data-act="imp">匯入現況測量檔</button><span class="muted">座標檔、MAC 手簿</span></li>
+      <li><button class="btn" disabled>產生手簿</button><span class="muted">規劃中</span></li>
+      <li><button class="btn" data-act="move">套圖（移動／旋轉／兩點對位）</button><span class="muted">一鍵套圖規劃中</span></li>
+      <li><button class="btn" data-act="ref">現況點參考線</button></li>
+      <li><button class="btn" disabled>一鍵調整圖形</button><span class="muted">規劃中</span></li></ul></div>
+    <div class="stage" id="stOut" hidden><h3>成果與報表</h3><ul class="plan">
+      <li><button class="btn primary" data-act="outcase">輸出完整案件資料夾</button><span class="muted">NECEXE 可直接開啟</span></li>
+      <li><button class="btn" data-act="err">偵錯報表 .ERR</button></li>
+      <li><button class="btn" data-act="own">所有權人分析</button><span class="muted">EXAM.MDB</span></li>
+      <li><button class="btn" data-act="out">輸出成果（單檔、CSV）</button></li>
+      <li><button class="btn" data-act="print">列印成果圖</button></li></ul></div>
+  </nav>
   <div id="stage"><canvas id="cv"></canvas><div id="tip"></div><div id="hint" style="display:none;position:absolute;left:10px;top:10px;right:10px;z-index:3;background:var(--panel);border:1px solid var(--accent);border-radius:6px;padding:6px 10px;font-size:13px"></div>
-    <div id="drop"><div><b>把案件資料夾或檔案拖進來</b>支援 D11 / D13 / D14（可加 D2B / D2C 舊圖）<br>或 COA / BNP / PAR</div></div></div>
+    <div id="drop"><div><b>把專案資料夾或案件檔案拖進來</b>支援 D11 / D13 / D14（可加 D2B / D2C 舊圖）<br>或 COA / BNP / PAR</div></div></div>
   <aside>
     <details class="acc" open><summary>選取資訊</summary>
       <div class="accbody"><div id="selInfo" class="small muted">尚未選取</div>
@@ -228,6 +259,15 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="blList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
       <div class="small muted" style="margin-top:4px">圖上：紅＝遺漏（接圖前有、現在沒有）、橘＝只有一部分在圖內的接圖前宗地、粉紅框＝面積超限。點表格一列可放大檢視。</div></section>
     </div></dialog>
+<dialog class="fp" id="dlgChk"><div class="fphead"><b>舊圖檢核（原分幅向量圖、舊圖影像）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>比對來源</h2>
+      <div id="chkSrc" class="small"></div>
+      <div class="small muted" style="margin-top:4px">每宗地先自動小幅平移去配舊圖（舊圖紙張伸縮、掃描定位誤差），再看形狀：界址線離舊圖界線太遠（多畫、跑掉）、舊圖界線穿過宗地內部（少分、併錯）、影像上該處沒有墨線。兩側都是未登記地的分割線不檢查。</div>
+      <div class="row small" style="margin-top:6px"><span class="muted">向量容差</span><input type="number" id="chkTol" value="1" step="0.1" min="0.1" style="width:56px"><span class="muted">m　影像容差</span><input type="number" id="chkInkTol" value="0.6" step="0.1" min="0.1" style="width:56px"><span class="muted">m　影像平移 ±</span><input type="number" id="chkShift" value="5" step="0.5" min="0" style="width:52px"><span class="muted">m</span></div>
+      <div class="row small" style="margin-top:6px"><button class="btn primary" id="btnChkRun">開始檢核</button><button class="btn" id="btnChkCsv" disabled>報告 CSV</button><label class="chk"><input type="checkbox" id="chkMap" checked>圖上標記</label></div>
+      <div id="chkSum" class="small" style="margin:6px 0"></div>
+      <div id="chkList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
+      <div class="small muted" style="margin-top:4px">圖上：紅粗線＝影像上沒有墨線、紫＝離分幅舊圖界線超過容差、藍虛線＝舊圖界線穿過宗地內部、灰框＝影像對不上（未判斷）。碎片（&lt; 30 m²）可一鍵併入建議的相鄰宗地；其餘請人工判斷後修正，按「已確認」劃掉。</div></section>
+    </div></dialog>
 <dialog class="fp" id="dlgOwn"><div class="fphead"><b>所有權人分析</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>登記資料（EXAM.MDB）</h2>
       <div class="small muted" style="margin-bottom:6px">開啟地段資料夾時，資料夾內的 <code>.MDB</code>（土地標示資料表、權利人與土地關係資料表）會一併讀入；也可另外選檔。只在本機瀏覽器讀取，不會上傳。以「原段號＋原母號＋原子號」對應圖上宗地，只計「所有權」，抵押權等他項權利不算所有權人。</div>
       <div class="row small"><button class="btn" id="btnOwnAdd">選擇 MDB…</button><span id="ownSrc" class="muted"></span></div></section>
@@ -314,6 +354,8 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <dialog class="fp" id="dlgStyle"><div class="fphead"><b>圖層與樣式</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><div id="styleRows"></div>
   <div class="row small" style="margin-top:8px"><button class="btn" id="btnStyleReset">全部還原預設</button><span class="muted">設定會記在這台電腦的瀏覽器；列印成果圖同樣套用。</span></div></section></div></dialog>
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
+<p><b>作業流程</b>：左側「作業流程」欄（上方「☰ 流程」開關）照順序做：<b>1 讀檔</b>（「開啟專案資料夾」一次讀入案件、舊圖影像、分幅舊圖、鄰段、EXAM.MDB）→ <b>2 自動接圖</b>（開發中）→ <b>3 鄰段接合</b> → <b>4 未登記土地合併分割</b> → <b>5 去除雜點</b> → <b>6 檢核</b>。每步按「一鍵執行」用預設值做完並顯示結果，「詳細設定…」開原本的面板調整；全部可復原。專案資料夾的慣例：鄰段放在名稱含「鄰段」的資料夾、分幅舊圖放在含「分幅」的資料夾。</p>
+<p><b>舊圖檢核</b>（步驟 6，「處理→舊圖檢核」）：每宗地先小幅平移去配舊圖，再比形狀——界址線離分幅舊圖界線太遠（紫）、舊圖界線穿過宗地內部（藍虛線）、舊圖影像上該處沒有墨線（紅）。影像對不上的方格（灰框）不判斷。碎片（&lt; 30 m²）可一鍵併入建議的相鄰宗地；其餘請人工判斷後修正，按「已確認」劃掉。</p>
 <p><b>版面</b>：上方是<b>功能列表</b>（檔案／編輯／檢視／處理／說明）與常用工具列；細項設定都在選單開出的<b>浮動面板</b>裡（開著也能操作圖面，✕ 關閉）。右側欄只留兩塊：選取資訊與面積較差表，可收折，也可在「檢視」隱藏。</p>
 <p><b>界址點編修</b>：「編輯→界址點編修」或工具列「加點」(<kbd>A</kbd>)。<b>新增</b>：在界址線上點一下，新點落在線上（垂足），所有以該線為界的宗地都一併插入、面積不變；Shift＋點空白處＝孤立點；也可輸入座標新增。<b>修改</b>：拖曳、方向鍵或輸入座標。<b>刪除</b>：選取點按 <kbd>Del</kbd>，會從所有含該點的宗地移除，環不能少於 3 點，圓弧的點不能刪。全部可復原。新增／刪除後請輸出 D14 與 D13（D13 輸出尚未用 NECEXE 驗證）。</p>
 <p><b>一鍵清理多餘點</b>：「編輯→一鍵清理多餘點」。① 沒有宗地使用的點；② 直線上的多餘點——一點與前後鄰點成三角形，到最長邊的高 ≤ 最長邊×比例（預設 1‰，並以絕對上限 5 cm 封頂）即多餘；含該點的每一宗地都成立才刪，轉角與 T 字路口不動。面板即時預覽數量與面積影響，圖上標出將被刪的點。</p>
@@ -334,7 +376,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <p><b>平移／縮放</b>：滾輪縮放；中鍵或右鍵拖曳平移；或切到「平移」工具。</p>
 <p><b>快捷鍵</b>：<kbd>Ctrl+Z</kbd> 復原、<kbd>Ctrl+Y</kbd> 重做、<kbd>Ctrl+F</kbd> 跳至地號／點號、<kbd>Esc</kbd> 取消選取、<kbd>V</kbd>/<kbd>H</kbd> 工具、<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切換點/線/面。</p>
 <p><b>輸出</b>：「輸出 D14」只改動被移動點的坐標，其餘位元組與原檔完全相同；覆蓋進案件資料夾前請先備份。D11 的面積欄位不改，請在 NECEXE 內用「重算面積」更新。「輸出 JSON」含移動點與面積變化，方便 AI／其他程式讀取。</p>
-<p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（getState / select / move / undo / exportSession），網址加 <code>?bridge=ws://127.0.0.1:埠號</code> 可接 WebSocket 橋接（預留給 MCP）。</p>
+<p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（listSteps / loadProject / runStep / checkOldMap / getCheckReport / getState / select / move / undo / exportSession…），網址加 <code>?bridge=ws://127.0.0.1:埠號</code> 可接 WebSocket 橋接（預留給 MCP）。</p>
 <form method="dialog"><button class="btn primary">關閉</button></form></dialog>
 <dialog id="verDlg" class="verdlg">
   <div class="vhead">
