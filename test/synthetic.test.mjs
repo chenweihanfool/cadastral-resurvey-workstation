@@ -509,6 +509,24 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.equal(ds.parcels[0].ids.length, 6, '兩個新點插入本段界址串'); assert.equal(Core.ringConflicts(ds).overlap.length + Core.ringConflicts(ds).cross.length, 0);
   assert.equal(Core.seamGaps(ds, [{ name: 'N', ds: nb }]).length, 0, '建立後沒有空隙'); Core.applyDelta(ds, r.delta, 'undo'); assert.equal(ds.parcels[0].ids.length, 4);
 }
+// ── 空隙裡有不相連的本段宗地（孤島）：只看內部一點會把孤島一起包進新地號而重疊，現在不列、也不能直接建 ──
+{
+  const Y = 2700000, X = 200000, mk = (P, rings) => Core.datasetFromD({ pts: rd(F_D14, P.map(([n, x, y]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings) });
+  const ds = mk([[1, 0, 0], [2, 10, 0], [3, 10, 30], [4, 0, 30], [5, 11, 6], [6, 13, 6], [7, 13, 8], [8, 11, 8]], [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [5, 6, 7, 8])]);
+  const nb = mk([[1, 14, 0], [2, 24, 0], [3, 24, 30], [4, 14, 30], [5, 10, 0], [6, 14, 5], [7, 10, 5], [8, 14, 25], [9, 10, 25], [10, 10, 30.003]],
+    [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [5, 1, 6, 7]), ring(1, 3, 0, [9, 8, 4, 10])]);
+  const g = Core.seamGaps(ds, [{ name: 'N', ds: nb }]); assert.equal(g.length, 0, '會蓋到孤島的範圍不列'); assert.equal(g.skipped.length, 1); assert.equal(g.skipped[0].parcel, '2');
+  const bad = { nodes: [[10, 5], [14, 5], [14, 25], [10, 25]].map(([x, y]) => ({ id: null, x: X + x, y: Y + y, onMain: x === 10 })), area: 80 };
+  assert.throws(() => Core.fillSeamGap(ds, bad, 9001), /重疊/); assert.equal(ds.parcels.length, 2, '沒有建立');
+  // 宗地之間的空隙（四宗圍出 10×10 的洞）裡有孤島：fillRegion 拒絕；沒有孤島時照常建立
+  const q = mk([[1, 0, 0], [2, 30, 0], [3, 30, 30], [4, 0, 30], [5, 10, 10], [6, 20, 10], [7, 20, 20], [8, 10, 20], [9, 14, 14], [10, 16, 14], [11, 16, 16], [12, 14, 16]],
+    [ring(1, 1, 0, [1, 2, 6, 5]), ring(1, 2, 0, [2, 3, 7, 6]), ring(1, 3, 0, [3, 4, 8, 7]), ring(1, 4, 0, [4, 1, 5, 8]), ring(1, 5, 0, [9, 10, 11, 12])]);
+  const hole = Core.freeRegions(q).find(l => Math.abs(Math.abs(l.area) - 100) < 1e-6); assert.ok(hole, '找到 100 m² 的空隙');
+  assert.throws(() => Core.fillRegion(q, hole.ids.slice().reverse(), 9001), /與 5 重疊/);
+  assert.ok(!Core.polysOverlap([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }], [{ x: 1, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 1 }, { x: 1, y: 1 }]), '貼邊不算重疊');
+  assert.ok(Core.polysOverlap([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }], [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]), '完全重合算重疊');
+  assert.ok(Core.polysOverlap([{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 1 }, { x: 0, y: 1 }], [{ x: 1, y: -1 }, { x: 1.5, y: -1 }, { x: 1.5, y: 2 }, { x: 1, y: 2 }]), '十字交錯算重疊');
+}
 // ── 輸出不可在有效記錄之間留下鍵值為 0 的空列（KC0336：NECEXE 會刪掉它並往前遞補，經界線左右地號整批錯位）──
 {
   const noMidJunk = (dbf, isLive) => { let seen = false; for (let i = dbf.n - 1; i >= 0; i--) { if (isLive(dbf.rows[i])) seen = true; else if (seen) return false; } return true; };

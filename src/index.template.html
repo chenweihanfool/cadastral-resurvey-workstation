@@ -332,7 +332,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="small muted" style="margin-top:4px">刪除會同時從所有含該點的宗地環移除；環不能少於 3 點，圓弧的弧端與中點不能刪。可復原。</div>
   <div id="ptEditInfo" class="small" style="margin-top:6px"></div></section></div></dialog>
 <dialog class="fp" id="dlgUnreg"><div class="fphead"><b>未登記土地（9000 號以上）分割合併</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
-  <div class="row small"><label>每筆界址點上限 <input type="number" id="unN" value="10" min="3" style="width:56px"> 點</label><label title="略圖縮放到調查表略圖框（A3 約 143×137 mm，近乎正方形）內列印，所以限制長寬比：外接矩形長÷短；彎曲或 L 形的細長條以「長²÷面積÷2」計。0＝不限形狀">長寬比上限 <input type="number" id="unRatio" value="2" min="0" step="0.1" style="width:56px"></label><label title="切下的塊與剩下的部分都不小於此面積；為此細長條的長寬比上限自動放寬（寬 1 m 的水溝不會被切成一堆幾 m² 的碎塊）。0＝不限">最小面積 <input type="number" id="unMin" value="50" min="0" step="10" style="width:60px"> m²</label><label>新地號母號 <input type="number" id="unMother" value="9001" min="9000" style="width:70px"></label><button class="btn" id="btnUnRefresh">重新計算</button></div>
+  <div class="row small"><label>每筆界址點上限 <input type="number" id="unN" value="30" min="3" style="width:56px"> 點</label><label title="略圖縮放到調查表略圖框（A3 約 143×137 mm，近乎正方形）內列印，所以限制長寬比：外接矩形長÷短；彎曲或 L 形的細長條以「長²÷面積÷2」計。0＝不限形狀">長寬比上限 <input type="number" id="unRatio" value="6" min="0" step="0.1" style="width:56px"></label><label title="切下的塊與剩下的部分都不小於此面積；為此細長條的長寬比上限自動放寬（寬 1 m 的水溝不會被切成一堆幾 m² 的碎塊）。0＝不限">最小面積 <input type="number" id="unMin" value="50" min="0" step="10" style="width:60px"> m²</label><label>新地號母號 <input type="number" id="unMother" value="9001" min="9000" style="width:70px"></label><button class="btn" id="btnUnRefresh">重新計算</button></div>
   <div id="unSum" class="small" style="margin-top:6px"></div>
   <div class="row" style="margin-top:6px"><button class="btn primary" id="btnUnSplit" title="沒勾選＝全部超過點數上限或長寬比上限者">分割（點數、長寬比 ≤ 上限）</button><button class="btn" id="btnUnMerge" title="沒勾選＝相連的未登記地各併成一筆（不限同母號）">合併</button><label class="chk small"><input type="checkbox" id="unAutoSplit" checked>合併後自動分割</label><label class="chk small" title="分割（或合併後自動分割）完，小於最小面積的未登記地併入共用界線最長的相鄰未登記地；只鄰登記地的不動、列出來"><input type="checkbox" id="unAbsorb" checked>碎塊併入相鄰未登記地</label></div>
   <div class="small muted" style="margin-top:4px">勾選表內的地號只處理勾選的；不勾選時，「分割」處理全部超過上限者，「合併」把相連的未登記地（不限同母號）各併成一筆；任意宗地的合併見「編輯 → 合併所選宗地」。分割先以連接既有界址點的弦切下；太細長而切不出合格的塊時，垂直長邊切開（大約等分），切線與界址線的交點新增界址點，鄰宗同步插入（面積不變）。新塊編新子號（同母號、接續最大子號），剩餘部分保留原地號。長寬比上限依調查表略圖框（A3 約 143×137 mm）：略圖縮放到框內，太長的地號印出來會很細。切線一律橫切（切線長 ≤ 切下那塊短邊 1.5 倍）、切下的塊不比原本細太多，避免切出細長三角。地中地與含圓弧者暫不處理。全部可一次復原。</div>
@@ -354,8 +354,8 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="small muted" style="margin:2px 0 8px 22px">不屬於任何宗地的點（只在點檔、沒出現在任何界址串）。</div>
   <label class="chk"><input type="checkbox" id="clCol" checked><b>直線上的多餘點</b></label>
   <div class="small muted" style="margin:2px 0 6px 22px">一點與前後鄰點成三角形，該點到對邊的高低於門檻即視為多餘；含此點的每一宗地都成立才刪（轉角、T 字路口、圓弧不動）。門檻＝三角形<b>最長邊</b>×比例，長線容許較大偏差。</div>
-  <div class="row small" style="margin-left:22px"><label>比例 <input type="number" id="clRatio" value="1" step="0.1" min="0" style="width:64px"> ‰</label><label>絕對上限 <input type="number" id="clCap" value="0.05" step="0.01" min="0" style="width:64px"> m <span class="muted">（0＝不設）</span></label></div>
-  <div class="small muted" style="margin:4px 0 0 22px">例：長邊 50 m、1‰ → 高 ≤ 5 cm（再受絕對上限 5 cm 限制）。</div></section>
+  <div class="row small" style="margin-left:22px"><label>比例 <input type="number" id="clRatio" value="30" step="0.1" min="0" style="width:64px"> ‰</label><label>絕對上限 <input type="number" id="clCap" value="0.5" step="0.01" min="0" style="width:64px"> m <span class="muted">（0＝不設）</span></label></div>
+  <div class="small muted" style="margin:4px 0 0 22px">例：長邊 10 m、30‰ → 高 ≤ 30 cm；長邊 50 m 算出 1.5 m，再受絕對上限 0.5 m 限制。</div></section>
 <section>
   <label class="chk"><input type="checkbox" id="clSeam" checked><b>鄰段接縫保護與補點</b></label>
   <div class="small muted" style="margin:2px 0 0 22px">鄰段在接縫上有界址點的位置，測區也必須有點：該處的點即使在直線上也<b>不刪</b>（半徑＝接合設定的吸附上限）；鄰段有點、測區界線上沒有時<b>補一個點</b>（落在界線上，面積不變）。需先載入鄰段。</div></section>
@@ -370,7 +370,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <p><b>舊圖檢核</b>（步驟 6，「處理→舊圖檢核」）：每宗地先小幅平移去配舊圖，再比形狀——界址線離分幅舊圖界線太遠（紫）、舊圖界線穿過宗地內部（藍虛線）、舊圖影像上該處沒有墨線（紅）。影像對不上的方格（灰框）不判斷。碎片（&lt; 30 m²）可一鍵併入建議的相鄰宗地；其餘請人工判斷後修正，按「已確認」劃掉。</p>
 <p><b>版面</b>：上方是<b>功能列表</b>（檔案／編輯／檢視／處理／說明）與常用工具列；細項設定都在選單開出的<b>浮動面板</b>裡（開著也能操作圖面，✕ 關閉）。右側欄只留兩塊：選取資訊與面積較差表，可收折，也可在「檢視」隱藏。</p>
 <p><b>界址點編修</b>：「編輯→界址點編修」或工具列「加點」(<kbd>A</kbd>)。<b>新增</b>：在界址線上點一下，新點落在線上（垂足），所有以該線為界的宗地都一併插入、面積不變；Shift＋點空白處＝孤立點；也可輸入座標新增。<b>修改</b>：拖曳、方向鍵或輸入座標。<b>刪除</b>：選取點按 <kbd>Del</kbd>，會從所有含該點的宗地移除，環不能少於 3 點，圓弧的點不能刪。全部可復原。新增／刪除後請輸出 D14 與 D13（D13 輸出尚未用 NECEXE 驗證）。</p>
-<p><b>一鍵清理多餘點</b>：「編輯→一鍵清理多餘點」。① 沒有宗地使用的點；② 直線上的多餘點——一點與前後鄰點成三角形，到最長邊的高 ≤ 最長邊×比例（預設 1‰，並以絕對上限 5 cm 封頂）即多餘；含該點的每一宗地都成立才刪，轉角與 T 字路口不動。面板即時預覽數量與面積影響，圖上標出將被刪的點。</p>
+<p><b>一鍵清理多餘點</b>：「編輯→一鍵清理多餘點」。① 沒有宗地使用的點；② 直線上的多餘點——一點與前後鄰點成三角形，到最長邊的高 ≤ 最長邊×比例（預設 30‰，並以絕對上限 0.5 m 封頂）即多餘；含該點的每一宗地都成立才刪，轉角與 T 字路口不動。面板即時預覽數量與面積影響，圖上標出將被刪的點。</p>
 <p><b>圖層與樣式</b>：「檢視→圖層與樣式」可逐項開關界址線、界址點、地號、點號、面積較差、舊圖、現況點、控制點，並調整顏色與大小；面積較差可選「僅有變動」或「全部宗地」，超限與正常各自可設顏色。</p>
 <p><b>偵錯報表 .ERR</b>：「檔案→一鍵產出偵錯報表」仿 NECEXE 的重測成果檢核報表（Big5、CRLF）。</p>
 <p><b>載入</b>：把案件資料夾拖進視窗，或用「檔案→開啟資料夾」。需要 <code>D14</code>+<code>D13</code>（建議再加 <code>D11</code>）；若同資料夾有 <code>D2C</code>+<code>D2B</code> 會當作舊圖疊示。也可載入 <code>COA</code>+<code>BNP</code>（+<code>PAR</code>）。</p>

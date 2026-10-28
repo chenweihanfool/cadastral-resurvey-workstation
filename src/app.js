@@ -815,7 +815,7 @@ $('btnRingCheck').onclick = ringPanel; $('btnRedraw').onclick = startRedraw;
 $('dlgRing').addEventListener('close', () => { S.ringMark = null; draw(); });
 
 // ── 未登記土地（9000 號以上）：清單、合併、每筆 ≤ N 點分割、空隙與凹口建為新地號（核心在 Core.unregSummary／splitParcel／mergeParcels／fillRegion／pocketRegion）──
-const unN = () => Math.max(3, parseInt($('unN').value, 10) || 10), unRatio = () => Math.max(0, parseFloat($('unRatio').value) || 0), unMother = () => Math.max(9000, parseInt($('unMother').value, 10) || 9001), unMin = () => Math.max(0, parseFloat($('unMin').value) || 0);
+const unN = () => Math.max(3, parseInt($('unN').value, 10) || 30), unRatio = () => Math.max(0, parseFloat($('unRatio').value) || 0), unMother = () => Math.max(9000, parseInt($('unMother').value, 10) || 9001), unMin = () => Math.max(0, parseFloat($('unMin').value) || 0);
 function pushMulti(deltas, label) {   // 多步驟的一鍵操作：一次復原
   deltas = deltas.filter(Boolean); if (!deltas.length) return;
   pushUndo({ undoFn: () => { for (const d of deltas.slice().reverse()) Core.applyDelta(S.ds, d, 'undo'); pruneSel(); }, redoFn: () => { for (const d of deltas) Core.applyDelta(S.ds, d, 'redo'); pruneSel(); }, label });
@@ -912,7 +912,7 @@ const sgCenter = g => g.nodes.reduce((a, n) => ({ x: a.x + n.x / g.nodes.length,
 function seamGapPanel(recompute) {
   if (recompute) { if (!S.ds) return msg('請先載入圖資'); if (!S.nb.length) { S.sgaps = null; $('sgSum').textContent = '請先在「鄰段」加入相鄰地段'; $('sgList').innerHTML = ''; return; } S.sgaps = Core.seamGaps(S.ds, nbArgs()); }
   const g = S.sgaps || []; $('btnSeamGapsAll').disabled = !g.length;
-  $('sgSum').innerHTML = S.sgaps ? (g.length ? `找到 <b>${g.length}</b> 處，共 ${g.reduce((t, x) => t + x.area, 0).toFixed(2)} m²（綠色）；點一列放大，按「建為新地號」建立` : '沒有找到與鄰段之間的封閉空隙') : '';
+  $('sgSum').innerHTML = S.sgaps ? (g.length ? `找到 <b>${g.length}</b> 處，共 ${g.reduce((t, x) => t + x.area, 0).toFixed(2)} m²（綠色）；點一列放大，按「建為新地號」建立` : '沒有找到與鄰段之間的封閉空隙') + ((g.skipped || []).length ? `<div class="muted">另有 ${g.skipped.length} 處圍出的範圍會蓋到宗地（${g.skipped.slice(0, 3).map(k => k.parcel || '鄰段').join('、')}${g.skipped.length > 3 ? '…' : ''}，多半是空地裡有不相連的宗地），不列出；請用「新增面」沿著空地手動圍</div>` : '') : '';
   $('sgList').innerHTML = g.length ? '<table><thead><tr><th></th><th>面積</th><th>點數</th><th>新增點</th><th></th></tr></thead><tbody>' + g.map((x, i) => `<tr data-sg="${i}" style="cursor:pointer"><td>空隙 ${i + 1}</td><td>${x.area.toFixed(2)}</td><td>${x.nodes.length}</td><td>${x.nodes.filter(n => n.id == null).length}</td><td><button class="btn" data-sgfill="${i}">建為新地號</button></td></tr>`).join('') + '</tbody></table>' : '';
   draw();
 }
@@ -2179,11 +2179,11 @@ const STEPS = [
   { n: 4, title: '未登記土地合併分割', desc: '與鄰段的空隙建新地號 → 相連的未登記地合併 → 依點數與長寬比分割', adv: 'unreg',
     confirm: () => { unregPanel(); const r = S.unreg; return `未登記地目前 ${r.parcels.length} 筆。將：與鄰段的空隙建新地號 → 相連的未登記地各併成一筆 → 再切成每筆 ≤ ${unN()} 點、長寬比 ≤ ${unRatio() || '不限'}、每塊 ≥ ${unMin()} m²，小於 ${unMin()} m² 的碎塊併入相鄰未登記地（設定在「詳細設定…」）。\n已經合併分割過的圖會整批重新切，筆數可能大增。可一次一步復原。繼續？`; },
     run: async () => { const t = [], cnt = () => S.ds.parcels.filter(p => !p.deleted && (Core.parcelNo(p) || { m: 0 }).m >= 9000).length, n0 = cnt(); unregPanel();
-      if (S.nb.length) { S.sgaps = Core.seamGaps(S.ds, nbArgs()); const g = fillAllGaps(false); t.push(`空隙建新地號 ${g.made}`); }
+      if (S.nb.length) { S.sgaps = Core.seamGaps(S.ds, nbArgs()); const g = fillAllGaps(false), sk = (S.sgaps && S.sgaps.skipped || []).length; t.push(`空隙建新地號 ${g.made}` + (sk ? `（另 ${sk} 處會蓋到宗地，未建）` : '')); }
       S.unSel.clear(); unregPanel(); const m = await unregMerge(false); t.push(`合併 ${m ? m.merged : 0} 組`);
       unregPanel(); const s = await unregSplit(); t.push(`分割 ${s ? s.split : 0} 筆`); t.push(`未登記地 ${n0} → ${cnt()} 筆`); return t.join('；'); } },
   { n: 5, title: '去除雜點', desc: '沒有宗地使用的點、直線上的多餘點（鄰段接縫點保留）', adv: 'clean',
-    run: async () => { const r = api.cleanupPoints({}); return `刪除未使用點 ${r.unused.length}、直線多餘點 ${r.collinear.length}` + (r.added.length ? `；接縫補點 ${r.added.length}` : ''); } },
+    run: async () => { const r = api.cleanupPoints({ unused: $('clUnused').checked, collinear: $('clCol').checked, ratio_permille: parseFloat($('clRatio').value) || 0, max_abs_m: parseFloat($('clCap').value) || 0, seam: $('clSeam').checked }); return `刪除未使用點 ${r.unused.length}、直線多餘點 ${r.collinear.length}` + (r.added.length ? `；接縫補點 ${r.added.length}` : ''); } },
   { n: 6, title: '檢核原分幅向量圖及影像圖', desc: '每宗對照分幅舊圖向量與舊圖掃描影像，標出形狀跑掉、多畫或少分的宗地', adv: 'chk',
     run: async () => { await runCheck(); openPanel('dlgChk'); const c = chkCounts(); return `紅 ${c.red}、黃 ${c.yellow}、碎片 ${c.sliver}`; },
     fix: async () => { const r = await fixOldMap(); openPanel('dlgChk'); return r.text; } },
@@ -2452,7 +2452,7 @@ const api = {
   // ── 界址點編修：addPoint（edge=[a,b] 加在該線並同步插入所有鄰接宗地；省略 edge＝孤立點）、deletePoints、cleanupPoints（preview 只算不改）──
   addPoint: ({ edge = null, y, x, project = true } = {}) => { const r = addPoint({ edge, y, x, project }); refresh(); return r; },
   deletePoints: ({ ids = [] } = {}) => { const r = deletePoints(ids); refresh(); return r; },
-  cleanupPoints: ({ preview = false, unused = true, collinear = true, ratio_permille = 1, max_abs_m = 0.05, seam = true } = {}) => {
+  cleanupPoints: ({ preview = false, unused = true, collinear = true, ratio_permille = 30, max_abs_m = 0.5, seam = true } = {}) => {
     if (!S.ds) throw new Error('尚未載入圖資'); const o = { unused, collinear, ratio: ratio_permille / 1000, maxAbs: max_abs_m };
     if (seam && S.nb.length) { const g = Core.seamGuard(S.ds, nbArgs(), seamOpts()); o.protect = g.protect; o.adds = g.adds; o.tol = g.tol; }
     const r = Core.cleanupPoints(S.ds, o);
@@ -2462,9 +2462,9 @@ const api = {
   exportErrReport: () => { if (!S.ds) throw new Error('尚未載入圖資'); return errReportText(); },
   ringIssues: () => { if (!S.ds) throw new Error('尚未載入圖資'); return Core.ringIssues(S.ds).map(o => ({ kind: o.kind, parcel: S.ds.parcels[o.p].label, inner: o.h != null ? S.ds.parcels[o.h].label : null, text: Core.ringIssueLine(S.ds, o), jumps: o.jumps || null })); },
   splitHole: ({ outer, inner }) => { const f = l => { const p = S.ds.parcels.find(q => q.label === l || q.oldLabel === l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }; const pi = f(outer), r = Core.splitHole(S.ds, pi, f(inner)); pushStruct(r.delta, `拆出地中地 ${inner}`); return { area: S.ds.parcels[pi].area, jumps: r.jumps, linked: r.linked }; },
-  unregSummary: ({ maxPts = 10, maxRatio = 2, minArea = 0 } = {}) => { const r = Core.unregSummary(S.ds, maxPts, maxRatio, minArea); return { parcels: r.parcels.map(p => ({ label: p.label, points: p.pts, ratio: p.ratio, area: p.area, over: p.over, tooLong: p.long })), gaps: r.gaps.map(g => ({ points: g.ids, area: g.area })) }; },
+  unregSummary: ({ maxPts = 30, maxRatio = 6, minArea = 0 } = {}) => { const r = Core.unregSummary(S.ds, maxPts, maxRatio, minArea); return { parcels: r.parcels.map(p => ({ label: p.label, points: p.pts, ratio: p.ratio, area: p.area, over: p.over, tooLong: p.long })), gaps: r.gaps.map(g => ({ points: g.ids, area: g.area })) }; },
   absorbSlivers: ({ minArea = 50 } = {}) => { const r = Core.absorbSlivers(S.ds, minArea); pushMulti(r.deltas, '碎塊併入相鄰未登記地'); refresh(); return { merged: r.merged, left: r.left }; },
-  splitParcel: ({ parcel, maxPts = 10, maxRatio = 2, minArea = 0 }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitParcel(S.ds, p.idx, maxPts, maxRatio, { minArea }); if (r.delta) pushStruct(r.delta, `分割 ${parcel}`); return { pieces: r.pieces, addedPoints: r.delta ? r.delta.added.map(q => q.id) : [], unresolved: r.unresolved }; },
+  splitParcel: ({ parcel, maxPts = 30, maxRatio = 6, minArea = 0 }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitParcel(S.ds, p.idx, maxPts, maxRatio, { minArea }); if (r.delta) pushStruct(r.delta, `分割 ${parcel}`); return { pieces: r.pieces, addedPoints: r.delta ? r.delta.added.map(q => q.id) : [], unresolved: r.unresolved }; },
   mergeParcels: ({ parcels }) => { const idx = parcels.map(l => { const p = findPar(l); if (!p) throw new Error('找不到地號 ' + l); return p.idx; }); const r = Core.mergeParcels(S.ds, idx); pushStruct(r.delta, '合併 ' + parcels.join('、')); return { keep: r.keep, merged: r.merged }; },
   seamGaps: () => { if (!S.ds) throw new Error('尚未載入圖資'); return Core.seamGaps(S.ds, nbArgs()).map(g => ({ area: g.area, points: g.nodes.length, new_points: g.nodes.filter(n => n.id == null).length })); },
   fillSeamGaps: ({ mother = 9001 } = {}) => { const ds = S.ds, deltas = [], labels = []; for (const g of Core.seamGaps(ds, nbArgs())) { const r = Core.fillSeamGap(ds, g, mother); deltas.push(r.delta); labels.push(r.label); } pushMulti(deltas, '與鄰段之間的空隙建為新地號'); return { labels }; },

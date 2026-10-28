@@ -278,6 +278,30 @@ const Core = (() => {
     let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
     return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
   }
+  // 兩個多邊形（{x,y} 陣列）的內部是否重疊：一方的頂點落在另一方內部（離邊界 > tol）、兩邊在離端點 > tol 處交錯，
+  // 或一方的內部點落在另一方內部（完全重合、整塊包含）。只是貼邊或共點不算重疊
+  function polysOverlap(A, B, tol = 0.01) {
+    const box = Q => Q.reduce((b, q) => [Math.min(b[0], q.x), Math.min(b[1], q.y), Math.max(b[2], q.x), Math.max(b[3], q.y)], [Infinity, Infinity, -Infinity, -Infinity]);
+    const a = box(A), b = box(B); if (a[0] > b[2] - tol || b[0] > a[2] - tol || a[1] > b[3] - tol || b[1] > a[3] - tol) return false;
+    const inside = (Q, x, y) => { let c = false; for (let i = 0, j = Q.length - 1; i < Q.length; j = i++) { const p = Q[i], q = Q[j]; if ((p.y > y) !== (q.y > y) && x < (q.x - p.x) * (y - p.y) / (q.y - p.y) + p.x) c = !c; } return c; };
+    const deep = (Q, x, y) => { if (!inside(Q, x, y)) return false; for (let i = 0; i < Q.length; i++) { const p = Q[i], q = Q[(i + 1) % Q.length]; if (distToSeg(x, y, p.x, p.y, q.x, q.y) <= tol) return false; } return true; };
+    for (const q of B) if (deep(A, q.x, q.y)) return true;
+    for (const q of A) if (deep(B, q.x, q.y)) return true;
+    for (let i = 0; i < A.length; i++) { const P1 = A[i], P2 = A[(i + 1) % A.length], rx = P2.x - P1.x, ry = P2.y - P1.y;
+      for (let j = 0; j < B.length; j++) { const Q1 = B[j], Q2 = B[(j + 1) % B.length], sx = Q2.x - Q1.x, sy = Q2.y - Q1.y, den = rx * sy - ry * sx; if (Math.abs(den) < 1e-12) continue;
+        const t = ((Q1.x - P1.x) * sy - (Q1.y - P1.y) * sx) / den, u = ((Q1.x - P1.x) * ry - (Q1.y - P1.y) * rx) / den; if (t <= 0 || t >= 1 || u <= 0 || u >= 1) continue;
+        const x = P1.x + t * rx, y = P1.y + t * ry; if ([P1, P2, Q1, Q2].every(q => Math.hypot(q.x - x, q.y - y) > tol)) return true; } }
+    const ip = Q => interiorPoint(Q.map((q, i) => i), new Map(Q.map((q, i) => [i, q]))), pa = ip(A), pb = ip(B);
+    return deep(B, pa.x, pa.y) || deep(A, pb.x, pb.y);
+  }
+  // 範圍（{x,y} 陣列）與本段哪一宗地重疊（落在地中地的洞裡不算外圈重疊）；沒有回傳 null
+  function overlapParcel(ds, pts, tol = 0.01) {
+    const P = ds.points, ring = p => p.ids.map(id => P.get(id)), ip = interiorPoint(pts.map((q, i) => i), new Map(pts.map((q, i) => [i, q])));
+    for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3 || !polysOverlap(pts, ring(p), tol)) continue;
+      if ((p.holes || []).some(h => { const hp = ds.parcels[h]; return hp && hp.ids.length >= 3 && pointInRing(hp.ids, P, ip.y, ip.x); })) continue;   // 在洞裡：洞內宗地另外檢查
+      return p; }
+    return null;
+  }
   function bounds(ds) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const id of ds.pointParcels.keys()) { const p = ds.points.get(id); if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x; if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y; }
@@ -1636,7 +1660,9 @@ const Core = (() => {
   }
   // 空隙或凹口建為新的未登記地
   function fillRegion(ds, ids, mother) {
-    if (ids.length < 3) throw new Error('範圍至少 3 點'); const d = newDelta(), p = createParcel(ds, d, mother, ccwIds(ids, ds.points), null);
+    if (ids.length < 3) throw new Error('範圍至少 3 點');
+    const hit = overlapParcel(ds, ids.map(id => ds.points.get(id))); if (hit) throw new Error(`這個範圍會與 ${hit.label} 重疊（範圍裡有不相連的宗地？），不能建為新地號；請用「新增面」沿著空地另外圍`);
+    const d = newDelta(), p = createParcel(ds, d, mother, ccwIds(ids, ds.points), null);
     return { delta: closeDelta(ds, d), label: p.label };
   }
   // ── 與鄰段之間的封閉空隙（v0.19.0）：主測區段外圍與已載入鄰段的段界之間，沒有任何宗地的封閉範圍 ──
@@ -1693,7 +1719,7 @@ const Core = (() => {
     for (let changed = true; changed;) { changed = false; for (const [v, l] of adj) if (l.size < 2) { for (const w of l.keys()) adj.get(w).delete(v); adj.delete(v); changed = true; } }
     // 追蹤面：沿 u→v 到 v 後取「順時針方向緊接 u 的下一條邊」，面在左側；有界面為逆時針（面積 > 0）
     const order = new Map(); for (const [v, l] of adj) order.set(v, [...l.keys()].sort((p, q) => Math.atan2(p.y - v.y, p.x - v.x) - Math.atan2(q.y - v.y, q.x - v.x)));
-    const used = new Set(), out = [], hk = (u, v) => u.k + '>' + v.k;
+    const used = new Set(), out = [], skipped = [], hk = (u, v) => u.k + '>' + v.k;
     const inRing = (pts, x, y) => { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const a = pts[i], b = pts[j]; if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) c = !c; } return c; };
     for (const [u0, l] of adj) for (const v0 of l.keys()) {
       if (used.has(hk(u0, v0))) continue; const ring = [u0]; let u = u0, v = v0, main = false, nb = false, ok = true;
@@ -1709,12 +1735,16 @@ const Core = (() => {
       const tmp = new Map(ring.map((n, i) => [i, n])), ip = interiorPoint(ring.map((n, i) => i), tmp);
       if (ds.parcels.some(p => !p.deleted && p.ids.length >= 3 && pointInRing(p.ids, P, ip.y, ip.x))) continue;   // 在主測區宗地內
       if (nbRings.some(r => inRing(r, ip.x, ip.y))) continue;   // 在鄰段宗地內
+      // 只看內部一點不夠：空隙裡有不相連的宗地（孤島）或鄰段段內有縫時，內部點落在空處，建出來卻蓋到宗地。逐宗比對，有重疊就不列
+      const pts = ring.map(n => ({ x: n.x, y: n.y })), hit = overlapParcel(ds, pts, tol);
+      if (hit || nbRings.some(r => polysOverlap(pts, r, tol))) { skipped.push({ area, parcel: hit ? hit.label : null }); continue; }
       out.push({ nodes: ring.map(n => ({ id: n.id, x: n.x, y: n.y, onMain: !!n.onMain })), area, perim: per });
     }
-    return out.sort((a, b) => b.area - a.area);
+    out.sort((a, b) => b.area - a.area); out.skipped = skipped; return out;   // skipped：圍出來但會蓋到宗地、不能直接建號的範圍
   }
   // 把 seamGaps 找到的一處建為新的未登記地：新點加入主測區點檔（落在段外圍邊上的插入該宗界址串，面積不變），再建宗地
   function fillSeamGap(ds, gap, mother) {
+    const hit = overlapParcel(ds, gap.nodes, 0.05); if (hit) throw new Error(`這處範圍會與 ${hit.label} 重疊，不能建為新地號`);
     const d = newDelta(), P = ds.points;
     const ids = gap.nodes.map(n => {
       if (n.id != null) return n.id;
@@ -2780,7 +2810,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, absorbSlivers, mergePoints, snapPointToEdge, splitByChord, deleteEdge, addFace, seamGaps, fillSeamGap, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, absorbSlivers, mergePoints, snapPointToEdge, splitByChord, deleteEdge, addFace, seamGaps, fillSeamGap, polysOverlap, overlapParcel, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall,
