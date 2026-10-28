@@ -1496,7 +1496,7 @@ function blPanel() {
   if (!r) { $('blSum').textContent = !S.ds ? '請先開啟目前的圖' : S.bl.sets.length ? '按「開始比對」' : ''; $('blList').innerHTML = ''; return; }
   const f = r.fit, n = (v, d = 1) => (v == null ? '' : v.toFixed(d)), causes = {}; for (const x of r.flagged) causes[x.cause] = (causes[x.cause] || 0) + 1;
   $('blSum').innerHTML = `接圖前 ${r.refParcels} 宗（併回分幅後 ${r.refGroups} 個地號）；目前的圖 ${r.curParcels} 宗。` +
-    (f ? `坐標轉換：${f.used}/${f.total} 宗同地號擬合，殘差中位數 ${f.median.toFixed(2)} m。` : '坐標未轉換（同一坐標系統，或可擬合的同地號太少）。') +
+    `${Core.alignText(f)}。` + (f && f.sheets.length > 1 ? `<details class="small"><summary>各幅平移（${f.sheets.length} 幅）</summary><table><thead><tr><th>分幅</th><th>ΔE m</th><th>ΔN m</th><th>同地號</th><th>ICP 點</th><th>殘差中位數</th></tr></thead><tbody>${f.sheets.map(q => `<tr><td>${esc(q.name)}</td><td>${q.dx.toFixed(2)}</td><td>${q.dy.toFixed(2)}</td><td>${q.pairs}</td><td>${q.icp}</td><td>${q.median == null ? '—' : q.median.toFixed(2)}</td></tr>`).join('')}</tbody></table></details>` : '') +
     `<br><b style="color:${r.missing.length ? '#d1242f' : 'inherit'}">遺漏 ${r.missing.length}</b>　部分在區內 ${r.partial.length}　被未登記地佔用 ${r.occupied.length}　接圖前沒有 ${r.extra.length}　<b style="color:${r.flagged.length ? '#d1242f' : 'inherit'}">面積超過 ${r.opt.ratio} 倍公差 ${r.flagged.length}</b>` +
     (r.flagged.length ? '（' + Object.entries(causes).map(([k, v]) => `${k} ${v}`).join('、') + '）' : '');
   const cov = l => l.map(h => `${esc(h.label)}（${h.area.toFixed(0)}）`).join('、') || '—';
@@ -2119,7 +2119,7 @@ function chkPanel() {
   if (!r) { $('chkSum').textContent = S.ds ? '按「開始檢核」' : '請先載入作業圖'; $('chkList').innerHTML = ''; return; }
   const c = chkCounts(), sh = r.shape, ik = r.ink, bl = r.bl;
   $('chkSum').innerHTML = `<b style="color:#d1242f">紅 ${c.red}</b>　<b style="color:#b7791f">黃 ${c.yellow}</b>　<span style="color:#6741d9">碎片 ${c.sliver}</span>　<span class="muted">共 ${c.total} 宗待確認</span>` +
-    (sh ? `<div class="muted">向量：舊圖界線 ${sh.refSegs} 段${sh.fit ? `，坐標擬合殘差中位數 ${sh.fit.median.toFixed(2)} m` : '（同坐標系，未轉換）'}</div>` : '') +
+    (sh ? `<div class="muted">向量：舊圖界線 ${sh.refSegs} 段；${Core.alignText(sh.fit)}</div>` : '') +
     (ik ? `<div class="muted">影像：${ik.covered}/${ik.blocks} 個 ${ik.opt.block} m 方格可比對，自動平移中位數 ${ik.shiftMedian.toFixed(2)} m；沒有墨線的界址線 ${ik.offLen.toFixed(0)} / ${ik.checkedLen.toFixed(0)} m` + (ik.poor ? `；<b>${ik.poor}</b> 格影像對不上（偏移超過 ${ik.opt.shift} m、空白或不是同一張圖），未判斷，圖上灰框` : '') + '</div>' : r.inkErr ? `<div class="neg">影像無法讀取：${esc(r.inkErr)}</div>` : '') +
     (bl ? `<div style="margin-top:4px">接圖前比對：<b class="${bl.missing.length ? 'neg' : ''}">遺漏 ${bl.missing.length}</b>、面積超過 ${bl.opt.ratio} 倍公差 ${bl.flagged.length} <button class="btn" data-act="bl">詳細與一鍵修復 →</button></div>` : '');
   const n = v => (v == null ? '' : v.toFixed(0));

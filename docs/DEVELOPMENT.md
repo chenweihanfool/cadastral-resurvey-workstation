@@ -112,6 +112,8 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 
 **第 6 步一鍵修正（v0.25.0）**：使用者只關心較差為負（計算面積 < 登記面積）。`restoreMissing(ds, item, { into })` 新增「既有宗地」模式：平面圖同遺漏復原，新環＝該宗原本的面＋接圖前界址內屬未登記地的面（登記地的面不拿、不報錯，回傳 skippedReg）；`restoreShortfall(ds, flaggedItem)` 包一層（只處理目前單一塊、非地中地、無圓弧）。app `fixOldMap`：遺漏切回＋`flagged` 中 diff<0 且 cause＝接圖後產生者補回＋碎片 `mergeParcels`，一個 pushMulti；再 `runCheck` 並輸出 `baselineReportHtml(…, { negOnly: true })`（area 只列 diff<0、occupied／chk 只列 area<areaReg、遺漏全列、partial／extra 不列）。KC0336：1094-4 +75 m²；接圖前即不符 6 筆不自動修（接圖前界址幫不上，要看舊圖影像，人工）。使用者 2026-10-28 預告：最後總結報告要逐宗比較重測前後、說明調整理由與脈絡沿革（需現況資料）；**「沿革」不是操作紀錄**，使用者還沒想好，先不做。
 
+**分幅對位（v0.26.0）**：使用者的分幅舊圖（多個單幅）與接好的圖有系統性偏移，舊版 `baselineFit` 擬合不可靠（中位數 > 5 m 或可用太少）就整個不轉換，畫面顯示「同坐標系，未轉換」、遺漏 86。`baselineAlign(cur, sets, {merge, curBy, search})`：擬合對只用「同一組內併回後只有一塊、非 9000 號、子號 < 1000、作業圖也只有一塊」的地號（被切開的塊形心會偏）；整體：單一資料集用六參數（median ≤ 5 m、used ≥ 30%），多幅或不可靠用平移（形心差中位數，殘差 ≤ 20 m）——**多幅時不可用六參數**：六參數加各幅平移解不唯一（剪切、縮放可吸收各群偏移），實測交替求解仍差 0.7 m、形狀檢核紅色倍增；每幅平移＝形心差中位數＋點到線 ICP（作業圖所有界址線、搜尋 8 m、剔除 > max(3×中位數, 0.5)、≥ 20 點，總平移 > 24 m 不採用）；多幅時整體與各幅交替至收斂（≤ 12 輪），整段只做一輪。`baselineGroups(set, tf)` 的 tf 可為 align 結果（`forDs`）。`compareBaseline`／`shapeCheck` 的 `fit` 改為 `alignInfo`（mode、used、total、median、sheets、shiftMedian、shiftMax），`alignText` 給介面與報告。模擬驗證見 changelog v0.26.0。**尚未用使用者真實的分幅檔驗證**（雲端沒有那批檔案）。
+
 **.ERR 偵錯報表（v0.9.0）**：`Core.errReport` 仿 NECEXE `KC6336.ERR`（Big5、CRLF；app 端用 `TextDecoder('big5')` 反推對照表做 Big5 編碼，`big5Bytes`）。已實作：界址點號空號（>50）、面積總和、段外圍（`outlineLoops`：各環轉逆時針取有向邊、抵消共邊後接環）、地中地外圍、D11 有而 D13 無環的地號、新地號重覆、確定／參考點數、經界線數；調查情形、界址查註、坐標來源因不知欄位而略過並註明。「已用經界線」以 `ds.edges.size` 計，與 NECEXE 的定義是否一致未驗證；段外圍以弦計弧線。
 
 ### AI／MCP 現況（誠實版）

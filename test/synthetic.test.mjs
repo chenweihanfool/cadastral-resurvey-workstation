@@ -805,4 +805,19 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const html = Core.baselineReportHtml(cur, Core.compareBaseline(cur, [ref], { identity: true, ratio: 1 }), { negOnly: true });
   assert.ok(html.includes('只列較差為負') && !html.includes('data-cat="area"'), '補回後沒有較差為負的面積超限');
 }
+
+// ── 分幅對位（v0.26.0）：整體偏移（TWD67 量級）＋各幅各自平移 ──
+{
+  const Y = 2700000, X = 200000, cur = Core.newDataset('cur', 't'), sheets = [Core.newDataset('L', 't'), Core.newDataset('R', 't')], off = [[3, 0], [0, -2]], G = [800, -200];
+  let id = 1; const pid = new Map(), P = (i, j) => { const k = i + ',' + j; if (!pid.has(k)) { pid.set(k, id); cur.points.set(id, { id, x: X + i * 20, y: Y + j * 20, x0: 0, y0: 0 }); id++; } return pid.get(k); };
+  for (let i = 0; i < 6; i++) for (let j = 0; j < 4; j++) {
+    const ids = [P(i, j), P(i + 1, j), P(i + 1, j + 1), P(i, j + 1)], label = `${i * 4 + j + 1}`; cur.parcels.push({ key: label, label, oldLabel: label, ids, mid: ids.map(() => false) });
+    const k = i < 3 ? 0 : 1, sh = sheets[k]; for (const q of ids) if (!sh.points.has(q)) { const c = cur.points.get(q); sh.points.set(q, { id: q, x: c.x + G[0] + off[k][0], y: c.y + G[1] + off[k][1], x0: 0, y0: 0 }); }
+    sh.parcels.push({ key: label, label, oldLabel: label, ids: ids.slice(), mid: ids.map(() => false) });
+  }
+  Core.finalize(cur); sheets.forEach(s => Core.finalize(s));
+  const r = Core.compareBaseline(cur, [sheets]);
+  assert.equal(r.missing.length, 0); assert.equal(r.flagged.length, 0); assert.ok(r.fit && r.fit.sheets.length === 2, Core.alignText(r.fit));
+  const al = Core.baselineAlign(cur, [sheets]); for (const [k, sh] of sheets.entries()) { const f = al.forDs(sh), q = sh.points.get(1) || [...sh.points.values()][0], c = cur.points.get(q.id), t = f(q.x, q.y); near(t.x, c.x, 0.05, `第 ${k} 幅 E`); near(t.y, c.y, 0.05, `第 ${k} 幅 N`); }
+}
 console.log('SYNTHETIC OK');

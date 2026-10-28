@@ -2057,15 +2057,22 @@ const Core = (() => {
   // 參考圖資依地號分組：{ key:'m-c', m, c, reg, area, pieces:[{ring:[{x,y}], holes:[[{x,y}]], area}] }（坐標已轉到作業圖）
   function baselineGroups(refs, tf, merge = true) {
     const groups = new Map();
-    for (const ds of refs) for (const p of ds.parcels) {
+    for (const ds of refs) { const tfd = typeof tf === 'function' ? tf : tf && tf.forDs ? tf.forDs(ds) : null;   // tf：函式，或 baselineAlign 的結果（各幅各自轉換）
+    for (const p of ds.parcels) {
       if (p.deleted || p.ids.length < 3) continue; const no = parcelNo(p); if (!no) continue;
       const c = merge && no.c >= 1000 ? no.c % 1000 : no.c, k = noLabel(no.m, c);
       let g = groups.get(k); if (!g) groups.set(k, g = { key: k, m: no.m, c, reg: null, area: 0, pieces: [], src: new Set() });
-      const T = q => (tf ? tf(q.x, q.y) : { x: q.x, y: q.y });
+      const T = q => (tfd ? tfd(q.x, q.y) : { x: q.x, y: q.y });
       g.pieces.push({ ring: p.ids.map(id => T(ds.points.get(id))), holes: (p.holes || []).map(hi => ds.parcels[hi].ids.map(id => T(ds.points.get(id)))), area: p.area, label: p.label });
       g.area += p.area; g.src.add(ds.name); if (p.areaReg > 0) g.reg = Math.max(g.reg || 0, p.areaReg);
-    }
+    } }
     return groups;
+  }
+  // 對位說明（介面與報告共用）
+  function alignText(f) {
+    if (!f) return '坐標對位：無';
+    const g = f.mode === 'affine' ? `整體六參數（${f.used}/${f.total} 宗同地號，殘差中位數 ${f.median.toFixed(2)} m）` : f.mode === 'shift' ? `整體平移（${f.sheets.length > 1 ? '多幅' : '六參數不可靠'}；${f.total} 宗同地號，殘差中位數 ${f.median.toFixed(2)} m）` : '整體未轉換（同地號太少）';
+    return `坐標對位：${g}＋各幅平移 ${f.sheets.length} 幅（中位數 ${f.shiftMedian.toFixed(2)} m、最大 ${f.shiftMax.toFixed(2)} m）`;
   }
   // 兩個簡單多邊形（{x,y} 陣列）的交集面積，精確計算：交集的邊界＝A 在 B 內的邊段＋B 在 A 內的邊段，對這些邊段做鞋帶積分。
   // 兩者重合的同向邊段只算一次（取 A 的），反向的重合邊段（只相接）不算。坐標先減去共同原點，避免大數。
@@ -2137,6 +2144,54 @@ const Core = (() => {
     const fit = fitAffine(src, dst);
     return fit && !(fit.median > 5 || fit.used < Math.min(10, src.length * 0.5)) ? fit : null;
   }
+  // 接圖前圖資對位（v0.26.0）：分幅數化圖常各幅各自偏移（掃描、數化、TWD67→97），只用一組整體轉換不夠，也可能整體擬合失敗而完全沒轉。三層：
+  // ① 整體：未被分幅切開、非未登記地、作業圖也只有一塊的同地號，形心擬合；單一資料集用六參數（TWD67 也可），多幅或六參數不可靠用平移（形心差的中位數）
+  // ② 每幅：該幅同地號形心差的中位數（≥ 3 宗才用）
+  // ③ 每幅：該幅界址點到作業圖界址線的點到線 ICP（只平移，搜尋 opt.search 預設 8 m，剔除 > max(3×中位數, 0.5 m)，≥ 20 點才用）
+  // 回傳 { mode:'affine'|'shift'|'none', used, total, median, sheets:[{name, dx, dy, pairs, icp, median}], forDs(ds) → (x, y) → {x, y} }
+  function baselineAlign(cur, sets, opt = {}) {
+    const merge = opt.merge !== false, curBy = opt.curBy || curByLabel(cur), search = opt.search ?? 8;
+    const pairsOf = (ds, cnt) => { const out = []; for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3) continue; const no = parcelNo(p); if (!no || no.m >= UNREG_MIN || no.c >= 1000) continue;
+      const k = noLabel(no.m, no.c); if (cnt.get(k) !== 1) continue; const ps = curBy.get(k); if (!ps || ps.length !== 1) continue;
+      out.push({ s: ringCentroidXY(p.ids.map(id => ds.points.get(id))), d: polyCentroid(ps[0].ids, cur.points) }); } return out; };
+    const perDs = new Map(), all = [];
+    for (const set of sets) {   // 同一組內，併回後只有一塊的地號才拿來擬合（被分幅切開的塊形心會偏）
+      const cnt = new Map(); for (const ds of set) for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3) continue; const no = parcelNo(p); if (!no) continue; const k = noLabel(no.m, merge && no.c >= 1000 ? no.c % 1000 : no.c); cnt.set(k, (cnt.get(k) || 0) + 1); }
+      for (const ds of set) { const pr = pairsOf(ds, cnt); perDs.set(ds, pr); all.push(...pr); }
+    }
+    // 作業圖界址線索引（ICP 用）
+    const segs = []; for (const e of cur.edges.values()) { const a = cur.points.get(e.a), b = cur.points.get(e.b); if (a && b) segs.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y }); }
+    const idx = segIndex(segs, Math.max(search, 1)), dsList = sets.flat(), sh = new Map(dsList.map(ds => [ds, { dx: 0, dy: 0, icp: 0, med: null }]));
+    const verts = new Map(dsList.map(ds => { const seen = new Set(), V = []; for (const p of ds.parcels) if (!p.deleted) for (const id of p.ids) if (!seen.has(id)) { seen.add(id); const q = ds.points.get(id); if (q) V.push(q); } return [ds, V]; }));
+    let G = (x, y) => ({ x, y }), mode = 'none', info = { used: 0, total: all.length, median: null };
+    // 只有一個資料集（整段）：整體用六參數（TWD67→97、數化的旋轉縮放）。多幅：整體只平移（TWD67→97 在一個地段內幾乎只是平移），
+    // 各幅再各自平移——六參數加各幅平移會互相抵換（兩群各偏一點可被剪切、縮放吸收），解不唯一，實測會把各幅偏移誤當成旋轉縮放
+    for (let round = 0, prev = Infinity; round < 12; round++) {
+      const src = [], dst = []; for (const ds of dsList) { const t = sh.get(ds); for (const q of perDs.get(ds) || []) { src.push(q.s); dst.push({ x: q.d.x - t.dx, y: q.d.y - t.dy }); } }
+      const af = fitAffine(src, dst); mode = 'none'; G = (x, y) => ({ x, y }); info = { used: 0, total: all.length, median: null };
+      if (dsList.length === 1 && af && af.median <= 5 && af.used >= Math.max(3, all.length * 0.3)) { G = af.apply; mode = 'affine'; info = { used: af.used, total: all.length, median: af.median, X: af.X, Y: af.Y }; }
+      else if (src.length >= 3) { const dx = median(src.map((q, k) => dst[k].x - q.x)), dy = median(src.map((q, k) => dst[k].y - q.y)), res = src.map((q, k) => Math.hypot(q.x + dx - dst[k].x, q.y + dy - dst[k].y)), med = median(res);
+        if (med <= 20) { G = (x, y) => ({ x: x + dx, y: y + dy }); mode = 'shift'; info = { used: res.filter(r => r <= Math.max(3 * med, 2)).length, total: all.length, median: med, dx, dy }; } }
+      for (const ds of dsList) {
+        const t = sh.get(ds), pr = perDs.get(ds) || []; let dx = 0, dy = 0;
+        if (pr.length >= 3) { dx = median(pr.map(q => q.d.x - G(q.s.x, q.s.y).x)); dy = median(pr.map(q => q.d.y - G(q.s.x, q.s.y).y)); }
+        const V = verts.get(ds).map(q => G(q.x, q.y)); let icp = 0, med = null;
+        for (let it = 0; it < 10; it++) {
+          const res = []; for (const q of V) { const h = idx.nearest(q.x + dx, q.y + dy, search); if (h) res.push({ ex: h.fx - q.x - dx, ey: h.fy - q.y - dy, d: h.dist }); }
+          if (res.length < 20) break; med = median(res.map(r => r.d)); const lim = Math.max(3 * med, 0.5), use = res.filter(r => r.d <= lim); if (use.length < 20) break; icp = use.length;
+          const mx = use.reduce((a, r) => a + r.ex, 0) / use.length, my = use.reduce((a, r) => a + r.ey, 0) / use.length; dx += mx; dy += my; if (Math.hypot(mx, my) < 0.005) break;
+        }
+        if (Math.hypot(dx, dy) > search * 3) { dx = 0; dy = 0; icp = 0; }   // 跑太遠＝對錯地方，不採用
+        Object.assign(t, { dx, dy, icp, med, pairs: pr.length });
+      }
+      if (dsList.length === 1) break;   // 整段：六參數已含平移，ICP 微調一次即可（再交替會在兩者之間漂移）
+      const chg = dsList.reduce((a, ds) => a + Math.hypot(sh.get(ds).dx, sh.get(ds).dy), 0); if (Math.abs(chg - prev) < 0.005 * dsList.length) break; prev = chg;
+    }
+    const sheets = dsList.map(ds => { const t = sh.get(ds); return { name: ds.name, dx: t.dx, dy: t.dy, pairs: t.pairs, icp: t.icp, median: t.med }; });
+    const fn = new Map(dsList.map(ds => { const t = sh.get(ds); return [ds, (x, y) => { const q = G(x, y); return { x: q.x + t.dx, y: q.y + t.dy }; }]; }));
+    return { mode, ...info, sheets, forDs: ds => fn.get(ds) || G };
+  }
+  const alignInfo = al => (al ? { mode: al.mode, used: al.used, total: al.total, median: al.median, X: al.X, Y: al.Y, sheets: al.sheets, shiftMedian: median(al.sheets.map(q => Math.hypot(q.dx, q.dy))), shiftMax: Math.max(0, ...al.sheets.map(q => Math.hypot(q.dx, q.dy))) } : null);
   // cur：作業圖（接完圖、刪完點、補完未登記地）。refs：接圖前圖資，每個元素是一組（一個資料集，或幾個資料集組成的陣列，例如 18 個單幅資料夾）。
   // 遺漏看所有組的聯集；面積原因取「該地號塊數最少」的那一組（例如同時載入切過版本與整幅時，以整幅的完整宗地判斷）。
   function compareBaseline(cur, refs, opt = {}) {
@@ -2144,10 +2199,10 @@ const Core = (() => {
     const sets = refs.map(r => (Array.isArray(r) ? r : [r])).filter(r => r.length), isU = no => no.m >= UNREG_MIN;
     const curBy = curByLabel(cur);
     // 1. 坐標轉換
-    const fit = opt.identity ? null : baselineFit(cur, sets, merge, curBy);
+    const al = opt.identity ? null : baselineAlign(cur, sets, { merge, curBy, search: opt.alignSearch });
     // 各組分組後合併：同一地號取塊數最少的那組（相同時取先載入的）
     const groups = new Map();
-    for (const set of sets) for (const [k, g] of baselineGroups(set, fit ? fit.apply : null, merge)) { const o = groups.get(k); if (!o || g.pieces.length < o.pieces.length) groups.set(k, g); }
+    for (const set of sets) for (const [k, g] of baselineGroups(set, al, merge)) { const o = groups.get(k); if (!o || g.pieces.length < o.pieces.length) groups.set(k, g); }
     const cand = parcelBoxIndex(cur);
     const brief = (cover, whole = 0) => cover.filter((h, i) => !i || h.area >= Math.max(1, whole * 0.01)).slice(0, 5).map(h => ({ label: h.p.label, idx: h.p.idx, area: h.area }));   // 不列 1 m²／1% 以下的邊緣碎片
     const missing = [], partial = [], outside = [], unreg = [], occupied = [], extra = [], area = [];
@@ -2181,7 +2236,7 @@ const Core = (() => {
     area.sort((u, v) => v.ratio - u.ratio);
     const byNo = (u, v) => u.label.localeCompare(v.label, 'en', { numeric: true });
     [missing, partial, unreg, extra].forEach(l => l.sort(byNo));
-    return { opt: { a, b, ratio, minInside: minIn }, fit: fit ? { X: fit.X, Y: fit.Y, used: fit.used, total: fit.total, median: fit.median, max: fit.max } : null,
+    return { opt: { a, b, ratio, minInside: minIn }, fit: alignInfo(al),
       refParcels: sets.flat().reduce((t, d) => t + d.parcels.filter(p => !p.deleted).length, 0), refSets: sets.length, refGroups: groups.size, curParcels: [...curBy.values()].reduce((t, l) => t + l.length, 0),
       missing, partial, outside: outside.length, unreg, occupied, extra, area, flagged: area.filter(r => r.flag) };
   }
@@ -2390,12 +2445,11 @@ const Core = (() => {
   function shapeCheck(cur, refs, opt = {}) {
     const o = { ...SHAPE_DEFAULT, ...opt }, sets = refs.map(r => (Array.isArray(r) ? r : [r])).filter(r => r.length);
     if (!sets.length) throw new Error('沒有分幅舊圖向量');
-    const fit = o.identity ? null : (o.fit || baselineFit(cur, sets, o.merge !== false));
-    const T = fit ? fit.apply : (x, y) => ({ x, y });
+    const al = o.identity ? null : (o.align || baselineAlign(cur, sets, { merge: o.merge !== false }));
     // 舊圖界線（去重、去分幅切線）
     const refSegs = [], seen = new Set(), rk = q => Math.round(q.x * 100) + ',' + Math.round(q.y * 100);
     for (const set of sets) {
-      const groups = baselineGroups(set, T, o.merge !== false);
+      const groups = baselineGroups(set, al, o.merge !== false);
       for (const g of groups.values()) for (const pc of g.pieces) {
         const others = g.pieces.filter(q => q !== pc);
         for (let i = 0; i < pc.ring.length; i++) {
@@ -2452,7 +2506,7 @@ const Core = (() => {
     }
     list.sort((u, v) => v.score - u.score);
     const slivers = [...res.values()].filter(r => r.sliver).sort((u, v) => u.area - v.area);
-    return { opt: o, fit: fit ? { X: fit.X, Y: fit.Y, used: fit.used, total: fit.total, median: fit.median, max: fit.max } : null, refSegs: refSegs.length, parcels: res.size, flagged: list, slivers,
+    return { opt: o, fit: alignInfo(al), refSegs: refSegs.length, parcels: res.size, flagged: list, slivers,
       counts: { red: list.filter(r => r.level === 'red').length, yellow: list.filter(r => r.level === 'yellow').length, slivers: slivers.length } };
   }
 
@@ -2573,7 +2627,7 @@ const Core = (() => {
     const card = it => `<article class="card s${it.sev}" id="${it.id}" data-cat="${it.cat}" data-label="${E(it.label)}"><header><span class="cat">${E(it.catName)}</span><h2>${E(it.label)}</h2>` +
       `<label class="done"><input type="checkbox" data-k="${E(it.cat + '|' + it.label)}">已處理</label></header><div class="body"><div class="map">${svg(it)}</div><div class="info"><table>${it.rows.map(([k, v]) => `<tr><th>${E(k)}</th><td>${String(v).includes('<') ? v : E(v)}</td></tr>`).join('')}</table>` +
       (it.note ? `<p class="note">${E(it.note)}</p>` : '') + `<textarea data-n="${E(it.cat + '|' + it.label)}" placeholder="備註（處理方式、待查事項…）"></textarea></div></div></article>`;
-    const fit = r.fit ? `坐標轉換：${r.fit.used}/${r.fit.total} 宗同地號擬合，殘差中位數 ${f(r.fit.median, 2)} m` : '坐標轉換：無（同坐標系）';
+    const fit = alignText(r.fit);
     return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${E(opt.title || '接圖前比對報告')}</title><style>
 :root{--bg:#f4f5f7;--panel:#fff;--ink:#1d2330;--muted:#69718a;--line:#d9dde6;--accent:#1f6feb;--bad:#d1242f;--warn:#b7791f}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14171d;--panel:#1c2029;--ink:#e6e9f0;--muted:#98a1b6;--line:#2c3240;--accent:#4c8dff;--bad:#ff6b73;--warn:#e0a34a}}
@@ -2643,7 +2697,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, absorbSlivers, seamGaps, fillSeamGap, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
-    AREA_TOL, areaTol, parcelNo, fitAffine, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall,
+    AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall,
     baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
     parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner };
 })();
