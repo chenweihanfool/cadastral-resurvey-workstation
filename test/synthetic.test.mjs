@@ -818,6 +818,9 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   Core.finalize(cur); sheets.forEach(s => Core.finalize(s));
   const r = Core.compareBaseline(cur, [sheets]);
   assert.equal(r.missing.length, 0); assert.equal(r.flagged.length, 0); assert.ok(r.fit && r.fit.sheets.length === 2, Core.alignText(r.fit));
+  // 兩組不同坐標系（一組已是 TWD97、一組是偏 800 m 的分幅）：逐組各自轉換，不可混在一起擬合（v0.26.1）
+  const same = Core.newDataset('same', 't'); for (const q of cur.points.values()) same.points.set(q.id, { ...q }); for (const p of cur.parcels) same.parcels.push({ key: p.key, label: p.label, oldLabel: p.label, ids: p.ids.slice(), mid: p.ids.map(() => false) }); Core.finalize(same);
+  const r2 = Core.compareBaseline(cur, [[same], sheets]); assert.equal(r2.missing.length, 0); assert.deepEqual(r2.fit.sets.map(g => g.mode), ['affine', 'shift'], Core.alignText(r2.fit));
   const al = Core.baselineAlign(cur, [sheets]); for (const [k, sh] of sheets.entries()) { const f = al.forDs(sh), q = sh.points.get(1) || [...sh.points.values()][0], c = cur.points.get(q.id), t = f(q.x, q.y); near(t.x, c.x, 0.05, `第 ${k} 幅 E`); near(t.y, c.y, 0.05, `第 ${k} 幅 N`); }
 }
 console.log('SYNTHETIC OK');

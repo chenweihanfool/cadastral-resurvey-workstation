@@ -1478,7 +1478,7 @@ async function loadBaseline(files) {
     } catch (e) { skipped.push(g.name + '（' + e.message + '）'); }
   }
   if (!ds.length) { msg('沒有可用的接圖前圖資（需要 D14＋D13（＋D11）或 COA＋BNP（＋PAR））' + (skipped.length ? '：' + skipped.join('、') : '')); return { added: 0, skipped }; }
-  const top = files.map(f => (f.webkitRelativePath || f._path || '').split('/')[0]).find(Boolean);
+  const dirs = [...new Set(files.map(f => nbDirOf(f)).filter(Boolean))], top = dirs.length ? (dirs.length > 1 ? dirs.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, a.lastIndexOf('/', i - 1) + 1); }) : dirs[0]).replace(/\/$/, '').split('/').pop() : '';   // 各幅共同的上層資料夾名稱（例如「單幅」）
   const set = { name: ds.length > 1 ? `${top || ds[0].name}（${ds.length} 幅）` : ds[0].name, ds };
   S.bl.sets.push(set); S.bl.res = null; blPanel(); refresh();
   msg(`已加入接圖前圖資「${set.name}」：${ds.reduce((t, d) => t + d.parcels.length, 0)} 宗` + (skipped.length ? `；略過 ${skipped.join('、')}` : ''));
@@ -2001,9 +2001,9 @@ renderUpdate();
 if (autoUpdOn() && /^(https?|file):$/.test(location.protocol)) setTimeout(() => checkUpdate({ silent: true }), 2500);
 
 // ── 專案資料夾一鍵讀入：依子資料夾分類（主要測區、鄰段、分幅舊圖、影像、登記資料）──────────
-// 鄰段：路徑含「鄰段」；分幅舊圖：路徑含「分幅／接圖前／單幅」；其餘含 D14＋D13 或 COA＋BNP 的資料夾中，最淺的一個是主要測區。
+// 鄰段：路徑含「鄰段」；分幅舊圖：路徑含「分幅／接圖前／單幅／整幅／舊圖數值」（同一上層資料夾的各幅併成一組）；其餘含 D14＋D13 或 COA＋BNP 的資料夾中，最淺的一個是主要測區。
 // 主要測區資料夾同時有 D14＋D13 與 COA＋BNP 時，COA＋BNP（數化舊圖）自動加入為分幅舊圖。
-const NB_DIR = /鄰段|neighbou?r/i, BL_DIR = /分幅|接圖前|單幅|sheet/i, OLDMAP_SKIP = /航照|正射|ortho|aerial|photo|衛星/i;
+const NB_DIR = /鄰段|neighbou?r/i, BL_DIR = /分幅|接圖前|單幅|整幅|舊圖數值|sheet/i, OLDMAP_SKIP = /航照|正射|ortho|aerial|photo|衛星/i;
 const isOldMapImg = im => (im.oldmap != null ? im.oldmap : !OLDMAP_SKIP.test(im.name));
 async function loadProject(files) {
   const pathOf = f => f.webkitRelativePath || f._path || f.name, dirs = new Map();
@@ -2022,7 +2022,8 @@ async function loadProject(files) {
   const imgs = files.filter(f => !inMain(f) && /\.(jpe?g|png|jgw|jpgw|pgw|wld)$/i.test(f.name)); if (imgs.length) await loadImages(imgs);
   if (!S.img.some(im => im.visible)) { const im = S.img.find(q => q.located && isOldMapImg(q)); if (im) { im.opacity = 0.8; setImgVisible(im, true); } }   // 顯示第一張舊圖，方便對照
   if (nbs.length) await loadNeighbors(nbs.flatMap(g => g.files));
-  for (const g of bls) await loadBaseline(g.files);
+  { const byParent = new Map(); for (const g of bls) { const par = g.dir.replace(/[^/]*\/$/, ''); (byParent.get(par) || byParent.set(par, []).get(par)).push(g); }   // 同一個上層資料夾（例如「單幅」）底下的各幅併成一組：各幅一起擬合、接合線才認得
+    for (const list of byParent.values()) await loadBaseline(list.flatMap(g => g.files)); }
   const out = { main: main.dir.replace(/\/$/, '') || '／', neighbors: S.nb.map(n => n.name), baselines: S.bl.sets.map(s => s.name), images: S.img.length, oldmap_images: S.img.filter(isOldMapImg).length, ignored: rest.slice(1).map(g => g.dir) };
   msg(`專案已讀入：主要測區 ${out.main}；鄰段 ${out.neighbors.length}；分幅舊圖 ${out.baselines.length} 組；影像 ${out.images} 張（舊圖 ${out.oldmap_images}）` + (out.ignored.length ? `；略過 ${out.ignored.length} 個資料夾` : ''));
   refresh(); return out;
