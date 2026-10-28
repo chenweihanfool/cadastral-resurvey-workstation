@@ -2488,7 +2488,7 @@ const Core = (() => {
       const c = merge && no.c >= 1000 ? no.c % 1000 : no.c, k = noLabel(no.m, c);
       let g = groups.get(k); if (!g) groups.set(k, g = { key: k, m: no.m, c, reg: null, area: 0, pieces: [], src: new Set() });
       const T = q => (tfd ? tfd(q.x, q.y) : { x: q.x, y: q.y });
-      g.pieces.push({ ring: p.ids.map(id => T(ds.points.get(id))), holes: (p.holes || []).map(hi => ds.parcels[hi].ids.map(id => T(ds.points.get(id)))), area: p.area, label: p.label });
+      g.pieces.push({ ds: ds.name, ring: p.ids.map(id => T(ds.points.get(id))), holes: (p.holes || []).map(hi => ds.parcels[hi].ids.map(id => T(ds.points.get(id)))), area: p.area, label: p.label });
       g.area += p.area; g.src.add(ds.name); if (p.areaReg > 0) g.reg = Math.max(g.reg || 0, p.areaReg);
     } }
     return groups;
@@ -2496,8 +2496,9 @@ const Core = (() => {
   // 對位說明（介面與報告共用）
   function alignText(f) {
     if (!f) return '坐標對位：無';
-    const g = f.mode === 'affine' ? `整體六參數（${f.used}/${f.total} 宗同地號，殘差中位數 ${f.median.toFixed(2)} m）` : f.mode === 'shift' ? `整體平移（${f.sheets.length > 1 ? '多幅' : '六參數不可靠'}；${f.total} 宗同地號，殘差中位數 ${f.median.toFixed(2)} m）` : '整體未轉換（同地號太少）';
-    return `坐標對位：${g}＋各幅平移 ${f.sheets.length} 幅（中位數 ${f.shiftMedian.toFixed(2)} m、最大 ${f.shiftMax.toFixed(2)} m）`;
+    const one = g => g.mode === 'affine' ? `六參數（${g.used}/${g.total} 宗同地號，殘差中位數 ${g.median.toFixed(2)} m）` : g.mode === 'shift' ? `平移（${g.total} 宗同地號，殘差中位數 ${g.median.toFixed(2)} m）` : g.mode === 'borrow' ? '沒有同地號，沿用鄰近組的轉換' : '未轉換（沒有同地號）';
+    const sets = f.sets || [{ name: '', ...f }];
+    return `坐標對位：${sets.length > 1 ? sets.map(g => `${g.name} ${one(g)}`).join('；') : '整體' + one(sets[0])}＋各幅平移 ${f.sheets.length} 幅（中位數 ${f.shiftMedian.toFixed(2)} m、最大 ${f.shiftMax.toFixed(2)} m）`;
   }
   // 兩個簡單多邊形（{x,y} 陣列）的交集面積，精確計算：交集的邊界＝A 在 B 內的邊段＋B 在 A 內的邊段，對這些邊段做鞋帶積分。
   // 兩者重合的同向邊段只算一次（取 A 的），反向的重合邊段（只相接）不算。坐標先減去共同原點，避免大數。
@@ -2579,44 +2580,61 @@ const Core = (() => {
     const pairsOf = (ds, cnt) => { const out = []; for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3) continue; const no = parcelNo(p); if (!no || no.m >= UNREG_MIN || no.c >= 1000) continue;
       const k = noLabel(no.m, no.c); if (cnt.get(k) !== 1) continue; const ps = curBy.get(k); if (!ps || ps.length !== 1) continue;
       out.push({ s: ringCentroidXY(p.ids.map(id => ds.points.get(id))), d: polyCentroid(ps[0].ids, cur.points) }); } return out; };
-    const perDs = new Map(), all = [];
-    for (const set of sets) {   // 同一組內，併回後只有一塊的地號才拿來擬合（被分幅切開的塊形心會偏）
-      const cnt = new Map(); for (const ds of set) for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3) continue; const no = parcelNo(p); if (!no) continue; const k = noLabel(no.m, merge && no.c >= 1000 ? no.c % 1000 : no.c); cnt.set(k, (cnt.get(k) || 0) + 1); }
-      for (const ds of set) { const pr = pairsOf(ds, cnt); perDs.set(ds, pr); all.push(...pr); }
-    }
     // 作業圖界址線索引（ICP 用）
     const segs = []; for (const e of cur.edges.values()) { const a = cur.points.get(e.a), b = cur.points.get(e.b); if (a && b) segs.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y }); }
-    const idx = segIndex(segs, Math.max(search, 1)), dsList = sets.flat(), sh = new Map(dsList.map(ds => [ds, { dx: 0, dy: 0, icp: 0, med: null }]));
-    const verts = new Map(dsList.map(ds => { const seen = new Set(), V = []; for (const p of ds.parcels) if (!p.deleted) for (const id of p.ids) if (!seen.has(id)) { seen.add(id); const q = ds.points.get(id); if (q) V.push(q); } return [ds, V]; }));
-    let G = (x, y) => ({ x, y }), mode = 'none', info = { used: 0, total: all.length, median: null };
-    // 只有一個資料集（整段）：整體用六參數（TWD67→97、數化的旋轉縮放）。多幅：整體只平移（TWD67→97 在一個地段內幾乎只是平移），
-    // 各幅再各自平移——六參數加各幅平移會互相抵換（兩群各偏一點可被剪切、縮放吸收），解不唯一，實測會把各幅偏移誤當成旋轉縮放
-    for (let round = 0, prev = Infinity; round < 12; round++) {
-      const src = [], dst = []; for (const ds of dsList) { const t = sh.get(ds); for (const q of perDs.get(ds) || []) { src.push(q.s); dst.push({ x: q.d.x - t.dx, y: q.d.y - t.dy }); } }
-      const af = fitAffine(src, dst); mode = 'none'; G = (x, y) => ({ x, y }); info = { used: 0, total: all.length, median: null };
-      if (dsList.length === 1 && af && af.median <= 5 && af.used >= Math.max(3, all.length * 0.3)) { G = af.apply; mode = 'affine'; info = { used: af.used, total: all.length, median: af.median, X: af.X, Y: af.Y }; }
-      else if (src.length >= 3) { const dx = median(src.map((q, k) => dst[k].x - q.x)), dy = median(src.map((q, k) => dst[k].y - q.y)), res = src.map((q, k) => Math.hypot(q.x + dx - dst[k].x, q.y + dy - dst[k].y)), med = median(res);
-        if (med <= 20) { G = (x, y) => ({ x: x + dx, y: y + dy }); mode = 'shift'; info = { used: res.filter(r => r <= Math.max(3 * med, 2)).length, total: all.length, median: med, dx, dy }; } }
-      for (const ds of dsList) {
-        const t = sh.get(ds), pr = perDs.get(ds) || []; let dx = 0, dy = 0;
-        if (pr.length >= 3) { dx = median(pr.map(q => q.d.x - G(q.s.x, q.s.y).x)); dy = median(pr.map(q => q.d.y - G(q.s.x, q.s.y).y)); }
-        const V = verts.get(ds).map(q => G(q.x, q.y)); let icp = 0, med = null;
-        for (let it = 0; it < 10; it++) {
-          const res = []; for (const q of V) { const h = idx.nearest(q.x + dx, q.y + dy, search); if (h) res.push({ ex: h.fx - q.x - dx, ey: h.fy - q.y - dy, d: h.dist }); }
-          if (res.length < 20) break; med = median(res.map(r => r.d)); const lim = Math.max(3 * med, 0.5), use = res.filter(r => r.d <= lim); if (use.length < 20) break; icp = use.length;
-          const mx = use.reduce((a, r) => a + r.ex, 0) / use.length, my = use.reduce((a, r) => a + r.ey, 0) / use.length; dx += mx; dy += my; if (Math.hypot(mx, my) < 0.005) break;
+    const idx = segIndex(segs, Math.max(search, 1)), ID = (x, y) => ({ x, y });
+    // 每一組各自一個坐標系統（例如案件資料夾的 COA 已是 TWD97、單幅是 TWD67）：整體轉換逐組求，不可混在一起擬合（v0.26.1）
+    const fitSet = (set, perDs, Gfixed) => {
+      const sh = new Map(set.map(ds => [ds, { dx: 0, dy: 0, icp: 0, med: null, pairs: (perDs.get(ds) || []).length }]));
+      const verts = new Map(set.map(ds => { const seen = new Set(), V = []; for (const p of ds.parcels) if (!p.deleted) for (const id of p.ids) if (!seen.has(id)) { seen.add(id); const q = ds.points.get(id); if (q) V.push(q); } return [ds, V]; }));
+      let G = Gfixed || ID, mode = Gfixed ? 'borrow' : 'none', info = { used: 0, total: 0, median: null };
+      // 一組只有一個資料集（整段）：整體用六參數（TWD67→97、數化的旋轉縮放）。多幅：整體只平移（TWD67→97 在一個地段內幾乎只是平移），
+      // 各幅再各自平移——六參數加各幅平移會互相抵換（兩群各偏一點可被剪切、縮放吸收），解不唯一，實測會把各幅偏移誤當成旋轉縮放
+      for (let round = 0, prev = Infinity; round < 12; round++) {
+        if (!Gfixed) {
+          const src = [], dst = []; for (const ds of set) { const t = sh.get(ds); for (const q of perDs.get(ds) || []) { src.push(q.s); dst.push({ x: q.d.x - t.dx, y: q.d.y - t.dy }); } }
+          const af = set.length === 1 ? fitAffine(src, dst) : null; mode = 'none'; G = ID; info = { used: 0, total: src.length, median: null };
+          if (af && af.median <= 5 && af.used >= Math.max(3, src.length * 0.3)) { G = af.apply; mode = 'affine'; info = { used: af.used, total: src.length, median: af.median, X: af.X, Y: af.Y }; }
+          else if (src.length >= 3) { const dx = median(src.map((q, k) => dst[k].x - q.x)), dy = median(src.map((q, k) => dst[k].y - q.y)), res = src.map((q, k) => Math.hypot(q.x + dx - dst[k].x, q.y + dy - dst[k].y)), med = median(res);
+            if (med <= 20) { G = (x, y) => ({ x: x + dx, y: y + dy }); mode = 'shift'; info = { used: res.filter(r => r <= Math.max(3 * med, 2)).length, total: src.length, median: med, dx, dy }; } }
         }
-        if (Math.hypot(dx, dy) > search * 3) { dx = 0; dy = 0; icp = 0; }   // 跑太遠＝對錯地方，不採用
-        Object.assign(t, { dx, dy, icp, med, pairs: pr.length });
+        for (const ds of set) {
+          const t = sh.get(ds), pr = perDs.get(ds) || []; let dx = 0, dy = 0;
+          if (pr.length >= 3) { dx = median(pr.map(q => q.d.x - G(q.s.x, q.s.y).x)); dy = median(pr.map(q => q.d.y - G(q.s.x, q.s.y).y)); }
+          const V = verts.get(ds).map(q => G(q.x, q.y)); let icp = 0, med = null;
+          for (let it = 0; it < 10; it++) {
+            const res = []; for (const q of V) { const h = idx.nearest(q.x + dx, q.y + dy, search); if (h) res.push({ ex: h.fx - q.x - dx, ey: h.fy - q.y - dy, d: h.dist }); }
+            if (res.length < 20) break; med = median(res.map(r => r.d)); const lim = Math.max(3 * med, 0.5), use = res.filter(r => r.d <= lim); if (use.length < 20) break; icp = use.length;
+            const mx = use.reduce((a, r) => a + r.ex, 0) / use.length, my = use.reduce((a, r) => a + r.ey, 0) / use.length; dx += mx; dy += my; if (Math.hypot(mx, my) < 0.005) break;
+          }
+          if (Math.hypot(dx, dy) > search * 3) { dx = 0; dy = 0; icp = 0; }   // 跑太遠＝對錯地方，不採用
+          Object.assign(t, { dx, dy, icp, med });
+        }
+        if (set.length === 1 || Gfixed) break;   // 整段：六參數已含平移，ICP 微調一次即可（再交替會在兩者之間漂移）
+        const chg = set.reduce((a, ds) => a + Math.hypot(sh.get(ds).dx, sh.get(ds).dy), 0); if (Math.abs(chg - prev) < 0.005 * set.length) break; prev = chg;
       }
-      if (dsList.length === 1) break;   // 整段：六參數已含平移，ICP 微調一次即可（再交替會在兩者之間漂移）
-      const chg = dsList.reduce((a, ds) => a + Math.hypot(sh.get(ds).dx, sh.get(ds).dy), 0); if (Math.abs(chg - prev) < 0.005 * dsList.length) break; prev = chg;
+      return { G, mode, info, sh };
+    };
+    const rawCenter = set => { let x = 0, y = 0, n = 0; for (const ds of set) for (const q of ds.points.values()) { x += q.x; y += q.y; n++; } return n ? { x: x / n, y: y / n } : null; };
+    const res = sets.map(set => {
+      const cnt = new Map(); for (const ds of set) for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3) continue; const no = parcelNo(p); if (!no) continue; const k = noLabel(no.m, merge && no.c >= 1000 ? no.c % 1000 : no.c); cnt.set(k, (cnt.get(k) || 0) + 1); }
+      const perDs = new Map(set.map(ds => [ds, pairsOf(ds, cnt)]));   // 同一組內，併回後只有一塊的地號才拿來擬合（被分幅切開的塊形心會偏）
+      return { set, perDs, c: rawCenter(set), ...fitSet(set, perDs) };
+    });
+    // 沒有同地號可擬合的組（例如本段範圍外的圖幅）：沿用原始坐標最接近、已擬合的那一組的整體轉換，再各幅 ICP
+    for (const r of res) if (r.mode === 'none' && r.c) {
+      const near = res.filter(o => o !== r && o.mode !== 'none' && o.mode !== 'borrow' && o.c).sort((a, b) => Math.hypot(a.c.x - r.c.x, a.c.y - r.c.y) - Math.hypot(b.c.x - r.c.x, b.c.y - r.c.y))[0];
+      if (near && Math.hypot(near.c.x - r.c.x, near.c.y - r.c.y) < 20000) Object.assign(r, fitSet(r.set, r.perDs, near.G));
     }
-    const sheets = dsList.map(ds => { const t = sh.get(ds); return { name: ds.name, dx: t.dx, dy: t.dy, pairs: t.pairs, icp: t.icp, median: t.med }; });
-    const fn = new Map(dsList.map(ds => { const t = sh.get(ds); return [ds, (x, y) => { const q = G(x, y); return { x: q.x + t.dx, y: q.y + t.dy }; }]; }));
-    return { mode, ...info, sheets, forDs: ds => fn.get(ds) || G };
+    const sheets = [], fn = new Map(), setInfo = [];
+    for (const r of res) {
+      setInfo.push({ name: r.set.length > 1 ? `${r.set[0].name} 等 ${r.set.length} 幅` : r.set[0].name, mode: r.mode, ...r.info });
+      for (const ds of r.set) { const t = r.sh.get(ds); sheets.push({ name: ds.name, dx: t.dx, dy: t.dy, pairs: t.pairs, icp: t.icp, median: t.med }); fn.set(ds, (x, y) => { const q = r.G(x, y); return { x: q.x + t.dx, y: q.y + t.dy }; }); }
+    }
+    const main = setInfo.slice().sort((a, b) => b.total - a.total)[0] || { mode: 'none', used: 0, total: 0, median: null };
+    return { mode: main.mode, used: main.used, total: main.total, median: main.median, X: main.X, Y: main.Y, sets: setInfo, sheets, forDs: ds => fn.get(ds) || ID };
   }
-  const alignInfo = al => (al ? { mode: al.mode, used: al.used, total: al.total, median: al.median, X: al.X, Y: al.Y, sheets: al.sheets, shiftMedian: median(al.sheets.map(q => Math.hypot(q.dx, q.dy))), shiftMax: Math.max(0, ...al.sheets.map(q => Math.hypot(q.dx, q.dy))) } : null);
+  const alignInfo = al => (al ? { mode: al.mode, used: al.used, total: al.total, median: al.median, X: al.X, Y: al.Y, sets: al.sets, sheets: al.sheets, shiftMedian: median(al.sheets.map(q => Math.hypot(q.dx, q.dy))), shiftMax: Math.max(0, ...al.sheets.map(q => Math.hypot(q.dx, q.dy))) } : null);
   // cur：作業圖（接完圖、刪完點、補完未登記地）。refs：接圖前圖資，每個元素是一組（一個資料集，或幾個資料集組成的陣列，例如 18 個單幅資料夾）。
   // 遺漏看所有組的聯集；面積原因取「該地號塊數最少」的那一組（例如同時載入切過版本與整幅時，以整幅的完整宗地判斷）。
   function compareBaseline(cur, refs, opt = {}) {
@@ -2873,15 +2891,27 @@ const Core = (() => {
     const al = o.identity ? null : (o.align || baselineAlign(cur, sets, { merge: o.merge !== false }));
     // 舊圖界線（去重、去分幅切線）
     const refSegs = [], seen = new Set(), rk = q => Math.round(q.x * 100) + ',' + Math.round(q.y * 100);
-    for (const set of sets) {
-      const groups = baselineGroups(set, al, o.merge !== false);
+    const perSet = sets.map(set => baselineGroups(set, al, o.merge !== false)), byKey = new Map();
+    for (const gs of perSet) for (const g of gs.values()) (byKey.get(g.key) || byKey.set(g.key, []).get(g.key)).push(...g.pieces);   // 各組（例如每幅自成一組）的同地號塊放在一起判斷切線
+    // 圖幅接合線：某幅的外緣邊（該幅只有一宗用到），6 m 內又有別幅的外緣邊＝分幅切線（不論兩側地號是否相同；同一組內才比）。KC0336 單幅之間的縫最大約 4.7 m（第 12／7 幅）
+    const border = new Map(); for (const set of sets) for (const ds of set) { if (set.length < 2) continue; const f = al ? al.forDs(ds) : (x, y) => ({ x, y }), out = [];
+      for (const e of ds.edges.values()) { if (e.parcels.length !== 1) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); if (!a || !b) continue; const A2 = f(a.x, a.y), B2 = f(b.x, b.y); out.push({ ax: A2.x, ay: A2.y, bx: B2.x, by: B2.y }); }
+      border.set(ds.name, { idx: segIndex(out, 25), set }); }
+    const onSeam = (dsName, x, y) => { const me = border.get(dsName); if (!me) return false; const h = me.idx.nearest(x, y, 0.05); if (!h) return false;
+      for (const [n, o] of border) if (n !== dsName && o.set === me.set && o.idx.nearest(x, y, 6)) return true; return false; };
+    for (const groups of perSet) {
       for (const g of groups.values()) for (const pc of g.pieces) {
-        const others = g.pieces.filter(q => q !== pc);
+        const others = byKey.get(g.key).filter(q => q !== pc);
         for (let i = 0; i < pc.ring.length; i++) {
           const A = pc.ring[i], B = pc.ring[(i + 1) % pc.ring.length], len = Math.hypot(B.x - A.x, B.y - A.y); if (len < 1e-6) continue;
           const k = [rk(A), rk(B)].sort().join('|'); if (seen.has(k)) continue;
-          if (others.length) { const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, nx = -(B.y - A.y) / len * 0.3, ny = (B.x - A.x) / len * 0.3, inP = (r, x, y) => { let c = false; for (let a = 0, b = r.length - 1; a < r.length; b = a++) { const p = r[a], q = r[b]; if ((p.y > y) !== (q.y > y) && x < ((q.x - p.x) * (y - p.y)) / (q.y - p.y) + p.x) c = !c; } return c; };
-            if (others.some(q => inP(q.ring, mx + nx, my + ny) || inP(q.ring, mx - nx, my - ny))) continue; }   // 另一側是同地號的另一塊＝分幅切線
+          if (onSeam(pc.ds, (A.x + B.x) / 2, (A.y + B.y) / 2)) continue;
+          if (others.length) {   // 分幅切線：這條邊「外側」（離開這一塊的那側）0.3～2 m 處落在同地號的另一塊內（單幅數化時切線兩側就常有 1 m 左右的縫，KC0336 第 6／7 幅實測 1.1 m）。
+            // 只看外側，另一份涵蓋同範圍的資料（例如整段 COA 與單幅同時載入）在內側重疊，不會被誤當成切線
+            const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2, ux = -(B.y - A.y) / len, uy = (B.x - A.x) / len, inP = (r, x, y) => { let c = false; for (let a = 0, b = r.length - 1; a < r.length; b = a++) { const p = r[a], q = r[b]; if ((p.y > y) !== (q.y > y) && x < ((q.x - p.x) * (y - p.y)) / (q.y - p.y) + p.x) c = !c; } return c; };
+            const sg = inP(pc.ring, mx + ux * 0.05, my + uy * 0.05) ? -1 : 1;   // 外側方向
+            if ([0.3, 1, 2].some(d => others.some(q => inP(q.ring, mx + sg * ux * d, my + sg * uy * d)))) continue;
+          }
           seen.add(k); refSegs.push({ A, B, len, label: g.key });
         }
       }
@@ -3134,6 +3164,16 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.26.1', date: '2026-10-28', type: 'patch',
+    title: '分幅對位修正：每組各自轉換坐標，單幅併成一組；圖幅接合線不再當成舊圖界址',
+    changes: [
+      '使用者回報 v0.26.0 仍「整體未轉換」、遺漏 84：案件資料夾內的 COA（已是 TWD97）與單幅（TWD67）兩種坐標系被混在一起擬合，殘差太大就不轉換。現在每一組各自求整體轉換；沒有同地號的組（本段範圍外的圖幅）沿用位置最近那一組的轉換',
+      '「開啟專案資料夾」：同一個上層資料夾（例如「單幅」）底下的各幅併成一組；路徑含「整幅」「舊圖數值」也認作分幅舊圖',
+      '舊圖檢核不再把圖幅接合線當成界址：某幅外緣 6 m 內有別幅外緣即是接合線；同地號在接合線外側 2 m 內有另一塊也算（單幅數化時接合線兩側常有 1～5 m 的縫，KC0336 第 12／7 幅約 4.7 m）',
+      'KC0336 以 116 倉庫的 18 個單幅實測：遺漏 84 → 0；只載單幅時形狀檢核紅 51、黃 38（整段 COA 為 59／29）；與案件 COA 一起載入時紅 56',
+    ],
+  },
   {
     version: 'v0.26.0', date: '2026-10-28', type: 'minor',
     title: '接圖前比對、舊圖檢核：分幅舊圖先整體轉換（TWD67→97）再各幅平移對位，不再因系統性偏移誤報',
@@ -5052,7 +5092,7 @@ async function loadBaseline(files) {
     } catch (e) { skipped.push(g.name + '（' + e.message + '）'); }
   }
   if (!ds.length) { msg('沒有可用的接圖前圖資（需要 D14＋D13（＋D11）或 COA＋BNP（＋PAR））' + (skipped.length ? '：' + skipped.join('、') : '')); return { added: 0, skipped }; }
-  const top = files.map(f => (f.webkitRelativePath || f._path || '').split('/')[0]).find(Boolean);
+  const dirs = [...new Set(files.map(f => nbDirOf(f)).filter(Boolean))], top = dirs.length ? (dirs.length > 1 ? dirs.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, a.lastIndexOf('/', i - 1) + 1); }) : dirs[0]).replace(/\/$/, '').split('/').pop() : '';   // 各幅共同的上層資料夾名稱（例如「單幅」）
   const set = { name: ds.length > 1 ? `${top || ds[0].name}（${ds.length} 幅）` : ds[0].name, ds };
   S.bl.sets.push(set); S.bl.res = null; blPanel(); refresh();
   msg(`已加入接圖前圖資「${set.name}」：${ds.reduce((t, d) => t + d.parcels.length, 0)} 宗` + (skipped.length ? `；略過 ${skipped.join('、')}` : ''));
@@ -5575,9 +5615,9 @@ renderUpdate();
 if (autoUpdOn() && /^(https?|file):$/.test(location.protocol)) setTimeout(() => checkUpdate({ silent: true }), 2500);
 
 // ── 專案資料夾一鍵讀入：依子資料夾分類（主要測區、鄰段、分幅舊圖、影像、登記資料）──────────
-// 鄰段：路徑含「鄰段」；分幅舊圖：路徑含「分幅／接圖前／單幅」；其餘含 D14＋D13 或 COA＋BNP 的資料夾中，最淺的一個是主要測區。
+// 鄰段：路徑含「鄰段」；分幅舊圖：路徑含「分幅／接圖前／單幅／整幅／舊圖數值」（同一上層資料夾的各幅併成一組）；其餘含 D14＋D13 或 COA＋BNP 的資料夾中，最淺的一個是主要測區。
 // 主要測區資料夾同時有 D14＋D13 與 COA＋BNP 時，COA＋BNP（數化舊圖）自動加入為分幅舊圖。
-const NB_DIR = /鄰段|neighbou?r/i, BL_DIR = /分幅|接圖前|單幅|sheet/i, OLDMAP_SKIP = /航照|正射|ortho|aerial|photo|衛星/i;
+const NB_DIR = /鄰段|neighbou?r/i, BL_DIR = /分幅|接圖前|單幅|整幅|舊圖數值|sheet/i, OLDMAP_SKIP = /航照|正射|ortho|aerial|photo|衛星/i;
 const isOldMapImg = im => (im.oldmap != null ? im.oldmap : !OLDMAP_SKIP.test(im.name));
 async function loadProject(files) {
   const pathOf = f => f.webkitRelativePath || f._path || f.name, dirs = new Map();
@@ -5596,7 +5636,8 @@ async function loadProject(files) {
   const imgs = files.filter(f => !inMain(f) && /\.(jpe?g|png|jgw|jpgw|pgw|wld)$/i.test(f.name)); if (imgs.length) await loadImages(imgs);
   if (!S.img.some(im => im.visible)) { const im = S.img.find(q => q.located && isOldMapImg(q)); if (im) { im.opacity = 0.8; setImgVisible(im, true); } }   // 顯示第一張舊圖，方便對照
   if (nbs.length) await loadNeighbors(nbs.flatMap(g => g.files));
-  for (const g of bls) await loadBaseline(g.files);
+  { const byParent = new Map(); for (const g of bls) { const par = g.dir.replace(/[^/]*\/$/, ''); (byParent.get(par) || byParent.set(par, []).get(par)).push(g); }   // 同一個上層資料夾（例如「單幅」）底下的各幅併成一組：各幅一起擬合、接合線才認得
+    for (const list of byParent.values()) await loadBaseline(list.flatMap(g => g.files)); }
   const out = { main: main.dir.replace(/\/$/, '') || '／', neighbors: S.nb.map(n => n.name), baselines: S.bl.sets.map(s => s.name), images: S.img.length, oldmap_images: S.img.filter(isOldMapImg).length, ignored: rest.slice(1).map(g => g.dir) };
   msg(`專案已讀入：主要測區 ${out.main}；鄰段 ${out.neighbors.length}；分幅舊圖 ${out.baselines.length} 組；影像 ${out.images} 張（舊圖 ${out.oldmap_images}）` + (out.ignored.length ? `；略過 ${out.ignored.length} 個資料夾` : ''));
   refresh(); return out;
