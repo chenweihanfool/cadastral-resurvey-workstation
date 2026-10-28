@@ -460,6 +460,7 @@ const Core = (() => {
   // protect＝測區中與鄰段界址點相距 ≤ 半徑（max(重合容差, 吸附上限)）的點（即使在直線上也不可刪）；
   // adds＝鄰段有點、測區在該處的界線上沒有點（missing_in_main）→ 需要補點。
   function seamGuard(main, neighbors, opt = {}) {
+    neighbors = neighbors.filter(n => seamMode(n) === 'numeric');   // 只有數值區要照抄鄰段的點；圖解區接縫上的直線點照去雜點原則處理
     const params = { ...SEAM_DEFAULT, ...opt }, radius = Math.max(params.tol, params.snap || 0), protect = new Set(), adds = [], seen = new Set();
     for (const n of neighbors) {
       const chk = seamCheck(main, n.ds, params);
@@ -830,18 +831,42 @@ const Core = (() => {
     return { moves, unresolved, claim };
   }
   // 完整分析：對每個鄰段檢查；回傳可序列化報告
+  // 鄰段種類（v0.24.0）：numeric＝數值區（接邊界址點完全照抄）、graphic＝圖解區（平移比形狀，只防重疊）、none＝只比對。舊的 authoritative 旗標相容：false＝none
+  const seamMode = n => n.mode || (n.authoritative === false ? 'none' : 'numeric');
+  const shiftedDataset = (ds, dx, dy) => ({ ...ds, points: new Map([...ds.points].map(([k, p]) => [k, { ...p, x: p.x + dx, y: p.y + dy }])) });
+  // 圖解區鄰段的平移量：本段段界點到鄰段段界線（點到線 ICP，只平移）。opt.graphicSearch：找接縫點的距離（預設 10 m）
+  function seamShift(main, nb, opt = {}) {
+    const search = opt.graphicSearch ?? 10, nbb = boundarySegments(nb), idx = segIndex(nbb.segs, Math.max(search, 1));
+    const V = [...boundarySegments(main).vids].map(id => main.points.get(id)).filter(Boolean); let dx = 0, dy = 0, used = 0, med = 0;
+    for (let it = 0; it < 10; it++) {
+      const res = []; for (const P of V) { const s = idx.nearest(P.x - dx, P.y - dy, search); if (s) res.push({ ex: P.x - dx - s.fx, ey: P.y - dy - s.fy, d: s.dist }); }
+      if (res.length < 3) return { dx: 0, dy: 0, n: res.length, median: null };
+      med = median(res.map(r => r.d)); const lim = Math.max(3 * med, 0.3), use = res.filter(r => r.d <= lim); used = use.length; if (!used) break;
+      const mx = use.reduce((t, r) => t + r.ex, 0) / used, my = use.reduce((t, r) => t + r.ey, 0) / used; dx += mx; dy += my; if (Math.hypot(mx, my) < 0.001) break;
+    }
+    return { dx, dy, n: used, median: med };
+  }
   function seamAnalyze(main, neighbors, opt = {}) {
     const params = { ...SEAM_DEFAULT, ...opt };
-    const list = neighbors.map(n => ({ name: n.name, authoritative: n.authoritative !== false, ...seamCheck(main, n.ds, params) }));
+    const list = neighbors.map(n => { const mode = seamMode(n), sh = mode === 'graphic' ? (n.shift || seamShift(main, n.ds, params)) : null;   // 圖解區：對平移後的鄰段判斷重疊／脫開（n.shift：沿用先前算好的平移量，接合後不因點位改變而漂移）
+      return { name: n.name, mode, authoritative: mode === 'numeric', shift: sh, ...seamCheck(main, sh ? shiftedDataset(n.ds, sh.dx, sh.dy) : n.ds, params) }; });
     const sum = k => list.reduce((s, n) => s + n.summary[k], 0);
     return { generated: new Date().toISOString(), main: main.name, params, neighbors: list,
       totals: { checked: sum('checked'), coincide: sum('coincide'), overlap: sum('overlap'), gap: sum('gap'), neighbor_missing_in_main: sum('neighbor_missing_in_main') } };
   }
   // 自動接合：逐一對「以鄰段為準」的鄰段吸附，回傳 { before, after, moves, unresolved }；點位已就地修改（呼叫端負責復原快照）
   function seamJoin(main, neighbors, opt = {}) {
-    const params = { ...SEAM_DEFAULT, ...opt }, before = seamAnalyze(main, neighbors, params), moves = [], unresolved = [];
+    const params = { ...SEAM_DEFAULT, ...opt }, before = seamAnalyze(main, neighbors, params), moves = [], unresolved = [], shifts = {};
+    neighbors = neighbors.map(n => (seamMode(n) === 'graphic' && !n.shift ? { ...n, shift: before.neighbors.find(b => b.name === n.name).shift } : n));   // 圖解區平移量以接合前為準
     for (const n of neighbors) {
-      if (n.authoritative === false) continue;
+      const mode = seamMode(n); if (mode === 'none') continue;
+      if (mode === 'graphic') {   // 圖解區：位置不照抄、不補點；平移鄰段比形狀後，只把跑進鄰段宗地的點推回鄰段界線上，脫開不動
+        const sh = n.shift || seamShift(main, n.ds, params), chk = seamCheck(main, shiftedDataset(n.ds, sh.dx, sh.dy), params), entries = []; shifts[n.name] = sh;
+        for (const r of chk.points) { if (r.status !== 'overlap') continue;
+          if (r.dist > params.snap) { unresolved.push({ id: r.id, reason: 'beyond_snap', status: 'overlap', gap_m: r.gap_m, neighbor: n.name }); continue; }
+          moves.push({ id: r.id, neighbor: n.name, type: 'push', from: { y: r.y, x: r.x }, to: r.foot, dist: r.dist, status: 'overlap' }); entries.push([r.id, r.foot.y, r.foot.x]); }
+        setPoints(main, entries); continue;
+      }
       const chk = seamCheck(main, n.ds, params), plan = seamPlan(chk, params), entries = [];
       for (const [vid, c] of plan.claim) {
         const v = n.ds.points.get(vid), p = main.points.get(c.r.id);
@@ -851,14 +876,33 @@ const Core = (() => {
       for (const u of plan.unresolved) unresolved.push({ ...u, neighbor: n.name });
       setPoints(main, entries);
     }
-    return { before, after: seamAnalyze(main, neighbors, params), moves, unresolved };
+    return { before, after: seamAnalyze(main, neighbors, params), moves, unresolved, shifts };
+  }
+  // 數值區鄰段（v0.24.0）：接邊界址點與鄰段「不多不少、完全照抄」。seamJoin 吸附之後呼叫：
+  // ① 鄰段在接縫上有點、本段界線上沒有 → 補點；② 本段點在鄰段界線上、鄰段沒有對應點 → 刪除（只屬於一宗、刪後界線仍是直線）。
+  // T 字點（本段內部界線接到接縫，屬於兩宗以上）刪不得，列在 kept。回傳 {delta, added, removed, kept, skippedAdds}
+  function seamExact(main, neighbors, opt = {}) {
+    const params = { ...SEAM_DEFAULT, ...opt }, nbs = neighbors.filter(n => seamMode(n) === 'numeric'), d = newDelta(), out = { added: [], skippedAdds: [], protect: new Set() }, removed = [], kept = [];
+    if (nbs.length) {
+      const g = seamGuard(main, nbs, params); addSeamPoints(main, g.adds, params.tol, d, out);
+      const nbV = nbs.flatMap(n => [...boundarySegments(n.ds).vids].map(id => n.ds.points.get(id)).filter(Boolean)), col = { ratio: 0.001, maxAbs: 0.05 }, seen = new Set();
+      const cand = []; for (const n of nbs) for (const r of seamCheck(main, n.ds, params).points) if (r.status === 'coincide' && r.kind === 'line') cand.push(r);   // 先找齊再刪（刪點時邊表尚未重建）
+      for (const r of cand) {
+        if (seen.has(r.id) || !main.points.has(r.id)) continue; seen.add(r.id);
+        if (nbV.some(v => Math.hypot(v.x - r.x, v.y - r.y) <= params.tol)) continue;
+        if ((main.pointParcels.get(r.id) || []).length !== 1) { kept.push({ id: r.id, reason: 'T 字點（本段內部界線接到這裡）' }); continue; }
+        if (!collinearCheck(main, r.id, col) || sweepBlocker(main, pointGrid(main), r.id) != null) { kept.push({ id: r.id, reason: '刪了會改變形狀' }); continue; }
+        const rr = removeInto(main, [r.id], d); removed.push(...rr.done);
+      }
+    }
+    closeDelta(main, d); return { delta: d, added: out.added, skippedAdds: out.skippedAdds, removed, kept };
   }
   const f3 = v => (v == null ? '' : Number(v).toFixed(3));
   function seamReportText(rep) {
     const L = [`鄰段接合報告　主要測區：${rep.main}　容差 ${rep.params.tol} m／搜尋 ${rep.params.search} m／吸附 ${rep.params.snap} m`, `合計：檢查 ${rep.totals.checked} 點；重合 ${rep.totals.coincide}、重疊 ${rep.totals.overlap}、脫開 ${rep.totals.gap}；鄰段點在主區界線上但主區無對應點 ${rep.totals.neighbor_missing_in_main}`];
     for (const n of rep.neighbors) {
       const s = n.summary;
-      L.push('', `■ 鄰段 ${n.name}${n.authoritative ? '（以鄰段為準）' : '（僅比對）'}：檢查 ${s.checked} 點；重合 ${s.coincide}（點上 ${s.coincide_vertex}／線上 ${s.coincide_line}）、重疊 ${s.overlap}（最大 ${f3(s.max_overlap_m)} m）、脫開 ${s.gap}（最大 ${f3(s.max_gap_m)} m）；鄰段缺點 ${s.neighbor_missing_in_main}、無對應 ${s.neighbor_unmatched}`);
+      L.push('', `■ 鄰段 ${n.name}${n.mode === 'graphic' ? `（圖解區：平移 ΔE ${f3(n.shift && n.shift.dx)}、ΔN ${f3(n.shift && n.shift.dy)} m 後比對）` : n.authoritative ? '（數值區：照抄）' : '（僅比對）'}：檢查 ${s.checked} 點；重合 ${s.coincide}（點上 ${s.coincide_vertex}／線上 ${s.coincide_line}）、重疊 ${s.overlap}（最大 ${f3(s.max_overlap_m)} m）、脫開 ${s.gap}（最大 ${f3(s.max_gap_m)} m）；鄰段缺點 ${s.neighbor_missing_in_main}、無對應 ${s.neighbor_unmatched}`);
       for (const r of n.points.filter(r => r.status !== 'coincide')) L.push(`  點 ${r.id}　${SEAM_LABEL[r.status]} ${f3(Math.abs(r.gap_m))} m　最近鄰段點 ${r.vertex}（${f3(r.vertex_dist)} m）`);
     }
     if (rep.join) {
@@ -1219,8 +1263,8 @@ const Core = (() => {
   const UNREG_MIN = 9000;
   const mainNo = p => parseInt(String(p.label), 10), subNo = p => { const m = /-(\d+)$/.exec(String(p.label)); return m ? +m[1] : 0; };
   const isUnreg = p => !p.deleted && mainNo(p) >= UNREG_MIN;
-  function unregSummary(ds, maxPts = 10, maxRatio = 0) {
-    const parcels = ds.parcels.filter(isUnreg).map(p => { const ratio = p.ids.length >= 3 ? shapeRatio(p.ids, ds.points) : 0, overPts = p.ids.length > maxPts, long = maxRatio > 0 && ratio > maxRatio * 1.01;   // 與 splitParcel 相同的 1% 容差
+  function unregSummary(ds, maxPts = 10, maxRatio = 0, minArea = 0) {   // minArea：面積不到 2 倍者不算太細長（切了會小於最小面積）
+    const parcels = ds.parcels.filter(isUnreg).map(p => { const ratio = p.ids.length >= 3 ? shapeRatio(p.ids, ds.points) : 0, overPts = p.ids.length > maxPts, long = maxRatio > 0 && ratio > maxRatio * 1.01 && !(minArea && p.area < 2 * minArea);   // 與 splitParcel 相同的 1% 容差
       return { idx: p.idx, label: p.label, pts: p.ids.length, area: p.area, ratio, overPts, long, over: overPts || long, nested: !!((p.holes || []).length || (p.containers || []).length), arc: !!(p.mid && p.mid.some(Boolean)) }; });
     const gaps = freeRegions(ds).map(l => ({ ids: l.ids.slice().reverse(), area: Math.abs(l.area) }));   // 宗地之間封閉的空隙（逆時針）
     return { parcels, gaps };
@@ -1339,20 +1383,30 @@ const Core = (() => {
   }
   // 把宗地切成每塊 ≤ maxPts 點、細長度 ≤ maxRatio（0＝不限形狀）。回傳 {delta, pieces:[地號…], unresolved（形狀仍超過時的細長度）}；地中地、圓弧、與地中地相關者不處理。
   // 點數：以連接既有界址點的弦切下（116 倉庫演算法）。形狀：先試既有點的弦，切不出合格的才垂直長軸切開（大約等分，交點新增界址點，鄰宗同步插入）。
-  function splitParcel(ds, pi, maxPts = 10, maxRatio = 0) { const g = splitSteps(ds, pi, maxPts, maxRatio); let r; while (!(r = g.next()).done); return r.value; }
+  // opt.minArea（m²，v0.24.0）：切下的塊與剩餘部分都不小於此面積；為了不小於它，細長條的長寬比上限自動放寬（寬 1 m 的水溝照長寬比切會變成一堆幾 m² 的碎塊）。
+  //   面積不到 2 倍 minArea 的宗地不為形狀而切。opt.thin（預設有 minArea 時 0.6）：切下的塊與剩餘部分的平均寬（2×面積÷周長）不小於 min(原本的 thin 倍, 1.5 m)，切線長不超過切下那塊短邊的 1.5 倍（橫切，避免順著長邊切出細長三角）。
+  function splitParcel(ds, pi, maxPts = 10, maxRatio = 0, opt = {}) { const g = splitSteps(ds, pi, maxPts, maxRatio, opt); let r; while (!(r = g.next()).done); return r.value; }
   // 同 splitParcel，但每切一刀 yield 一次，讓介面能分段執行（大宗地不會讓瀏覽器判定沒有回應）
-  function* splitSteps(ds, pi, maxPts = 10, maxRatio = 0) {
+  function* splitSteps(ds, pi, maxPts = 10, maxRatio = 0, opt = {}) {
     const p = ds.parcels[pi], P = ds.points; if (!p || p.deleted) throw new Error('宗地不存在');
     if (maxPts < 3) throw new Error('每筆至少 3 點');
     if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，尚未支援自動分割`);
     if (p.mid && p.mid.some(Boolean)) throw new Error(`${p.label} 含圓弧，尚未支援自動分割`);
-    const lim = maxRatio > 0 ? Math.max(1.05, maxRatio) * (1 + 1e-6) : 0, tooLong = ids => lim && shapeRatio(ids, P) > lim * 1.01;   // 切下的塊嚴格 ≤ 上限；剩餘部分超過不到 1% 就不再切（避免切出零碎小塊）
+    const minA = Math.max(0, opt.minArea || 0), thinK = opt.thin ?? (minA > 0 ? 0.6 : 0), AREA = (ids, PP = P) => Math.abs(signedArea(ids, PP));
+    const thick = (ids, PP = P) => { let per = 0; for (let i = 0; i < ids.length; i++) { const a = PP.get(ids[i]), b = PP.get(ids[(i + 1) % ids.length]); per += Math.hypot(b.x - a.x, b.y - a.y); } return per ? 2 * AREA(ids, PP) / per : 0; };   // 平均寬
+    const lim = maxRatio > 0 ? Math.max(1.05, maxRatio) * (1 + 1e-6) : 0, tooLong = ids => lim && shapeRatio(ids, P) > lim * 1.01 && !(minA && AREA(ids) < 2 * minA);   // 切下的塊嚴格 ≤ 上限；剩餘部分超過不到 1% 就不再切（避免切出零碎小塊）
     if (p.ids.length <= maxPts && !tooLong(p.ids)) return { delta: null, pieces: [] };
     const d = newDelta(), pieces = []; touchParcel(d, p);
     let cur = ccwIds(p.ids, P), unresolved = null; const arcs = lim ? arcEdgeSet(ds) : null;
     for (let guard = 0; guard < 500 && (cur.length > maxPts || tooLong(cur)); guard++) {
       if (guard) yield guard;
-      const n = cur.length, overPts = n > maxPts, areaCur = signedArea(cur, P), k = Math.max(overPts ? 1 : 2, lim ? Math.ceil(shapeRatio(cur, P) / lim * 0.97) : 1), target = areaCur / k;
+      const n = cur.length, overPts = n > maxPts, areaCur = signedArea(cur, P), k0 = Math.max(overPts ? 1 : 2, lim ? Math.ceil(shapeRatio(cur, P) / lim * 0.97) : 1);
+      const kMax = minA ? Math.floor(areaCur / minA) : Infinity, k = Math.max(1, Math.min(k0, kMax)), target = areaCur / Math.max(1, k), wCur = thick(cur);
+      if (!overPts && k < 2) { unresolved = shapeRatio(cur, P); break; }   // 再切就小於最小面積
+      const limP = !lim ? 0 : k < k0 && wCur > 0 ? Math.max(lim, 1.5 * Math.max(target, minA) / (wCur * wCur)) : lim;   // 受最小面積限制時，塊的長寬比上限放寬到「寬 × 目標面積」的形狀
+      // 橫切：切線長 ≤ 1.5 × 切下那塊（外接矩形）的短邊，避免順著長邊斜切出細長三角
+      const okThin = (piece, rest, PP = P, a = piece[0], b = piece[piece.length - 1]) => { if (!thinK) return true; const wMin = Math.min(thinK * wCur, 1.5); if (thick(piece, PP) < wMin || thick(rest, PP) < wMin) return false;
+        const A = PP.get(a), B = PP.get(b), r = minRect(piece, PP); return Math.hypot(B.x - A.x, B.y - A.y) <= 1.5 * r.short + 0.05; };
       let best = null, free = null;
       // 連續 m 點的面積用鞋帶公式前綴和 O(1) 求得，通過篩選才建陣列
       const X = cur.map(id => P.get(id).x), Yv = cur.map(id => P.get(id).y), cs = [0];
@@ -1363,14 +1417,17 @@ const Core = (() => {
           const j = (i + m - 1) % n, u = cur[i], v = cur[j]; if (ds.edges.has(segKey(u, v))) continue;
           const area = segArea(i, m); if (area < 1) continue;
           if (!overPts && (area < 0.6 * target || area > 1.4 * target)) continue;
+          if (minA && (area < minA || areaCur - area < minA)) { if (!overPts) continue; }
           const piece = []; for (let q = 0; q < m; q++) piece.push(cur[(i + q) % n]);
           if (!overPts && (area < 0.6 * target || area > 1.4 * target)) continue;   // 只為形狀切時，避免切下零碎小塊（先做便宜的面積篩選）
           const needFree = overPts && (!free || free.m === m);   // 原演算法只用「有合格弦的最大 m」，找到後較小的 m 不必再算
-          if (lim && !needFree && shapeRatio(piece, P) > lim) continue;   // 形狀比弦檢查便宜，先篩
+          if (lim && !needFree && shapeRatio(piece, P) > limP) continue;   // 形狀比弦檢查便宜，先篩
           if (!chordInside(cur, i, j, P)) continue;
+          const sizeOk = !minA || (area >= minA && areaCur - area >= minA);
+          if (thinK || minA) { const rest = []; for (let t = 0; t <= (i - j + n) % n; t++) rest.push(cur[(j + t) % n]); if (!sizeOk || !okThin(piece, rest)) { if (!overPts) continue; if (needFree && (!free || free.bad)) { /* 不合格只當最後手段 */ const a2 = P.get(u), b2 = P.get(v), sc2 = Math.hypot(a2.x - b2.x, a2.y - b2.y) / Math.sqrt(area); if (!free || sc2 < free.sc) free = { sc: sc2, i, j, piece, m, bad: true }; } continue; } }
           const a = P.get(u), b = P.get(v), sc = Math.hypot(a.x - b.x, a.y - b.y) / Math.sqrt(area);
-          if (needFree && (!free || sc < free.sc)) free = { sc, i, j, piece, m };   // 不看形狀的原演算法（備用）
-          if (lim && needFree && shapeRatio(piece, P) > lim) continue;
+          if (needFree && (!free || free.bad || sc < free.sc)) free = { sc, i, j, piece, m };   // 不看形狀的原演算法（備用）
+          if (lim && needFree && shapeRatio(piece, P) > limP) continue;
           const key = overPts ? sc : Math.abs(area - target) / target + sc * 1e-3;
           if (!best || key < best.key) best = { key, i, j, piece };
         }
@@ -1388,8 +1445,9 @@ const Core = (() => {
           .filter(e => e.L > 1e-6).sort((x, y) => y.L - x.L).slice(0, 4).forEach(e => { if (dirs.length < 4 && !dirs.some(([x, y]) => Math.abs(x * e.ux + y * e.uy) > 0.996)) dirs.push([e.ux, e.uy]); });
         const evalCut = c => {   // 合格回傳與目標面積的相對差，否則 null
           if (c.piece.length > maxPts || c.news.some(q => arcs.has(segKey(q.edge[0], q.edge[1])))) return null;
-          const area = signedArea(c.piece, c.PP); if (area < 1 || areaCur - area < 1) return null;
-          return shapeRatio(c.piece, c.PP) > lim ? null : Math.abs(area - target) / target;
+          const area = signedArea(c.piece, c.PP), floor = Math.max(1, minA); if (area < floor || areaCur - area < floor) return null;
+          if (thinK && !okThin(c.piece, c.rest, c.PP)) return null;
+          return shapeRatio(c.piece, c.PP) > limP ? null : Math.abs(area - target) / target;
         };
         // 切下的塊約占 1/k：只在靠近起點的 2.5/k 範圍取樣 24 處，再在最佳位置兩側細搜（長條很長時大幅減少計算）
         const span = Math.min(1, 2.5 / k);
@@ -1499,6 +1557,27 @@ const Core = (() => {
     for (const id of drop) { const q = ds.points.get(id); if (q) { ds.points.delete(id); d.removed.push(q); } }
     return { delta: closeDelta(ds, d), keep: k.label, merged: idxs.filter(i => i !== k.idx).map(i => ds.parcels[i].label), removedPoints: [...drop] };
   }
+  // 碎塊歸併（v0.24.0）：面積 < minArea 的未登記地併入「共用界線最長」的相鄰未登記地（保留鄰宗地號）。地中地、圓弧略過；
+  // 只與登記地相鄰的碎塊不動（併進登記地會改變登記地面積），列在 left。idxs：只處理這些宗地（省略＝全部未登記地）。回傳 {deltas, merged:[{from, into}], left:[地號]}
+  function absorbSlivers(ds, minArea, idxs = null) {
+    const ok = p => isUnreg(p) && !(p.holes || []).length && !(p.containers || []).length && !(p.mid && p.mid.some(Boolean)), only = idxs ? new Set(idxs) : null;
+    const deltas = [], merged = [];
+    for (let pass = 0; pass < 4; pass++) {
+      let changed = false;
+      const small = ds.parcels.filter(p => ok(p) && p.area < minArea && (!only || only.has(p.idx))).sort((a, b) => a.area - b.area);
+      for (const p of small) {
+        if (p.deleted || p.area >= minArea) continue;
+        const share = new Map();
+        for (let i = 0; i < p.ids.length; i++) { const a = p.ids[i], b = p.ids[(i + 1) % p.ids.length], e = ds.edges.get(segKey(a, b)); if (!e) continue; const A = ds.points.get(a), B = ds.points.get(b), L = Math.hypot(B.x - A.x, B.y - A.y);
+          for (const j of e.parcels) { const q = ds.parcels[j]; if (j !== p.idx && ok(q)) share.set(j, (share.get(j) || 0) + L); } }
+        const best = [...share].sort((u, v) => v[1] - u[1])[0]; if (!best) continue;
+        try { const from = p.label, r = mergeParcels(ds, [p.idx, best[0]], best[0]); deltas.push(r.delta); merged.push({ from, into: r.keep }); changed = true; } catch (e) { /* 合併後會有空洞或不相連：留著 */ }
+      }
+      if (!changed) break;
+    }
+    const left = ds.parcels.filter(p => ok(p) && p.area < minArea && (!only || only.has(p.idx))).map(p => p.label);
+    return { deltas, merged, left };
+  }
   // 空隙或凹口建為新的未登記地
   function fillRegion(ds, ids, mother) {
     if (ids.length < 3) throw new Error('範圍至少 3 點'); const d = newDelta(), p = createParcel(ds, d, mother, ccwIds(ids, ds.points), null);
@@ -1509,6 +1588,7 @@ const Core = (() => {
   // 去掉懸空的線後追蹤每個有界的面，留下「同時用到主測區與鄰段的邊、內部不在任何宗地內、面積 ≥ minArea、平均寬（2×面積÷周長）≥ minWidth」者。
   // 回傳 [{nodes:[{id（主測區點號，新點為 null）, x, y, onMain（落在主測區段外圍的邊上時為 true）}], area, perim}]，不修改資料
   function seamGaps(ds, nbs, opt = {}) {
+    nbs = nbs.filter(n => seamMode(n) !== 'graphic');   // 圖解區鄰段：脫開是好事，縫不建為新地號
     const tol = opt.tol != null ? opt.tol : 0.05, minArea = opt.minArea != null ? opt.minArea : 1, minWidth = opt.minWidth != null ? opt.minWidth : 0.5, P = ds.points;
     const nodes = [], cs = Math.max(4 * tol, 1), grid = new Map(), gk = (i, j) => i + ',' + j, byId = new Map();
     const near = (x, y) => { let best = null, bd = tol; const i0 = Math.floor(x / cs), j0 = Math.floor(y / cs);
@@ -2083,7 +2163,7 @@ const Core = (() => {
     for (const g of groups.values()) {
       if (isU(g) || !curBy.has(g.key)) continue;
       const sc = coverOf(g, cur, cand), occ = sc.cover.filter(h => mainNo(h.p) >= UNREG_MIN), s = occ.reduce((t, h) => t + h.area, 0), F = g.reg || g.area, t = areaTol(F, a, b);
-      if (s > Math.max(t, 5)) occupied.push({ label: g.key, idx: curBy.get(g.key)[0].idx, reg: F, occ: s, tol: t, cover: brief(occ) });
+      if (s > Math.max(t, 5)) occupied.push({ label: g.key, idx: curBy.get(g.key)[0].idx, idxs: curBy.get(g.key).map(p => p.idx), reg: F, occ: s, tol: t, cover: brief(occ), rings: g.pieces.map(pc => pc.ring) });
     }
     occupied.sort((u, v) => v.occ / v.tol - u.occ / u.tol);
     // 4. 作業圖有、參考圖資沒有（非未登記地）
@@ -2096,7 +2176,7 @@ const Core = (() => {
       // 跨分幅（參考圖資裡有好幾塊）：各分幅還沒接合，塊與塊之間常有縫或重疊，面積相加不可靠，不據以判斷原因
       const refArea = g ? g.area : null, refRatio = g ? Math.abs(g.area - F) / t : null, split = g ? g.pieces.length > 1 : false;
       const flag = r > ratio, cause = !flag ? '' : !g ? '接圖前無此宗' : split ? '跨分幅，請人工判斷' : refRatio > ratio && (g.area - F) * (A - F) > 0 ? '接圖前即不符' : '接圖後產生';
-      area.push({ label: k, idx: ps[0].idx, reg: F, area: A, diff: A - F, tol: t, ratio: r, refArea, refRatio, pieces: g ? g.pieces.length : 0, flag, cause });
+      area.push({ label: k, idx: ps[0].idx, idxs: ps.map(p => p.idx), reg: F, area: A, diff: A - F, tol: t, ratio: r, refArea, refRatio, pieces: g ? g.pieces.length : 0, flag, cause, rings: flag && g ? g.pieces.map(pc => pc.ring) : [] });
     }
     area.sort((u, v) => v.ratio - u.ratio);
     const byNo = (u, v) => u.label.localeCompare(v.label, 'en', { numeric: true });
@@ -2439,6 +2519,84 @@ const Core = (() => {
     for (const x of rows.values()) { for (const r of [x.vec, x.img]) if (r && rank[r.level] > rank[x.level]) x.level = r.level; x.score = Math.max(x.vec ? x.vec.score : 0, x.img ? x.img.score : 0); x.sliver = x.area < SHAPE_DEFAULT.sliver; }
     return [...rows.values()].filter(x => x.level || (x.sliver && (x.img ? x.img.offLen > 0 : false))).sort((u, v) => rank[v.level] - rank[u.level] || v.score - u.score);
   }
+  // ── 比對報告（v0.24.0）：接圖前比對（＋舊圖檢核）輸出成單一 HTML，每筆一張卡片附局部圖；可篩選、勾「已處理」、寫備註（存在瀏覽器）、列印／另存 PDF ──
+  // r：compareBaseline 結果；chk：oldMapReport 列（可省略）。opt：{ title, caseName, version, date }
+  function baselineReportHtml(cur, r, opt = {}) {
+    r = r || { missing: [], flagged: [], occupied: [], partial: [], extra: [], fit: null, opt: { a: AREA_TOL.a, b: AREA_TOL.b, ratio: 5 } };
+    const E = v => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const f = (v, d = 1) => (v == null || !isFinite(v) ? '—' : v.toFixed(d)), sg = (v, d = 1) => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(d));
+    const live = cur.parcels.filter(p => !p.deleted && p.ids.length >= 3), ringOf = p => p.ids.map(id => cur.points.get(id));
+    const boxes = new Map(live.map(p => [p, ringBox(p, cur.points)]));
+    const ctr = q => { let x = 0, y = 0; for (const p of q) { x += p.x; y += p.y; } return { x: x / q.length, y: y / q.length }; };
+    // 局部圖：目前的圖（灰）、本筆宗地（藍）、接圖前界址（紅虛線）、問題線段（各色）
+    const svg = it => {
+      const pts = [...it.cur.flatMap(ringOf), ...it.ref.flat(), ...(it.segs || []).flatMap(s => s.list.flat())]; if (!pts.length) return '';
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const q of pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
+      const pad = Math.max(12, 0.25 * Math.max(x1 - x0, y1 - y0)); x0 -= pad; x1 += pad; y0 -= pad; y1 += pad;
+      const w = x1 - x0, h = y1 - y0, sz = Math.max(w, h), R = v => v.toFixed(2), P = q => `${R(q.x - x0)},${R(y1 - q.y)}`, poly = q => q.map(P).join(' ');
+      const ctx = live.filter(p => { const b = boxes.get(p); return b.x1 >= x0 && b.x0 <= x1 && b.y1 >= y0 && b.y0 <= y1; }), mine = new Set(it.cur);
+      const fs = sz / 38, lab = ctx.filter(p => { const b = boxes.get(p); return Math.max(b.x1 - b.x0, b.y1 - b.y0) > sz / 12 || mine.has(p); }).map(p => { const c = ctr(ringOf(p)); return c.x > x0 && c.x < x1 && c.y > y0 && c.y < y1 ? `<text x="${R(c.x - x0)}" y="${R(y1 - c.y)}" font-size="${R(mine.has(p) ? fs * 1.25 : fs)}" class="${mine.has(p) ? 'lm' : 'lc'}">${E(p.label)}</text>` : ''; }).join('');
+      const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000].find(v => v >= sz / 6) || 1000;
+      return `<svg viewBox="0 0 ${R(w)} ${R(h)}" preserveAspectRatio="xMidYMid meet">` +
+        ctx.filter(p => !mine.has(p)).map(p => `<polygon points="${poly(ringOf(p))}" class="pc"/>`).join('') +
+        it.cur.map(p => `<polygon points="${poly(ringOf(p))}" class="pm"/>`).join('') +
+        it.ref.map(q => `<polygon points="${poly(q)}" class="pr"/>`).join('') +
+        (it.segs || []).map(s => s.list.map(([a, b]) => `<line x1="${R(a.x - x0)}" y1="${R(y1 - a.y)}" x2="${R(b.x - x0)}" y2="${R(y1 - b.y)}" class="${s.cls}"/>`).join('')).join('') + lab +
+        `<g class="sb"><line x1="${R(fs)}" y1="${R(h - fs)}" x2="${R(fs + nice)}" y2="${R(h - fs)}"/><text x="${R(fs)}" y="${R(h - fs * 1.6)}" font-size="${R(fs)}">${nice} m</text></g>` +
+        `<text x="${R(w - fs * 1.5)}" y="${R(fs * 2)}" font-size="${R(fs * 1.4)}" class="na">N↑</text></svg>`;
+    };
+    const byIdx = i => cur.parcels[i], parcelsOf = l => (l || []).map(byIdx).filter(p => p && !p.deleted);
+    const cov = l => (l || []).map(h => `${E(h.label)}（${f(h.area, 0)} ㎡）`).join('、') || '—';
+    const items = [];
+    const add = (cat, catName, x, rows, extra = {}) => items.push({ id: `${cat}-${items.length}`, cat, catName, label: x.label, rows, ...extra });
+    for (const m of r.missing) add('missing', '遺漏', m, [['登記面積', f(m.reg, 2) + ' ㎡'], ['接圖前面積', f(m.area, 2) + ' ㎡'], ['在目前的圖內', (m.inside * 100).toFixed(0) + '%'], ['現屬', cov(m.cover)]], { cur: parcelsOf(m.cover.map(h => h.idx)), ref: m.rings, sev: 3, note: '接圖前有、目前的圖沒有（常見是被補成未登記地）。可在工作站「接圖前比對」一鍵修復。' });
+    for (const x of r.flagged) add('area', '面積超限', x, [['登記面積', f(x.reg, 2) + ' ㎡'], ['現面積', f(x.area, 2) + ' ㎡'], ['較差', sg(x.diff, 2) + ' ㎡'], ['公差', f(x.tol, 2) + ' ㎡'], ['倍數', f(x.ratio, 1)], ['接圖前倍數', x.refRatio == null ? '—' : f(x.refRatio, 1) + (x.pieces > 1 ? `（${x.pieces} 塊）` : '')], ['原因', x.cause]], { cur: parcelsOf(x.idxs || [x.idx]), ref: x.rings || [], sev: x.cause === '接圖後產生' ? 3 : 2, ratio: x.ratio });
+    for (const o of r.occupied) add('occupied', '被未登記地佔用', o, [['登記面積', f(o.reg, 2) + ' ㎡'], ['被佔面積', f(o.occ, 2) + ' ㎡'], ['公差', f(o.tol, 2) + ' ㎡'], ['佔用的未登記地', cov(o.cover)]], { cur: parcelsOf(o.idxs || [o.idx]).concat(parcelsOf(o.cover.map(h => h.idx))), ref: o.rings || [], sev: 2 });
+    for (const m of r.partial) add('partial', '部分在區內', m, [['接圖前面積', f(m.area, 2) + ' ㎡'], ['在目前的圖內', (m.inside * 100).toFixed(1) + '%'], ['區內部分現屬', cov(m.cover)]], { cur: parcelsOf(m.cover.map(h => h.idx)), ref: m.rings, sev: 1, note: '只有一部分落在目前的圖內，請確認區界。' });
+    for (const e of r.extra) add('extra', '接圖前沒有', e, [['說明', '目前的圖有、接圖前沒有（非未登記地）']], { cur: parcelsOf([e.idx]), ref: [], sev: 1 });
+    for (const x of opt.chk || []) add('chk', '舊圖檢核', x, [['面積', f(x.area, 2) + ' ㎡'], ['等級', x.level === 'red' ? '紅' : x.level === 'yellow' ? '黃' : '碎片'], ['離舊圖線', x.vec ? f(x.vec.offLen) + ' m' : '—'], ['舊圖線穿過內部', x.vec ? f(x.vec.innerLen) + ' m' : '—'], ['影像無墨線', x.img ? `${f(x.img.offLen)} / ${f(x.img.checked)} m` : '—'], ['建議', x.fix ? `併入 ${E(x.fix.label)}` : '人工判斷']],
+      { cur: parcelsOf([x.idx]), ref: [], sev: x.level === 'red' ? 3 : x.level === 'yellow' ? 2 : 1, segs: [x.img && { cls: 'si', list: x.img.offSegs }, x.vec && { cls: 'sv', list: x.vec.offSegs }, x.vec && { cls: 'sn', list: x.vec.innerSegs }].filter(Boolean) });
+    const cats = [['missing', '遺漏'], ['area', '面積超限'], ['occupied', '被未登記地佔用'], ['partial', '部分在區內'], ['extra', '接圖前沒有'], ['chk', '舊圖檢核']].filter(([c]) => items.some(i => i.cat === c));
+    const count = c => items.filter(i => i.cat === c).length, key = E(opt.caseName || 'case');
+    const card = it => `<article class="card s${it.sev}" id="${it.id}" data-cat="${it.cat}" data-label="${E(it.label)}"><header><span class="cat">${E(it.catName)}</span><h2>${E(it.label)}</h2>` +
+      `<label class="done"><input type="checkbox" data-k="${E(it.cat + '|' + it.label)}">已處理</label></header><div class="body"><div class="map">${svg(it)}</div><div class="info"><table>${it.rows.map(([k, v]) => `<tr><th>${E(k)}</th><td>${String(v).includes('<') ? v : E(v)}</td></tr>`).join('')}</table>` +
+      (it.note ? `<p class="note">${E(it.note)}</p>` : '') + `<textarea data-n="${E(it.cat + '|' + it.label)}" placeholder="備註（處理方式、待查事項…）"></textarea></div></div></article>`;
+    const fit = r.fit ? `坐標轉換：${r.fit.used}/${r.fit.total} 宗同地號擬合，殘差中位數 ${f(r.fit.median, 2)} m` : '坐標轉換：無（同坐標系）';
+    return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${E(opt.title || '接圖前比對報告')}</title><style>
+:root{--bg:#f4f5f7;--panel:#fff;--ink:#1d2330;--muted:#69718a;--line:#d9dde6;--accent:#1f6feb;--bad:#d1242f;--warn:#b7791f}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14171d;--panel:#1c2029;--ink:#e6e9f0;--muted:#98a1b6;--line:#2c3240;--accent:#4c8dff;--bad:#ff6b73;--warn:#e0a34a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
+.top{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px}.top h1{font-size:18px;margin:0 0 4px}.meta{color:var(--muted);font-size:12px}
+.bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:8px;font-size:13px}.bar input[type=search]{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;padding:4px 8px;width:160px}
+.bar button{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit}.bar button.p{background:var(--accent);border-color:var(--accent);color:#fff}
+main{max-width:1180px;margin:0 auto;padding:12px 16px 40px}.sum{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px}.sum a{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 12px;color:inherit;text-decoration:none}.sum b{font-size:18px;margin-right:4px}
+.card{background:var(--panel);border:1px solid var(--line);border-left:5px solid var(--line);border-radius:10px;margin:0 0 14px;overflow:hidden;break-inside:avoid}.card.s3{border-left-color:var(--bad)}.card.s2{border-left-color:var(--warn)}
+.card header{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)}.card h2{font-size:16px;margin:0}.cat{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:10px;padding:0 8px}.done{margin-left:auto;font-size:13px;cursor:pointer}
+.card.is-done{opacity:.55}.body{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:12px;padding:10px 12px}.map svg{width:100%;height:300px;display:block;border:1px solid var(--line);border-radius:6px;background:#fbfaf7}
+.info table{border-collapse:collapse;width:100%;font-size:13px}.info th{text-align:left;color:var(--muted);font-weight:500;padding:3px 8px 3px 0;white-space:nowrap;vertical-align:top}.info td{padding:3px 0;font-variant-numeric:tabular-nums}
+.note{font-size:12px;color:var(--muted);margin:6px 0}textarea{width:100%;min-height:56px;margin-top:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit;font-size:13px;padding:6px}
+svg .pc{fill:none;stroke:#8a93a6;stroke-width:1;vector-effect:non-scaling-stroke}svg .pm{fill:rgba(31,111,235,.18);stroke:#1f6feb;stroke-width:2;vector-effect:non-scaling-stroke}
+svg .pr{fill:rgba(209,36,47,.08);stroke:#d1242f;stroke-width:2;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}svg .si{stroke:rgba(209,36,47,.75);stroke-width:5;vector-effect:non-scaling-stroke}svg .sv{stroke:#ae3ec9;stroke-width:2.5;vector-effect:non-scaling-stroke}svg .sn{stroke:#1c7ed6;stroke-width:2.5;stroke-dasharray:7 5;vector-effect:non-scaling-stroke}
+svg text{font-family:sans-serif;text-anchor:middle;dominant-baseline:middle}svg .lc{fill:#69718a}svg .lm{fill:#0b3d91;font-weight:700}svg .sb line{stroke:#1d2330;stroke-width:2;vector-effect:non-scaling-stroke}svg .sb text{text-anchor:start;fill:#1d2330}svg .na{fill:#1d2330;font-weight:700}
+.legend{font-size:12px;color:var(--muted);margin:0 0 12px}.legend i{display:inline-block;width:22px;height:0;border-top:2px solid;vertical-align:middle;margin:0 4px 0 10px}
+.hide{display:none}@media (max-width:760px){.body{grid-template-columns:1fr}.map svg{height:240px}}
+@media print{body{background:#fff;color:#000}.top{position:static;border:0}.bar,.done{display:none}.card.is-done header::after{content:"✓ 已處理";margin-left:auto;font-size:12px}.map svg{height:240px}.card{border-color:#999;box-shadow:none;page-break-inside:avoid}.card.is-done{opacity:1}textarea{border:1px dashed #999;background:#fff}textarea:placeholder-shown{display:none}main{max-width:none;padding:0}@page{size:A4;margin:12mm}}
+</style></head><body><div class="top"><h1>${E(opt.title || '接圖前比對報告')}</h1><div class="meta">${E(opt.caseName || '')}　產出：${E(opt.date || '')}　${E(opt.version || '')}　${E(fit)}　公差 (${r.opt.a}＋${r.opt.b}·⁴√F)·√F，超過 ${r.opt.ratio} 倍標記</div>
+<div class="bar">${cats.map(([c, n]) => `<label><input type="checkbox" data-f="${c}" checked> ${n}（${count(c)}）</label>`).join('')}<label><input type="checkbox" id="undone"> 只看未處理</label><input type="search" id="q" placeholder="找地號"><span id="cnt" class="meta"></span><span style="flex:1"></span><button id="csv">匯出備註 CSV</button><button class="p" onclick="print()">列印／另存 PDF</button></div></div>
+<main><div class="sum">${cats.map(([c, n]) => `<a href="#${(items.find(i => i.cat === c) || {}).id}"><b>${count(c)}</b>${n}</a>`).join('')}</div>
+<p class="legend">圖例：<i style="border-color:#1f6feb"></i>本筆（目前的圖）<i style="border-color:#d1242f;border-top-style:dashed"></i>接圖前界址<i style="border-color:#8a93a6"></i>其他宗地` + (items.some(i => i.cat === 'chk') ? `<i style="border-color:rgba(209,36,47,.75);border-top-width:5px"></i>影像無墨線<i style="border-color:#ae3ec9"></i>離舊圖線<i style="border-color:#1c7ed6;border-top-style:dashed"></i>舊圖線穿過內部` : '') + `</p>
+${items.length ? items.map(card).join('') : '<p>沒有需要處理的項目。</p>'}</main>
+<script>(()=>{const K='cwreport:${key.replace(/'/g, '')}:',S={get:k=>{try{return localStorage.getItem(K+k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(K+k,v)}catch(e){}}};
+const cards=[...document.querySelectorAll('.card')];
+for(const c of document.querySelectorAll('[data-k]')){c.checked=S.get('d|'+c.dataset.k)==='1';c.closest('.card').classList.toggle('is-done',c.checked);c.onchange=()=>{S.set('d|'+c.dataset.k,c.checked?'1':'0');c.closest('.card').classList.toggle('is-done',c.checked);run()}}
+for(const t of document.querySelectorAll('[data-n]')){t.value=S.get('n|'+t.dataset.n)||'';t.oninput=()=>S.set('n|'+t.dataset.n,t.value)}
+const run=()=>{const on=new Set([...document.querySelectorAll('[data-f]')].filter(x=>x.checked).map(x=>x.dataset.f)),q=document.getElementById('q').value.trim(),u=document.getElementById('undone').checked;let n=0;
+for(const c of cards){const v=on.has(c.dataset.cat)&&(!q||c.dataset.label.startsWith(q))&&!(u&&c.classList.contains('is-done'));c.classList.toggle('hide',!v);if(v)n++}document.getElementById('cnt').textContent='顯示 '+n+' / '+cards.length+' 筆'};
+document.querySelectorAll('[data-f],#undone').forEach(x=>x.onchange=run);document.getElementById('q').oninput=run;run();
+document.getElementById('csv').onclick=()=>{const q=v=>'"'+String(v).replace(/"/g,'""')+'"',rows=[['類別','地號','已處理','備註'].join(',')];
+for(const c of cards){const k=c.querySelector('[data-k]').dataset.k;rows.push([c.querySelector('.cat').textContent,c.dataset.label,c.querySelector('[data-k]').checked?'是':'',c.querySelector('textarea').value].map(q).join(','))}
+const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufeff'+rows.join('\\r\\n')],{type:'text/csv'}));a.download='${key.replace(/'/g, '')}_比對備註.csv';a.click()};})();</script></body></html>`;
+  }
   function baselineCsv(r) {
     const q = v => (v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v)), f = (v, d = 2) => (v == null ? '' : v.toFixed(d));
     const cov = l => l.map(h => `${h.label}(${h.area.toFixed(0)})`).join(' ');
@@ -2470,10 +2628,10 @@ const Core = (() => {
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, seamGaps, fillSeamGap, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, absorbSlivers, seamGaps, fillSeamGap, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
-    newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
-    AREA_TOL, areaTol, parcelNo, fitAffine, intersectArea, compareBaseline, baselineCsv, restoreMissing,
+    newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
+    AREA_TOL, areaTol, parcelNo, fitAffine, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing,
     baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
     parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner };
 })();

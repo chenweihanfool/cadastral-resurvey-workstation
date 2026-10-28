@@ -105,6 +105,11 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 - **碎片修復**：< 30 m² 的宗地，建議併入「共用界線在舊圖上沒有（影像無墨線或離舊圖線）最長」的鄰宗，否則共用界線最長者；`Core.mergeParcels(ds, [碎片, 鄰宗], 鄰宗)` 保留鄰宗地號。其餘宗地不自動修（屬拓撲與判斷，例：河道該延伸、未登記地該連續），由人或 AI 看清單判斷。
 - **Playwright 坑**：`setInputFiles` 上傳含中文名稱的資料夾時，子資料夾內的檔案大小變成 0（真實瀏覽器不會）；端到端測試用英文資料夾名（`neighbors/`），`NB_DIR` 也接受 neighbor。
 
+**未登記地分割品質、比對報告、數值／圖解鄰段（v0.24.0，KC0336 驗證）**：使用者回報（2026-10-28）一鍵未登記地「會割出很零碎或很畸形的土地，這絕對會被罵」。重現：KC0336 接 6 個鄰段（移動 90 點）、空隙建號 20、合併 14 組後，以 30 點／長寬比 6 分割 → 1008 筆，< 5 m² 的 172 筆、平均寬 < 2 m 的 608 筆。主因是寬 1～2 m 的水溝與道路照長寬比 6 只能切 6～12 m 長。
+- `splitSteps(ds, pi, maxPts, maxRatio, { minArea, thin })`：份數 k 不超過 floor(面積÷minArea)，受限時塊的長寬比上限放寬為 max(上限, 1.5×max(目標面積, minArea)÷平均寬²)（平均寬＝2×面積÷周長）；切下的塊與剩餘都要 ≥ minArea；`okThin`：兩邊平均寬 ≥ min(0.6×原平均寬, 1.5 m)，且**切線長 ≤ 切下那塊最小外接矩形短邊 × 1.5**（橫切；第一版只用相對平均寬，合併後寬窄不一的地切不開，改成這樣）。點數超限時的原演算法（free）不合格的只當最後手段。`unregSummary(…, minArea)`：面積 < 2×minArea 不算太細長。`absorbSlivers(ds, minArea)`：< minArea 的未登記地併入共用界線最長的相鄰未登記地（`mergeParcels(…, keep＝鄰宗)`），只鄰登記地的列 left。結果：212 筆、沒有 < 5 m²；KC0336 剩 9001-52（754 m²、長寬比 48）切不開。
+- `baselineReportHtml(cur, r, { chk, caseName, date, version, title })`：單一 HTML，卡片內 SVG（viewBox 用公尺、y 翻轉、`vector-effect:non-scaling-stroke`），狀態與備註存 localStorage（鍵含案件名），列印 CSS 隱藏控制列、已處理的印「✓ 已處理」。`compareBaseline` 的 area／occupied 項目新增 `idxs`、`rings`（API 輸出時去掉 rings）。KC0336：162 筆、約 1.4 MB。
+- 鄰段 `mode`：numeric／graphic／none（舊 `authoritative:false`＝none）。`seamExact`：seamJoin 後補點（`seamGuard` adds）並刪「在鄰段線上、鄰段沒有對應點、只屬於一宗、共線、刪了不掃到別點」的點（先找齊再刪，刪點時邊表未重建）。`seamShift`：本段段界點到鄰段段界線的點到線 ICP（只平移，搜尋 10 m）；**平移量存在鄰段物件（`n.shift`）**，接合與接合後的分析用同一個值（重算會因點位改變而漂移，實測重疊數反而變多）。圖解區 `seamJoin` 只推 overlap 且距離 ≤ 吸附上限的點到平移後鄰段界線的垂足；`seamGuard`、`seamGaps` 排除圖解區。KC0336：全數值 補 7／刪 17／保留 96（T 字點等）；全圖解 推 51，重疊 71→20（其餘超出吸附上限）。兩者 `ringConflicts`／`freeRegions` 皆 0。
+
 **.ERR 偵錯報表（v0.9.0）**：`Core.errReport` 仿 NECEXE `KC6336.ERR`（Big5、CRLF；app 端用 `TextDecoder('big5')` 反推對照表做 Big5 編碼，`big5Bytes`）。已實作：界址點號空號（>50）、面積總和、段外圍（`outlineLoops`：各環轉逆時針取有向邊、抵消共邊後接環）、地中地外圍、D11 有而 D13 無環的地號、新地號重覆、確定／參考點數、經界線數；調查情形、界址查註、坐標來源因不知欄位而略過並註明。「已用經界線」以 `ds.edges.size` 計，與 NECEXE 的定義是否一致未驗證；段外圍以弦計弧線。
 
 ### AI／MCP 現況（誠實版）
