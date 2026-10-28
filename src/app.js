@@ -1535,13 +1535,13 @@ $('btnBlClear').onclick = () => { S.bl = { sets: [], res: null, focus: null }; b
 $('btnBlRun').onclick = () => { try { const r = blRun(); msg(`比對完成：遺漏 ${r.missing.length}、面積超限 ${r.flagged.length}`); } catch (e) { msg(e.message); } };
 $('btnBlCsv').onclick = () => download(caseBase() + '_接圖前比對.csv', '﻿' + Core.baselineCsv(S.bl.res), 'text/csv;charset=utf-8');
 // 互動報告（HTML）：接圖前比對＋舊圖檢核（有做的話），每筆一張卡片附局部圖，可篩選、勾已處理、寫備註、列印成 PDF
-function reportHtml() {
+function reportHtml(negOnly = $('rptNeg').checked) {
   if (!S.ds || (!S.bl.res && !S.chk.res)) throw new Error('請先做接圖前比對或舊圖檢核');
   const d = new Date(), pad = n => String(n).padStart(2, '0'), both = S.bl.res && S.chk.res;
   return Core.baselineReportHtml(S.ds, S.bl.res, { chk: S.chk.res ? S.chk.res.rows.filter(x => !S.chk.ok.has(x.label)) : null, caseName: caseBase(), version: '地籍圖重測工作站 ' + APP_VERSION,
-    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`, title: both ? '接圖前比對與舊圖檢核報告' : S.bl.res ? '接圖前比對報告' : '舊圖檢核報告' });
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`, title: both ? '接圖前比對與舊圖檢核報告' : S.bl.res ? '接圖前比對報告' : '舊圖檢核報告', negOnly });
 }
-function downloadReport() { try { download(caseBase() + '_比對報告.html', reportHtml(), 'text/html;charset=utf-8'); msg('已輸出比對報告（HTML）：用瀏覽器開啟，可篩選、勾已處理、寫備註，按「列印／另存 PDF」'); } catch (e) { msg(e.message); } }
+function downloadReport() { try { download(caseBase() + ($('rptNeg').checked ? '_比對報告_較差為負.html' : '_比對報告.html'), reportHtml(), 'text/html;charset=utf-8'); msg('已輸出比對報告（HTML）：用瀏覽器開啟，可篩選、勾已處理、寫備註，按「列印／另存 PDF」'); } catch (e) { msg(e.message); } }
 $('btnBlHtml').onclick = downloadReport; $('btnChkHtml').onclick = downloadReport;
 $('chkBlMap').onchange = draw;
 $('blSets').addEventListener('click', e => { const b = e.target.closest('[data-blrm]'); if (!b) return; S.bl.sets.splice(+b.dataset.blrm, 1); S.bl.res = null; blPanel(); refresh(); });
@@ -2089,12 +2089,33 @@ function applySliverFix(r) {
   const res = Core.mergeParcels(S.ds, [r.idx, f.into], f.into); pushStruct(res.delta, `碎片 ${r.label} 併入 ${f.label}`);
   S.chk.ok.add(r.label); msg(`已把 ${r.label} 併入 ${res.keep}（可復原）；建議重新檢核`); chkPanel(); refresh(); return { keep: res.keep, merged: res.merged };
 }
+// 第 6 步一鍵修正（v0.25.0）：① 遺漏地號依接圖前界址從未登記地切回 ② 較差為負且「接圖後產生」者，依接圖前界址從相鄰未登記地補回（登記地不動）
+// ③ 碎片併入建議的鄰宗。全部一次復原；修完重新檢核並輸出報告（只列較差為負）。「接圖前即不符」的負較差接圖前就不對，不自動修，留在報告人工判斷
+async function fixOldMap({ report = true } = {}) {
+  if (!S.ds) throw new Error('請先載入作業圖'); if (!S.bl.res && !S.chk.res) await runCheck();
+  const deltas = [], done = { missing: [], shortfall: [], sliver: [] }, failed = [];
+  if (S.bl.res) {
+    for (const m of S.bl.res.missing) { try { const x = Core.restoreMissing(S.ds, m); deltas.push(x.delta); done.missing.push(`${x.label}（${x.area.toFixed(1)} m²）`); } catch (e) { failed.push(`${m.label}：${e.message}`); } }
+    for (const x of S.bl.res.flagged.filter(x => x.diff < 0 && x.cause === '接圖後產生')) { try { const r = Core.restoreShortfall(S.ds, x); deltas.push(r.delta); done.shortfall.push(`${x.label} +${r.gain.toFixed(1)} m²（取自 ${r.from.map(f => f.label).join('、')}）`); } catch (e) { failed.push(`${x.label}：${e.message}`); } }
+  }
+  if (S.chk.res) for (const x of S.chk.res.rows.filter(r => r.fix && !S.chk.ok.has(r.label))) {
+    const p = S.ds.parcels[x.idx], q = S.ds.parcels[x.fix.into]; if (!p || p.deleted || !q || q.deleted) continue;
+    try { const r = Core.mergeParcels(S.ds, [x.idx, x.fix.into], x.fix.into); deltas.push(r.delta); done.sliver.push(`${x.label}→${r.keep}`); } catch (e) { failed.push(`${x.label}：${e.message}`); } }
+  pushMulti(deltas, '舊圖檢核一鍵修正');
+  const left = S.bl.res ? S.bl.res.flagged.filter(x => x.diff < 0 && x.cause !== '接圖後產生').map(x => x.label) : [];
+  await runCheck();
+  const text = `遺漏切回 ${done.missing.length}、面積不足補回 ${done.shortfall.length}、碎片併入 ${done.sliver.length}` + (failed.length ? `；未修 ${failed.length}` : '') + (left.length ? `；接圖前即不符、需人工判斷 ${left.length}（${left.slice(0, 6).join('、')}）` : '');
+  msg(`一鍵修正：${text}。可一次復原` + (report ? '；已輸出報告（只列較差為負）' : ''));
+  if (report) download(caseBase() + '_比對報告_較差為負.html', reportHtml(true), 'text/html;charset=utf-8');
+  return { text, done, failed, manual: left };
+}
+$('btnChkFix').onclick = () => { if (confirm('一鍵修正：遺漏地號依接圖前界址切回、較差為負且接圖後產生者依接圖前界址從相鄰未登記地補回（登記地不動）、碎片併入建議的鄰宗。可一次復原。修完重新檢核並輸出報告（只列較差為負）。繼續？')) fixOldMap().catch(e => msg(e.message)); };
 const LV = { red: ['#d1242f', '紅'], yellow: ['#b7791f', '黃'], '': ['#6741d9', '碎片'] };
 function chkPanel() {
   const im = S.img.filter(q => q.located);
   $('chkSrc').innerHTML = `<div>分幅舊圖：${S.bl.sets.length ? S.bl.sets.map(s => `<b>${esc(s.name)}</b>`).join('、') : '<span class="muted">尚未載入（步驟 1「分幅舊圖」）</span>'}</div>` +
     `<div style="margin-top:4px">舊圖影像（勾選的用來比對墨線）：${im.length ? im.map(q => `<label class="chk" style="margin-right:8px"><input type="checkbox" data-chkimg="${esc(q.name)}"${isOldMapImg(q) ? ' checked' : ''}>${esc(q.name)}</label>`).join('') : '<span class="muted">尚未載入（步驟 1「舊圖影像」，需要 JGW 定位檔）</span>'}</div>`;
-  const r = S.chk.res; $('btnChkCsv').disabled = $('btnChkHtml').disabled = !r;
+  const r = S.chk.res; $('btnChkCsv').disabled = $('btnChkHtml').disabled = !r; $('btnChkFix').disabled = !S.ds;
   if (!r) { $('chkSum').textContent = S.ds ? '按「開始檢核」' : '請先載入作業圖'; $('chkList').innerHTML = ''; return; }
   const c = chkCounts(), sh = r.shape, ik = r.ink, bl = r.bl;
   $('chkSum').innerHTML = `<b style="color:#d1242f">紅 ${c.red}</b>　<b style="color:#b7791f">黃 ${c.yellow}</b>　<span style="color:#6741d9">碎片 ${c.sliver}</span>　<span class="muted">共 ${c.total} 宗待確認</span>` +
@@ -2160,7 +2181,8 @@ const STEPS = [
   { n: 5, title: '去除雜點', desc: '沒有宗地使用的點、直線上的多餘點（鄰段接縫點保留）', adv: 'clean',
     run: async () => { const r = api.cleanupPoints({}); return `刪除未使用點 ${r.unused.length}、直線多餘點 ${r.collinear.length}` + (r.added.length ? `；接縫補點 ${r.added.length}` : ''); } },
   { n: 6, title: '檢核原分幅向量圖及影像圖', desc: '每宗對照分幅舊圖向量與舊圖掃描影像，標出形狀跑掉、多畫或少分的宗地', adv: 'chk',
-    run: async () => { await runCheck(); openPanel('dlgChk'); const c = chkCounts(); return `紅 ${c.red}、黃 ${c.yellow}、碎片 ${c.sliver}`; } },
+    run: async () => { await runCheck(); openPanel('dlgChk'); const c = chkCounts(); return `紅 ${c.red}、黃 ${c.yellow}、碎片 ${c.sliver}`; },
+    fix: async () => { const r = await fixOldMap(); openPanel('dlgChk'); return r.text; } },
 ];
 const ST_CHIP = { done: ['已完成', 'var(--ok)'], todo: ['未執行', 'var(--muted)'], warn: ['需處理', '#b7791f'], na: ['略過', 'var(--muted)'], err: ['失敗', 'var(--bad)'] };
 function stepStatus(s) {
@@ -2172,13 +2194,13 @@ function stepStatus(s) {
 function wfRender() {
   $('steps').innerHTML = STEPS.map(s => `<li class="step" data-step="${s.n}"><div class="sh"><span class="sn">${s.n}</span><b>${s.title}</b><span class="chip" id="wfChip${s.n}"></span></div><div class="sd">${s.desc}</div>` +
     (s.n === 1 ? `<div class="row"><button class="btn primary" id="wfProj">開啟專案資料夾</button></div><div class="row small" style="margin-top:4px"><button class="btn" data-act="open" title="個別選 D 檔或 COA／BNP">案件檔案</button><button class="btn" id="wfImg" title="JPG／PNG＋JGW">舊圖影像</button><button class="btn" id="wfBl" title="分幅數化舊圖：COA／BNP 或 D 檔資料夾">分幅舊圖</button><button class="btn" id="wfNb">鄰段</button><button class="btn" id="wfMdb">EXAM.MDB</button></div>`
-      : s.run ? `<div class="row"><button class="btn primary" data-wfrun="${s.n}">一鍵執行</button>${s.adv ? `<button class="btn" data-act="${s.adv}">詳細設定…</button>` : ''}</div>` : '') +
+      : s.run ? `<div class="row"><button class="btn primary" data-wfrun="${s.n}">一鍵執行</button>${s.fix ? `<button class="btn" data-wffix="${s.n}" title="遺漏切回、較差為負補回、碎片併入，修完重新檢核並輸出報告（只列較差為負）">一鍵修正並出報告</button>` : ''}${s.adv ? `<button class="btn" data-act="${s.adv}">詳細設定…</button>` : ''}</div>` : '') +
     `<div class="sr small" id="wfRes${s.n}"></div></li>`).join('');
   $('wfProj').onclick = () => $('projDir').click(); $('wfImg').onclick = () => $('imgIn').click(); $('wfBl').onclick = () => $('blDir').click(); $('wfNb').onclick = () => $('nbDir').click(); $('wfMdb').onclick = () => $('ownIn').click();
 }
 function wfPanel() {
   for (const s of STEPS) { const r = stepStatus(s), [t, c] = ST_CHIP[r.st]; const chip = $('wfChip' + s.n); chip.textContent = t; chip.style.color = c; chip.style.borderColor = c; $('wfRes' + s.n).textContent = r.text || '';
-    const b = document.querySelector(`[data-wfrun="${s.n}"]`); if (b) b.disabled = !S.ds || S.wfBusy || (s.needNb && !S.nb.length); }
+    const b = document.querySelector(`[data-wfrun="${s.n}"]`); if (b) b.disabled = !S.ds || S.wfBusy || (s.needNb && !S.nb.length); const f = document.querySelector(`[data-wffix="${s.n}"]`); if (f) f.disabled = !S.ds || S.wfBusy; }
   $('wfRunAll').disabled = !S.ds || !!S.wfBusy;
 }
 async function runStep(n, o = {}) {
@@ -2195,7 +2217,8 @@ async function runSteps(from = 3, to = 6) {
   return out;
 }
 wfRender();
-$('steps').addEventListener('click', e => { const b = e.target.closest('[data-wfrun]'); if (!b || b.disabled) return; const st = STEPS.find(x => x.n === +b.dataset.wfrun); if (st.confirm && S.ds && !confirm(st.confirm())) return; if (b) runStep(+b.dataset.wfrun).then(r => msg(`步驟 ${b.dataset.wfrun}：${r.text}`), err => msg(`步驟 ${b.dataset.wfrun} 失敗：${err.message}`)); });
+$('steps').addEventListener('click', e => { const fx = e.target.closest('[data-wffix]'); if (fx && !fx.disabled) { const st = STEPS.find(x => x.n === +fx.dataset.wffix); if (confirm('一鍵修正：遺漏地號切回、較差為負且接圖後產生者從相鄰未登記地補回（登記地不動）、碎片併入鄰宗；修完重新檢核並輸出報告（只列較差為負）。可一次復原。繼續？')) { S.wfBusy = true; wfPanel(); st.fix().then(t => { S.wf[st.n] = { ok: true, text: t }; }, err => { S.wf[st.n] = { ok: false, text: err.message }; msg(err.message); }).finally(() => { S.wfBusy = false; refresh(); }); } return; }
+  const b = e.target.closest('[data-wfrun]'); if (!b || b.disabled) return; const st = STEPS.find(x => x.n === +b.dataset.wfrun); if (st.confirm && S.ds && !confirm(st.confirm())) return; if (b) runStep(+b.dataset.wfrun).then(r => msg(`步驟 ${b.dataset.wfrun}：${r.text}`), err => msg(`步驟 ${b.dataset.wfrun} 失敗：${err.message}`)); });
 $('wfRunAll').onclick = () => { if (confirm('依序執行步驟 3～6（鄰段接合、未登記地合併分割、去除雜點、檢核）？每一步都可復原；任何一步失敗就停下。')) runSteps(3, 6); };
 $('projDir').onchange = e => { const f = [...e.target.files]; e.target.value = ''; loadProject(f).catch(err => msg(err.message)); };
 document.querySelectorAll('#flowTabs button').forEach(b => b.onclick = () => { document.querySelectorAll('#flowTabs button').forEach(x => x.classList.toggle('on', x === b)); document.querySelectorAll('#flow .stage').forEach(st => { st.hidden = st.id !== b.dataset.stage; }); });
@@ -2271,7 +2294,9 @@ const api = {
         image: x.img ? { no_ink_m: f(x.img.offLen), checked_m: f(x.img.checked) } : null, suggestion: x.fix ? { merge_into: x.fix.label, reason: x.fix.why } : null })) }; },
   fixSliver: ({ label }) => { const x = S.chk.res && S.chk.res.rows.find(r => r.label === String(label)); if (!x) throw new Error('檢核結果沒有 ' + label); return applySliverFix(x); },
   confirmCheck: ({ label, confirmed = true }) => { if (!S.chk.res) throw new Error('尚未檢核'); confirmed ? S.chk.ok.add(String(label)) : S.chk.ok.delete(String(label)); chkPanel(); draw(); return { confirmed: [...S.chk.ok] }; },
-  exportReportHtml: () => reportHtml(),   // 接圖前比對＋舊圖檢核的互動報告（HTML 字串）
+  exportReportHtml: ({ negOnly = false } = {}) => reportHtml(negOnly),
+  fixOldMap: () => fixOldMap({ report: false }),   // 第 6 步一鍵修正（遺漏切回、較差為負補回、碎片併入），回傳結果；報告另以 exportReportHtml({negOnly:true}) 取得
+  restoreShortfall: ({ label }) => { if (!S.bl.res) blRun(); const x = S.bl.res.area.find(a => a.label === String(label)); if (!x) throw new Error('沒有 ' + label + ' 的面積比對'); const g = Core.restoreShortfall(S.ds, { ...x, rings: x.rings && x.rings.length ? x.rings : (S.bl.res.flagged.find(f => f.label === x.label) || {}).rings }); pushStruct(g.delta, `面積不足補回 ${label}`); blRun(); return { label, gain: g.gain, from: g.from }; },   // 接圖前比對＋舊圖檢核的互動報告（HTML 字串）
   getBaselineReport: () => { const r = S.bl.res; if (!r) return null; const strip = l => l.map(({ rings, ...x }) => x);
     return { ...r, missing: strip(r.missing), partial: strip(r.partial), unreg: strip(r.unreg), occupied: strip(r.occupied), area: undefined, flagged: strip(r.flagged), sets: S.bl.sets.map(s => s.name) }; },
 

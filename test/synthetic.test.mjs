@@ -788,4 +788,21 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.equal(Core.seamExact(m2, G).added.length, 0, '圖解區不補點'); assert.equal(Core.seamGuard(m2, G).protect.size, 0, '圖解區接縫點不受保護（可去雜點）');
   assert.equal(Core.seamJoin(main(), [{ name: 'X', ds: nb(), mode: 'none' }]).moves.length, 0, '只比對不動');
 }
+
+// ── 面積不足補回（v0.25.0）：接圖後被未登記地吃掉的部分依接圖前界址補回，登記地不動 ──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings, par) => Core.datasetFromD({ pts: rd(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings), par: par && rd(F_D11, par) });
+  const D11 = (m, c, reg) => ({ SECTION_O: 1, PAR_O_M: m, PAR_O_C: c, PAR_N_M: m, PAR_N_C: c, SECTION_N: 1, AREA_OLD: reg / 1e4, AREA_NEW: 0 });   // AREA_OLD 是公頃
+  // 作業圖：1（0–10 × 0–10，登記 120 m²）上方是未登記地 9001-1（10–20）；右邊是登記地 2
+  const cur = mk([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 20, 0], [6, 20, 10], [7, 0, 20], [8, 20, 20]],
+    [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 9001, 1, [4, 3, 6, 5]), ring(1, 2, 0, [2, 7, 8, 6, 3])], [D11(1, 0, 120), D11(2, 0, 200)]);
+  // 接圖前：1 是 0–10 × 0–12
+  const ref = mk([[1, 0, 0], [2, 0, 10], [3, 12, 10], [4, 12, 0], [7, 0, 20], [8, 20, 20], [6, 20, 10]], [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [2, 7, 8, 6, 3])], [D11(1, 0, 120), D11(2, 0, 200)]);
+  const r = Core.compareBaseline(cur, [ref], { identity: true, ratio: 1 }), x = r.flagged.find(f => f.label === '1');
+  assert.ok(x && x.diff < 0 && x.cause === '接圖後產生', '1 面積不足、接圖後產生');
+  const g = Core.restoreShortfall(cur, x); near(g.gain, 20, 1e-6); near(cur.parcels[0].area, 120, 1e-6); near(cur.parcels[1].area, 80, 1e-6, '9001-1 被切走 20');
+  near(cur.parcels[2].area, 200, 1e-6, '登記地 2 不動'); assert.equal(Core.ringConflicts(cur).cross.length, 0);
+  const html = Core.baselineReportHtml(cur, Core.compareBaseline(cur, [ref], { identity: true, ratio: 1 }), { negOnly: true });
+  assert.ok(html.includes('只列較差為負') && !html.includes('data-cat="area"'), '補回後沒有較差為負的面積超限');
+}
 console.log('SYNTHETIC OK');
