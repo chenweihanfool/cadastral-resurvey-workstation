@@ -2916,6 +2916,7 @@ const CHANGELOG = [
       '左側新增「作業流程」欄（上方「☰ 流程」可收起）：分「圖資準備／重測調整／成果」三頁。圖資準備依序為 1 讀檔 → 2 自動接圖 → 3 鄰段接合 → 4 未登記土地合併分割 → 5 去除雜點 → 6 檢核，每步一個「一鍵執行」、狀態與結果，細項設定仍在原本的面板（「詳細設定…」）；「依序執行 3～6」一路做完，任何一步失敗就停下，每步都可復原',
       '「開啟專案資料夾」（或把專案資料夾拖進畫面）一次讀入：最淺的案件資料夾為主要測區、路徑含「鄰段」的為鄰段、含「分幅／接圖前／單幅」的為分幅舊圖、影像（JPG＋JGW）全部登記並顯示第一張舊圖、EXAM.MDB 一併讀入；案件資料夾裡的 COA／BNP（數化舊圖）自動當作分幅舊圖',
       '步驟 2 自動接圖尚未提供：載入的圖若有分幅塊（子號 ≥ 1000）會提醒先接圖',
+      '步驟 4 按下前先確認（已經合併分割過的圖會整批重新切，筆數可能大增），結果列出未登記地筆數的變化。KC0336（已在 116 處理過）重跑步驟 4：合併 14 組、分割 79 筆，未登記地大增——這類已處理過的圖請略過步驟 4',
       '新功能「處理 → 舊圖檢核」（步驟 6）：每宗地先自動小幅平移去配舊圖，再看形狀。向量（分幅舊圖，坐標以同地號擬合轉換，TWD67 也可）：界址線離舊圖界線超過容差（多畫、跑掉）、舊圖界線穿過宗地內部（少分、併錯）；分幅切線不算界址，兩側都是未登記地的分割線不檢查',
       '影像（舊圖掃描檔＋JGW）：以 50 m 方格分塊讀影像，找出墨線（比周圍暗，或紅線），每格在 ±5 m 內自動平移對位（相鄰圖幅各自偏移），再看每條界址線底下有沒有墨線；整格對不上（偏太多、空白、不是同一張圖）的不判斷，圖上灰框。航照（檔名含「航照」「正射」等）預設不用來比對，可在面板勾選',
       '結果分紅／黃／碎片（< 30 m²），點一列放大並在圖上標出問題線段（紅粗＝影像沒墨線、紫＝離舊圖線、藍虛＝舊圖線穿過內部）；碎片可一鍵「併入」建議的相鄰宗地（共用界線在舊圖上沒有的那一宗，可復原）；其餘人工判斷後按「已確認」劃掉；報告 CSV',
@@ -5445,10 +5446,11 @@ const STEPS = [
   { n: 3, title: '鄰段接合', desc: '主區段界點吸附到「以鄰段為準」的鄰段', adv: 'seam', needNb: true,
     run: async () => { runSeam(); const r = joinSeam(); return `移動 ${r.moves.length ? new Set(r.moves.map(m => m.id)).size : 0} 點；仍重疊／脫開 ${r.after.overlap + r.after.gap} 點`; } },
   { n: 4, title: '未登記土地合併分割', desc: '與鄰段的空隙建新地號 → 相連的未登記地合併 → 依點數與長寬比分割', adv: 'unreg',
-    run: async () => { const t = []; unregPanel();
+    confirm: () => { unregPanel(); const r = S.unreg; return `未登記地目前 ${r.parcels.length} 筆。將：與鄰段的空隙建新地號 → 相連的未登記地各併成一筆 → 再切成每筆 ≤ ${unN()} 點、長寬比 ≤ ${unRatio() || '不限'}（設定在「詳細設定…」）。\n已經合併分割過的圖會整批重新切，筆數可能大增。可一次一步復原。繼續？`; },
+    run: async () => { const t = [], cnt = () => S.ds.parcels.filter(p => !p.deleted && (Core.parcelNo(p) || { m: 0 }).m >= 9000).length, n0 = cnt(); unregPanel();
       if (S.nb.length) { S.sgaps = Core.seamGaps(S.ds, nbArgs()); const g = fillAllGaps(false); t.push(`空隙建新地號 ${g.made}`); }
       S.unSel.clear(); unregPanel(); const m = await unregMerge(false); t.push(`合併 ${m ? m.merged : 0} 組`);
-      unregPanel(); const s = await unregSplit(); t.push(`分割 ${s ? s.split : 0} 筆`); return t.join('；'); } },
+      unregPanel(); const s = await unregSplit(); t.push(`分割 ${s ? s.split : 0} 筆`); t.push(`未登記地 ${n0} → ${cnt()} 筆`); return t.join('；'); } },
   { n: 5, title: '去除雜點', desc: '沒有宗地使用的點、直線上的多餘點（鄰段接縫點保留）', adv: 'clean',
     run: async () => { const r = api.cleanupPoints({}); return `刪除未使用點 ${r.unused.length}、直線多餘點 ${r.collinear.length}` + (r.added.length ? `；接縫補點 ${r.added.length}` : ''); } },
   { n: 6, title: '檢核原分幅向量圖及影像圖', desc: '每宗對照分幅舊圖向量與舊圖掃描影像，標出形狀跑掉、多畫或少分的宗地', adv: 'chk',
@@ -5487,7 +5489,7 @@ async function runSteps(from = 3, to = 6) {
   return out;
 }
 wfRender();
-$('steps').addEventListener('click', e => { const b = e.target.closest('[data-wfrun]'); if (b && !b.disabled) runStep(+b.dataset.wfrun).then(r => msg(`步驟 ${b.dataset.wfrun}：${r.text}`), err => msg(`步驟 ${b.dataset.wfrun} 失敗：${err.message}`)); });
+$('steps').addEventListener('click', e => { const b = e.target.closest('[data-wfrun]'); if (!b || b.disabled) return; const st = STEPS.find(x => x.n === +b.dataset.wfrun); if (st.confirm && S.ds && !confirm(st.confirm())) return; if (b) runStep(+b.dataset.wfrun).then(r => msg(`步驟 ${b.dataset.wfrun}：${r.text}`), err => msg(`步驟 ${b.dataset.wfrun} 失敗：${err.message}`)); });
 $('wfRunAll').onclick = () => { if (confirm('依序執行步驟 3～6（鄰段接合、未登記地合併分割、去除雜點、檢核）？每一步都可復原；任何一步失敗就停下。')) runSteps(3, 6); };
 $('projDir').onchange = e => { const f = [...e.target.files]; e.target.value = ''; loadProject(f).catch(err => msg(err.message)); };
 document.querySelectorAll('#flowTabs button').forEach(b => b.onclick = () => { document.querySelectorAll('#flowTabs button').forEach(x => x.classList.toggle('on', x === b)); document.querySelectorAll('#flow .stage').forEach(st => { st.hidden = st.id !== b.dataset.stage; }); });

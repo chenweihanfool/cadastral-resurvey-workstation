@@ -2132,10 +2132,11 @@ const STEPS = [
   { n: 3, title: '鄰段接合', desc: '主區段界點吸附到「以鄰段為準」的鄰段', adv: 'seam', needNb: true,
     run: async () => { runSeam(); const r = joinSeam(); return `移動 ${r.moves.length ? new Set(r.moves.map(m => m.id)).size : 0} 點；仍重疊／脫開 ${r.after.overlap + r.after.gap} 點`; } },
   { n: 4, title: '未登記土地合併分割', desc: '與鄰段的空隙建新地號 → 相連的未登記地合併 → 依點數與長寬比分割', adv: 'unreg',
-    run: async () => { const t = []; unregPanel();
+    confirm: () => { unregPanel(); const r = S.unreg; return `未登記地目前 ${r.parcels.length} 筆。將：與鄰段的空隙建新地號 → 相連的未登記地各併成一筆 → 再切成每筆 ≤ ${unN()} 點、長寬比 ≤ ${unRatio() || '不限'}（設定在「詳細設定…」）。\n已經合併分割過的圖會整批重新切，筆數可能大增。可一次一步復原。繼續？`; },
+    run: async () => { const t = [], cnt = () => S.ds.parcels.filter(p => !p.deleted && (Core.parcelNo(p) || { m: 0 }).m >= 9000).length, n0 = cnt(); unregPanel();
       if (S.nb.length) { S.sgaps = Core.seamGaps(S.ds, nbArgs()); const g = fillAllGaps(false); t.push(`空隙建新地號 ${g.made}`); }
       S.unSel.clear(); unregPanel(); const m = await unregMerge(false); t.push(`合併 ${m ? m.merged : 0} 組`);
-      unregPanel(); const s = await unregSplit(); t.push(`分割 ${s ? s.split : 0} 筆`); return t.join('；'); } },
+      unregPanel(); const s = await unregSplit(); t.push(`分割 ${s ? s.split : 0} 筆`); t.push(`未登記地 ${n0} → ${cnt()} 筆`); return t.join('；'); } },
   { n: 5, title: '去除雜點', desc: '沒有宗地使用的點、直線上的多餘點（鄰段接縫點保留）', adv: 'clean',
     run: async () => { const r = api.cleanupPoints({}); return `刪除未使用點 ${r.unused.length}、直線多餘點 ${r.collinear.length}` + (r.added.length ? `；接縫補點 ${r.added.length}` : ''); } },
   { n: 6, title: '檢核原分幅向量圖及影像圖', desc: '每宗對照分幅舊圖向量與舊圖掃描影像，標出形狀跑掉、多畫或少分的宗地', adv: 'chk',
@@ -2174,7 +2175,7 @@ async function runSteps(from = 3, to = 6) {
   return out;
 }
 wfRender();
-$('steps').addEventListener('click', e => { const b = e.target.closest('[data-wfrun]'); if (b && !b.disabled) runStep(+b.dataset.wfrun).then(r => msg(`步驟 ${b.dataset.wfrun}：${r.text}`), err => msg(`步驟 ${b.dataset.wfrun} 失敗：${err.message}`)); });
+$('steps').addEventListener('click', e => { const b = e.target.closest('[data-wfrun]'); if (!b || b.disabled) return; const st = STEPS.find(x => x.n === +b.dataset.wfrun); if (st.confirm && S.ds && !confirm(st.confirm())) return; if (b) runStep(+b.dataset.wfrun).then(r => msg(`步驟 ${b.dataset.wfrun}：${r.text}`), err => msg(`步驟 ${b.dataset.wfrun} 失敗：${err.message}`)); });
 $('wfRunAll').onclick = () => { if (confirm('依序執行步驟 3～6（鄰段接合、未登記地合併分割、去除雜點、檢核）？每一步都可復原；任何一步失敗就停下。')) runSteps(3, 6); };
 $('projDir').onchange = e => { const f = [...e.target.files]; e.target.value = ''; loadProject(f).catch(err => msg(err.message)); };
 document.querySelectorAll('#flowTabs button').forEach(b => b.onclick = () => { document.querySelectorAll('#flowTabs button').forEach(x => x.classList.toggle('on', x === b)); document.querySelectorAll('#flow .stage').forEach(st => { st.hidden = st.id !== b.dataset.stage; }); });
