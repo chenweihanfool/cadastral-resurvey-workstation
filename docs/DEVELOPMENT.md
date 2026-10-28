@@ -176,3 +176,5 @@ node build.mjs               # 產生 product/index.html
 - 要的是**完整可用的產品**：免安裝、單一 HTML、結果可匯入舊版 NECEXE。
 - 已授權：修改開 PR、CI 通過後自動合併，「有問題再跟你說」；每個新版本發 Release HTML。
 - 對外動作（建立倉庫、設定、上傳）要先符合使用者明確要求；**真實案件資料與廠商軟體絕不上傳**。
+
+**空隙建號的重疊檢查（v0.27.1）**：`seamGaps`、`freeRegions` 的面只用「內部一點」判斷是否為空地，空地裡有不相連的宗地（孤島）時內部點落在空處，建出來卻把孤島包進去（`ringConflicts` 也查不到，因為兩環沒有邊交錯）。現在 `overlapParcel(ds, pts, tol)` 逐宗用 `polysOverlap`（頂點深入對方內部 > tol、邊在離端點 > tol 處交錯、內部點互含）比對：`seamGaps` 把會蓋到本段或鄰段宗地的面放進 `out.skipped`（不列），`fillSeamGap`／`fillRegion`（含 `addFace`、凹口）建立前再擋一次。使用者回報 KC0336 的空隙建號與鄰地重疊、合併分割跑不出結果；合成資料重現的是孤島情形，**尚未用 KC0336 確認是同一原因**。
