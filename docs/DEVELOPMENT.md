@@ -110,6 +110,8 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 - `baselineReportHtml(cur, r, { chk, caseName, date, version, title })`：單一 HTML，卡片內 SVG（viewBox 用公尺、y 翻轉、`vector-effect:non-scaling-stroke`），狀態與備註存 localStorage（鍵含案件名），列印 CSS 隱藏控制列、已處理的印「✓ 已處理」。`compareBaseline` 的 area／occupied 項目新增 `idxs`、`rings`（API 輸出時去掉 rings）。KC0336：162 筆、約 1.4 MB。
 - 鄰段 `mode`：numeric／graphic／none（舊 `authoritative:false`＝none）。`seamExact`：seamJoin 後補點（`seamGuard` adds）並刪「在鄰段線上、鄰段沒有對應點、只屬於一宗、共線、刪了不掃到別點」的點（先找齊再刪，刪點時邊表未重建）。`seamShift`：本段段界點到鄰段段界線的點到線 ICP（只平移，搜尋 10 m）；**平移量存在鄰段物件（`n.shift`）**，接合與接合後的分析用同一個值（重算會因點位改變而漂移，實測重疊數反而變多）。圖解區 `seamJoin` 只推 overlap 且距離 ≤ 吸附上限的點到平移後鄰段界線的垂足；`seamGuard`、`seamGaps` 排除圖解區。KC0336：全數值 補 7／刪 17／保留 96（T 字點等）；全圖解 推 51，重疊 71→20（其餘超出吸附上限）。兩者 `ringConflicts`／`freeRegions` 皆 0。
 
+**第 6 步一鍵修正（v0.25.0）**：使用者只關心較差為負（計算面積 < 登記面積）。`restoreMissing(ds, item, { into })` 新增「既有宗地」模式：平面圖同遺漏復原，新環＝該宗原本的面＋接圖前界址內屬未登記地的面（登記地的面不拿、不報錯，回傳 skippedReg）；`restoreShortfall(ds, flaggedItem)` 包一層（只處理目前單一塊、非地中地、無圓弧）。app `fixOldMap`：遺漏切回＋`flagged` 中 diff<0 且 cause＝接圖後產生者補回＋碎片 `mergeParcels`，一個 pushMulti；再 `runCheck` 並輸出 `baselineReportHtml(…, { negOnly: true })`（area 只列 diff<0、occupied／chk 只列 area<areaReg、遺漏全列、partial／extra 不列）。KC0336：1094-4 +75 m²；接圖前即不符 6 筆不自動修（接圖前界址幫不上，要看舊圖影像，人工）。使用者 2026-10-28 預告：最後總結報告要逐宗比較重測前後、說明調整理由與脈絡沿革（需現況資料）；**「沿革」不是操作紀錄**，使用者還沒想好，先不做。
+
 **.ERR 偵錯報表（v0.9.0）**：`Core.errReport` 仿 NECEXE `KC6336.ERR`（Big5、CRLF；app 端用 `TextDecoder('big5')` 反推對照表做 Big5 編碼，`big5Bytes`）。已實作：界址點號空號（>50）、面積總和、段外圍（`outlineLoops`：各環轉逆時針取有向邊、抵消共邊後接環）、地中地外圍、D11 有而 D13 無環的地號、新地號重覆、確定／參考點數、經界線數；調查情形、界址查註、坐標來源因不知欄位而略過並註明。「已用經界線」以 `ds.edges.size` 計，與 NECEXE 的定義是否一致未驗證；段外圍以弦計弧線。
 
 ### AI／MCP 現況（誠實版）
