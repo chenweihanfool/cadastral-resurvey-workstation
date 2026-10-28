@@ -521,6 +521,7 @@ function render() {
     }
     if ($('dlgBl').open && S.bl.res && $('chkBlMap').checked && !S.printing) drawBaseline(ds);
     if ($('dlgChk').open && S.chk.res && $('chkMap').checked && !S.printing) drawCheck();
+    if (S.topo && !S.printing) drawTopo();
     if ($('dlgOwn').open && S.owner && S.owner.res && $('chkOwnMap').checked) drawOwners(ds);
     if ($('dlgUnreg').open && S.unreg && !S.printing) {   // 未登記地：黃＝未登記、橘＝需要分割（超過點數或太細長）、紅＝空隙
       ctx.save(); const n = unN();
@@ -977,6 +978,7 @@ cv.addEventListener('pointerdown', e => {
     if (!im) { msg('請先載入影像'); return; }
     S.drag = { kind: 'img', im, wx: toWx(mx), wy: toWy(my), c0: im.wf.c, f0: im.wf.f }; refresh(); return;
   }
+  if (S.topo) { if (S.ds) topoPick(mx, my); return; }
   if (S.align) { alignPick(mx, my); return; }
   if (S.redraw) { redrawPick(mx, my); return; }
   if (S.pocket) { pocketPick(mx, my); return; }
@@ -1057,8 +1059,9 @@ addEventListener('keydown', e => {
   if (k === ' ') { S.space = true; e.preventDefault(); }
   else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'y') { e.preventDefault(); redo(); }
-  else if (k === 'Escape') { if (S.pocket) cancelPocket(); else if (S.redraw) cancelRedraw(); else if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
-  else if (k === 'Enter') { if (S.pocket) finishPocket(); else if (S.redraw) finishRedraw(); else if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
+  else if (k === 'Escape') { if (S.topo) topoCancel(); else if (S.pocket) cancelPocket(); else if (S.redraw) cancelRedraw(); else if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
+  else if (k === 'Enter') { if (S.topo && S.topo.picks.length) topoRun(); else if (S.pocket) finishPocket(); else if (S.redraw) finishRedraw(); else if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
+  else if (k === 'Backspace' && S.topo) { S.topo.picks.pop(); topoPanel(); draw(); }
   else if (k === 'Backspace' && S.pocket) pocketBack();
   else if (k === 'Backspace' && S.redraw) { S.redraw.ids.pop(); redrawHint(); draw(); }
   else if (k === 'Backspace' && S.draft) { S.draft.names.pop(); if (!S.draft.names.length) { S.draft = null; setHint(''); } draw(); }
@@ -1095,13 +1098,13 @@ const actDis = (n, v) => document.querySelectorAll(`[data-act="${n}"]`).forEach(
 function openPanel(id) {
   document.querySelectorAll('dialog.fp[open]').forEach(d => { if (d.id !== id) d.close(); });
   const d = $(id); if (!d.open) d.show();
-  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); else if (id === 'dlgBl') blPanel(); else if (id === 'dlgOwn') ownPanel(); else if (id === 'dlgChk') chkPanel(); refresh();
+  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); else if (id === 'dlgBl') blPanel(); else if (id === 'dlgOwn') ownPanel(); else if (id === 'dlgChk') chkPanel(); else if (id === 'dlgTopo') topoPanel(); refresh();
 }
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
   undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
-  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'), chk: () => openPanel('dlgChk'), flow: () => toggleFlow(), project: () => $('projDir').click(),
+  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'), chk: () => openPanel('dlgChk'), topo: () => openPanel('dlgTopo'), flow: () => toggleFlow(), project: () => $('projDir').click(),
   help: () => $('help').showModal(),
 };
 document.addEventListener('click', e => {
@@ -2227,6 +2230,119 @@ function toggleFlow() { const m = document.querySelector('main'); m.classList.to
 $('btnFlow').onclick = toggleFlow;
 try { if (localStorage.getItem('cw.flow') === '0') document.querySelector('main').classList.add('noflow'); } catch (e) { /* ignore */ }
 
+// ── 點線面編修工具箱（v0.27.0）：看完檢核報告後逐筆手工修。工具＝在圖上依序點選（點／線／面），湊齊就執行；每次都可 Ctrl+Z 復原 ──
+// 待修清單：把舊圖檢核、接圖前比對、未登記地、界址串檢查的結果串成一列，◀ ▶ 逐筆跳過去
+const TOPO = {
+  addOnLine: { g: '點', name: '線上加點', picks: ['edge'], hint: '點一下界址線：在垂足加點，兩側宗地同步插入（面積不變）' },
+  addFree: { g: '點', name: '加孤立點', picks: ['xy'], hint: '點一下空白處：新增不屬於任何宗地的點（之後可貼到線或用來畫面）' },
+  move: { g: '點', name: '移動點', picks: [], hint: '拖曳界址點移動（方向鍵微調；共用此點的宗地一起變）' },
+  delPt: { g: '點', name: '刪點', picks: ['pt'], hint: '點一下要刪的界址點：從所有用到它的宗地移除（環不可少於 3 點）' },
+  snapLine: { g: '點', name: '點貼到線', picks: ['pt', 'edge'], hint: '先點界址點，再點界址線：點移到線上垂足，並接進那條線兩側的宗地（補 T 字接點）' },
+  mergePt: { g: '點', name: '點併點', picks: ['pt', 'pt'], hint: '先點要併掉的點，再點要保留的點：兩點變一點（保留點的坐標不動）' },
+  addLine: { g: '線', name: '新增線（切開）', picks: ['pt', 'pt'], hint: '在同一宗地內點兩個界址點：連線把宗地切成兩宗（小的一側編新子號）' },
+  delLine: { g: '線', name: '刪除線（合併）', picks: ['edge'], hint: '點一下兩宗之間的界址線：刪線＝兩宗合併（段界線不能刪）' },
+  addFace: { g: '面', name: '新增面', picks: ['pts'], hint: '依序點界址點圍出空地（縫、空隙），點回第一點或 Enter 建為新地號（母號同未登記地設定）' },
+  delFace: { g: '面', name: '刪除面', picks: ['par'], hint: '點一下要刪的宗地：地中地併入外圈，一般宗地範圍變成空地／段外' },
+  mergeFace: { g: '面', name: '合併面', picks: ['pars'], hint: '依序點要合併的相連宗地，Enter 合併（保留已登記且地號小者）' },
+  redraw: { g: '面', name: '重繪界址串', picks: ['par'], hint: '點一下宗地，再依序點它的界址點重畫界址串（Enter 完成）' },
+};
+S.topo = null;   // { tool, picks:[{t:'pt'|'edge'|'par'|'xy', …}] }
+function topoPanel() {
+  const by = {}; for (const [k, t] of Object.entries(TOPO)) (by[t.g] = by[t.g] || []).push([k, t]);
+  $('topoTools').innerHTML = Object.entries(by).map(([g, list]) => `<div class="tgrp"><b>${g}</b><div class="row small">${list.map(([k, t]) => `<button class="btn${S.topo && S.topo.tool === k ? ' primary' : ''}" data-topo="${k}" title="${esc(t.hint)}">${t.name}</button>`).join('')}</div></div>`).join('');
+  $('topoHint').textContent = S.topo ? `${TOPO[S.topo.tool].name}：${TOPO[S.topo.tool].hint}` + (S.topo.picks.length ? `（已點 ${S.topo.picks.length}）` : '') : '選一個工具，然後在圖上點選。Esc 取消、Enter 完成、Backspace 退一步；每次都可 Ctrl+Z 復原。';
+  tqPanel();
+}
+function topoStart(tool) {
+  if (!S.ds) return msg('請先載入圖資'); cancelModes();
+  if (tool === 'move') { S.topo = null; setTool('select'); S.filter.pt = true; S.filter.edge = S.filter.par = false; document.querySelectorAll('#filters button').forEach(b => b.classList.toggle('on', S.filter[b.dataset.f])); setHint('移動點：拖曳界址點（只選得到點）；方向鍵微調、Shift×10'); topoPanel(); return; }
+  S.topo = { tool, picks: [] }; setTool('select'); setHint(`${TOPO[tool].name}：${TOPO[tool].hint}　Esc 取消`); topoPanel(); draw();
+}
+function cancelModes() { if (S.pocket) cancelPocket(); if (S.redraw) cancelRedraw(); if (S.align) cancelAlign(); }
+function topoCancel() { S.topo = null; setHint(''); topoPanel(); draw(); }
+function parcelAt(wx, wy) { let best = null; for (const p of S.ds.parcels) { if (p.deleted || p.ids.length < 3) continue; if (Core.pointInRing(p.ids, S.ds.points, wy, wx) && (!best || p.area < best.area)) best = p; } return best; }
+function topoPick(mx, my) {
+  const T = S.topo, def = TOPO[T.tool], wx = toWx(mx), wy = toWy(my), need = def.picks[Math.min(T.picks.length, def.picks.length - 1)];
+  const pt = () => nearestPoint(S.ds.points, wx, wy, 12 / S.view.s), edge = () => hitEdgeAt(wx, wy, 8 / S.view.s);
+  if (need === 'pt' || need === 'pts') { const q = pt(); if (!q) return msg('請點在界址點上');
+    if (need === 'pts' && T.picks.length >= 3 && q.id === T.picks[0].id) return topoRun();
+    if (T.picks.some(p => p.id === q.id) && need === 'pts') return msg(`界址點 ${q.id} 已點過`); T.picks.push({ t: 'pt', id: q.id }); }
+  else if (need === 'edge') { const e = edge(); if (!e) return msg('請點在界址線上（兩點之間）'); T.picks.push({ t: 'edge', a: e.a, b: e.b, y: wy, x: wx }); }
+  else if (need === 'par' || need === 'pars') { const p = parcelAt(wx, wy); if (!p) return msg('這裡沒有宗地'); if (T.picks.some(q => q.idx === p.idx)) { T.picks = T.picks.filter(q => q.idx !== p.idx); } else T.picks.push({ t: 'par', idx: p.idx }); }
+  else if (need === 'xy') T.picks.push({ t: 'xy', y: wy, x: wx });
+  const multi = def.picks[def.picks.length - 1] === 'pts' || def.picks[def.picks.length - 1] === 'pars';
+  if (!multi && T.picks.length >= def.picks.length) return topoRun();
+  setHint(`${def.name}：${def.hint}　已點 ${T.picks.length}` + (multi ? '，Enter 完成' : '') + '　Esc 取消'); topoPanel(); draw();
+}
+function topoRun() {
+  const T = S.topo, P = T.picks, ds = S.ds; T.picks = [];
+  try {
+    switch (T.tool) {
+      case 'addOnLine': { const r = addPoint({ edge: [P[0].a, P[0].b], y: P[0].y, x: P[0].x }); msg(`已在 ${P[0].a}–${P[0].b} 加點 ${r.id}（${r.parcels.join('、')} 同步插入）`); break; }
+      case 'addFree': { const r = addPoint({ y: P[0].y, x: P[0].x }); msg(`已新增孤立點 ${r.id}`); break; }
+      case 'delPt': { const r = deletePoints([P[0].id]); msg(r.deleted.length ? `已刪除點 ${P[0].id}（${r.parcels.join('、')}）` : `無法刪除：${r.skipped.map(q => q.reason).join('、')}`); break; }
+      case 'snapLine': { const id = P[0].id, r = Core.snapPointToEdge(ds, id, P[1].a, P[1].b), from = r.from, to = r.to, d = r.delta, setXY = q => { const p = ds.points.get(id); p.y = q.y; p.x = q.x; };
+        pushUndo({ undoFn: () => { setXY(from); Core.applyDelta(ds, d, 'undo'); }, redoFn: () => { setXY(to); Core.applyDelta(ds, d, 'redo'); }, label: `點 ${id} 貼到線 ${P[1].a}–${P[1].b}` });
+        selectOnlyPoint(id); msg(`點 ${id} 移 ${r.dist.toFixed(3)} m 到 ${P[1].a}–${P[1].b} 線上，並接進 ${parLabels(d).join('、')}`); break; }
+      case 'mergePt': { const r = Core.mergePoints(ds, P[0].id, P[1].id); pushStruct(r.delta, `點 ${P[0].id} 併入 ${P[1].id}`); pruneSel(); selectOnlyPoint(P[1].id); msg(`點 ${P[0].id} 已併入 ${P[1].id}（${parLabels(r.delta).join('、')}）`); break; }
+      case 'addLine': { const a = P[0].id, b = P[1].id, common = (ds.pointParcels.get(a) || []).filter(i => (ds.pointParcels.get(b) || []).includes(i) && !ds.parcels[i].deleted);
+        if (!common.length) throw new Error(`點 ${a}、${b} 不在同一宗地上`); let r = null, err = null; for (const pi of common) { try { r = Core.splitByChord(ds, pi, a, b); break; } catch (e) { err = e; } } if (!r) throw err;
+        pushStruct(r.delta, `新增線 ${a}–${b}（切開 ${r.keep}）`); msg(`已用 ${a}–${b} 把 ${r.keep} 切開，切下的一側編為 ${r.created}`); break; }
+      case 'delLine': { const e = ds.edges.get(P[0].a < P[0].b ? P[0].a + '-' + P[0].b : P[0].b + '-' + P[0].a), labels = e ? e.parcels.map(i => ds.parcels[i].label) : [];
+        if (labels.length >= 2 && !confirm(`刪除線 ${P[0].a}–${P[0].b}＝合併 ${labels.join('、')}？可復原`)) break;
+        const r = Core.deleteEdge(ds, P[0].a, P[0].b); pushStruct(r.delta, `刪除線 ${P[0].a}–${P[0].b}`); clearSel(); msg(`已刪除線 ${P[0].a}–${P[0].b}：${r.merged.join('、')} 併入 ${r.keep}`); break; }
+      case 'addFace': { const r = Core.addFace(ds, P.map(p => p.id), unMother()); pushStruct(r.delta, `新增面 ${r.label}`); const q = ds.parcels.find(p => p.label === r.label && !p.deleted); clearSel(); if (q) S.sel.par.add(q.idx); msg(`已建立 ${r.label}（${q ? q.area.toFixed(2) : ''} m²）`); break; }
+      case 'delFace': deleteParcelUI([P[0].idx]); break;
+      case 'mergeFace': if (P.length < 2) throw new Error('至少點兩宗'); mergeParcelsUI(P.map(p => p.idx)); break;
+      case 'redraw': clearSel(); S.sel.par.add(P[0].idx); S.topo = null; startRedraw(); topoPanel(); return;
+    }
+  } catch (err) { msg(`${TOPO[T.tool].name}：${err.message}`); }
+  setHint(`${TOPO[T.tool].name}：${TOPO[T.tool].hint}　（繼續下一筆，Esc 結束）`); topoPanel(); refresh();
+}
+function drawTopo() {
+  const T = S.topo; if (!T || !T.picks.length) return; ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = ctx.fillStyle = '#f08c00';
+  for (const p of T.picks) {
+    if (p.t === 'pt') { const q = S.ds.points.get(p.id); if (q) { ctx.beginPath(); ctx.arc(toSx(q.x), toSy(q.y), 8, 0, 7); ctx.stroke(); } }
+    else if (p.t === 'edge') { const a = S.ds.points.get(p.a), b = S.ds.points.get(p.b); ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); ctx.stroke(); ctx.lineWidth = 3; }
+    else if (p.t === 'par') { ctx.globalAlpha = 0.25; tracePoly(S.ds, S.ds.parcels[p.idx].ids); ctx.fill(); ctx.globalAlpha = 1; }
+  }
+  if (T.tool === 'addFace' && T.picks.length > 1) { ctx.setLineDash([6, 4]); ctx.beginPath(); T.picks.forEach((p, i) => { const q = S.ds.points.get(p.id); i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)); }); ctx.stroke(); }
+  ctx.restore();
+}
+// 待修清單
+S.tq = { src: 'chk', i: -1, done: new Set() };
+function tqItems() {
+  const ds = S.ds; if (!ds) return [];
+  const byLabel = l => ds.parcels.find(p => !p.deleted && p.label === l);
+  switch ($('tqSrc').value) {
+    case 'chk': return S.chk.res ? S.chk.res.rows.filter(r => !S.chk.ok.has(r.label)).map(r => ({ key: 'chk|' + r.label, label: r.label, text: `${r.level === 'red' ? '紅' : r.level === 'yellow' ? '黃' : '碎片'}：` + [r.vec ? `離舊圖線 ${r.vec.offLen.toFixed(0)} m、舊圖線穿過內部 ${r.vec.innerLen.toFixed(0)} m` : '', r.img ? `影像無墨線 ${r.img.offLen.toFixed(0)}/${r.img.checked.toFixed(0)} m` : '', r.fix ? `建議併入 ${r.fix.label}` : ''].filter(Boolean).join('；') })) : [];
+    case 'neg': return S.bl.res ? S.bl.res.missing.map(m => ({ key: 'miss|' + m.label, label: m.label, rings: m.rings, text: `遺漏：接圖前 ${m.area.toFixed(0)} m²，現屬 ${m.cover.map(h => h.label).join('、')}` }))
+      .concat(S.bl.res.flagged.filter(x => x.diff < 0).map(x => ({ key: 'neg|' + x.label, label: x.label, rings: x.rings, text: `較差 ${x.diff.toFixed(1)} m²（${x.ratio.toFixed(1)} 倍公差，${x.cause}）` })))
+      .concat(S.bl.res.occupied.map(o => ({ key: 'occ|' + o.label, label: o.label, rings: o.rings, text: `被未登記地佔用 ${o.occ.toFixed(1)} m²：${o.cover.map(h => h.label).join('、')}` }))) : [];
+    case 'area': return S.bl.res ? S.bl.res.flagged.map(x => ({ key: 'area|' + x.label, label: x.label, rings: x.rings, text: `較差 ${x.diff >= 0 ? '+' : ''}${x.diff.toFixed(1)} m²（${x.ratio.toFixed(1)} 倍公差，${x.cause}）` })) : [];
+    case 'unreg': return Core.unregSummary(ds, unN(), unRatio(), unMin()).parcels.filter(p => p.over).map(p => ({ key: 'un|' + p.label, label: p.label, text: `未登記地 ${p.pts} 點、長寬比 ${isFinite(p.ratio) ? p.ratio.toFixed(1) : '—'}、${p.area.toFixed(0)} m²` }));
+    case 'ring': return Core.ringIssues(ds).map(o => ({ key: 'ring|' + ds.parcels[o.p].label + '|' + o.kind, label: ds.parcels[o.p].label, text: Core.ringIssueLine(ds, o) }));
+  }
+  return [];
+}
+function tqPanel() {
+  const items = tqItems().filter(x => !S.tq.done.has(x.key)); S.tq.items = items; if (S.tq.i >= items.length) S.tq.i = items.length - 1;
+  $('tqPos').textContent = items.length ? `${S.tq.i + 1 > 0 ? S.tq.i + 1 : '—'} / ${items.length}` : '沒有待修項目';
+  const it = items[S.tq.i]; $('tqInfo').innerHTML = it ? `<b>${esc(it.label)}</b>　${esc(it.text)}` : ($('tqSrc').value === 'chk' && !S.chk.res ? '請先做第 6 步檢核' : ($('tqSrc').value !== 'unreg' && $('tqSrc').value !== 'ring' && !S.bl.res ? '請先做接圖前比對' : ''));
+  $('tqPrev').disabled = $('tqNext').disabled = !items.length; $('tqDone').disabled = !it;
+}
+function tqGo(step) {
+  const items = S.tq.items || tqItems(); if (!items.length) return; S.tq.i = ((S.tq.i < 0 && step < 0 ? 0 : S.tq.i) + step + items.length) % items.length; const it = items[S.tq.i];
+  const p = S.ds.parcels.find(q => !q.deleted && q.label === it.label); clearSel();
+  if (p) { S.sel.par.add(p.idx); zoomTo([p.idx]); }
+  else if (it.rings && it.rings.length) { let b = null; for (const r of it.rings) for (const q of r) b = b ? { x0: Math.min(b.x0, q.x), x1: Math.max(b.x1, q.x), y0: Math.min(b.y0, q.y), y1: Math.max(b.y1, q.y) } : { x0: q.x, x1: q.x, y0: q.y, y1: q.y }; const m = Math.max(10, (b.x1 - b.x0 + b.y1 - b.y0) * 0.3); fit({ x0: b.x0 - m, x1: b.x1 + m, y0: b.y0 - m, y1: b.y1 + m }); }
+  S.tq.focus = it; tqPanel(); refresh(); msg(`${it.label}：${it.text}`);
+}
+function tqMarkDone() { const it = (S.tq.items || [])[S.tq.i]; if (!it) return; if (it.key.startsWith('chk|')) S.chk.ok.add(it.label); else S.tq.done.add(it.key); S.tq.i--; tqGo(1); }
+$('topoTools').addEventListener('click', e => { const b = e.target.closest('[data-topo]'); if (!b) return; S.topo && S.topo.tool === b.dataset.topo ? topoCancel() : topoStart(b.dataset.topo); });
+$('tqPrev').onclick = () => tqGo(-1); $('tqNext').onclick = () => tqGo(1); $('tqDone').onclick = tqMarkDone; $('tqSrc').onchange = () => { S.tq.i = -1; tqPanel(); };
+$('dlgTopo').addEventListener('close', () => { if (S.topo) topoCancel(); });
+
 // ── AI / MCP 預留介面 ─────────────────────────────────────────────────────
 const findPar = q => S.ds.parcels.find(p => p.label === String(q) || p.oldLabel === String(q));
 const toFile = f => { const o = new File([f.base64 ? Uint8Array.from(atob(f.base64), c => c.charCodeAt(0)) : new TextEncoder().encode(f.text || '')], f.name.split('/').pop()); o._path = f.path || f.name; return o; };   // path：相對路徑（loadProject 依資料夾分類用）
@@ -2239,6 +2355,7 @@ const api = {
   getVersion: () => ({ version: APP_VERSION, changelog: CHANGELOG, update: S.update }),
   checkUpdate: o => checkUpdate(o || {}),
   getView: () => ({ cx: S.view.cx, cy: S.view.cy, px_per_m: S.view.s, width: W, height: H, note: 'screen_x=(E-cx)*px_per_m+width/2, screen_y=height/2-(N-cy)*px_per_m' }),
+  getParcel: ({ label }) => { const p = findPar(label); if (!p) throw new Error('找不到地號 ' + label); return { label: p.label, area: p.area, area_registered: p.areaReg, points: p.ids.map(id => { const q = S.ds.points.get(id); return { id, y: q.y, x: q.x }; }) }; },
   listParcels: () => S.ds.parcels.map(p => ({ label: p.label, old_label: p.oldLabel, area: p.area, area_before: p.areaOrig, area_ref: p.areaRef, area_registered: p.areaReg, points: p.ids })),
   select: ({ points = [], edges = [], parcels = [], add = false } = {}) => {
     if (!add) clearSel(); points.forEach(id => S.sel.pt.add(id)); edges.forEach(k => S.sel.edge.add(k));
@@ -2298,6 +2415,12 @@ const api = {
   exportReportHtml: ({ negOnly = false } = {}) => reportHtml(negOnly),
   fixOldMap: () => fixOldMap({ report: false }),   // 第 6 步一鍵修正（遺漏切回、較差為負補回、碎片併入），回傳結果；報告另以 exportReportHtml({negOnly:true}) 取得
   restoreShortfall: ({ label }) => { if (!S.bl.res) blRun(); const x = S.bl.res.area.find(a => a.label === String(label)); if (!x) throw new Error('沒有 ' + label + ' 的面積比對'); const g = Core.restoreShortfall(S.ds, { ...x, rings: x.rings && x.rings.length ? x.rings : (S.bl.res.flagged.find(f => f.label === x.label) || {}).rings }); pushStruct(g.delta, `面積不足補回 ${label}`); blRun(); return { label, gain: g.gain, from: g.from }; },   // 接圖前比對＋舊圖檢核的互動報告（HTML 字串）
+  // ── 點線面編修（MCP）：與工具箱同一組核心；每個都可 undo ──
+  snapPointToEdge: ({ id, a, b }) => { const r = Core.snapPointToEdge(S.ds, id, a, b), d = r.delta, setXY = q => { const p = S.ds.points.get(id); p.y = q.y; p.x = q.x; }; pushUndo({ undoFn: () => { setXY(r.from); Core.applyDelta(S.ds, d, 'undo'); }, redoFn: () => { setXY(r.to); Core.applyDelta(S.ds, d, 'redo'); }, label: `點 ${id} 貼到線 ${a}–${b}` }); return { moved_m: r.dist, parcels: parLabels(d) }; },
+  mergePoints: ({ from, to }) => { const r = Core.mergePoints(S.ds, from, to); pushStruct(r.delta, `點 ${from} 併入 ${to}`); return { parcels: parLabels(r.delta) }; },
+  splitByChord: ({ parcel, a, b }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitByChord(S.ds, p.idx, a, b); pushStruct(r.delta, `新增線 ${a}–${b}`); return { keep: r.keep, created: r.created }; },
+  deleteEdge: ({ a, b }) => { const r = Core.deleteEdge(S.ds, a, b); pushStruct(r.delta, `刪除線 ${a}–${b}`); return { keep: r.keep, merged: r.merged }; },
+  addFace: ({ ids, mother = 9001 }) => { const r = Core.addFace(S.ds, ids, mother); pushStruct(r.delta, `新增面 ${r.label}`); return { label: r.label }; },
   getBaselineReport: () => { const r = S.bl.res; if (!r) return null; const strip = l => l.map(({ rings, ...x }) => x);
     return { ...r, missing: strip(r.missing), partial: strip(r.partial), unreg: strip(r.unreg), occupied: strip(r.occupied), area: undefined, flagged: strip(r.flagged), sets: S.bl.sets.map(s => s.name) }; },
 

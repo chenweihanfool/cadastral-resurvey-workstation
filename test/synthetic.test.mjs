@@ -823,4 +823,25 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const r2 = Core.compareBaseline(cur, [[same], sheets]); assert.equal(r2.missing.length, 0); assert.deepEqual(r2.fit.sets.map(g => g.mode), ['affine', 'shift'], Core.alignText(r2.fit));
   const al = Core.baselineAlign(cur, [sheets]); for (const [k, sh] of sheets.entries()) { const f = al.forDs(sh), q = sh.points.get(1) || [...sh.points.values()][0], c = cur.points.get(q.id), t = f(q.x, q.y); near(t.x, c.x, 0.05, `第 ${k} 幅 E`); near(t.y, c.y, 0.05, `第 ${k} 幅 N`); }
 }
+
+// ── 點線面編修工具箱（v0.27.0）──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings) => Core.datasetFromD({ pts: rd(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings) });
+  // 1、2 兩宗並排（0–10、10–20），2 的左下角 7 離 1 的右下角 2 只有 0.2 m（應該是同一點）；9 在 1 的上緣附近（T 字點沒接上）
+  const P = [[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 0, 20], [6, 10, 20], [7, 0, 10.2], [9, 10.3, 5]];
+  const ds = mk(P, [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [7, 5, 6, 3])]);
+  const m = Core.mergePoints(ds, 7, 2); assert.ok(!ds.points.has(7)); assert.deepEqual(ds.parcels[1].ids.includes(2), true); near(ds.parcels[1].area, 100, 1e-6);
+  Core.applyDelta(ds, m.delta, 'undo'); assert.ok(ds.points.has(7)); Core.applyDelta(ds, m.delta, 'redo');
+  // 點貼到線：9 貼到 4–3（1 的上緣，在 y=10），1 的環多一點、面積不變
+  const sp = Core.snapPointToEdge(ds, 9, 3, 4); near(sp.dist, 0.3, 1e-6); assert.equal(ds.parcels[0].ids.length, 5); near(ds.parcels[0].area, 100, 1e-6);
+  // 新增線：把 1 從 9 切到 1（左下角）→ 兩宗，面積總和不變
+  const sc = Core.splitByChord(ds, 0, 9, 1); const live = ds.parcels.filter(p => !p.deleted); assert.equal(live.length, 3); near(live.reduce((t, p) => t + p.area, 0), 200, 1e-6); assert.equal(sc.created, '1-1');
+  assert.throws(() => Core.splitByChord(ds, 0, 1, 2), /相鄰|不完全在宗地內/);
+  // 刪除線：刪 2–3（1 與 2 之間）＝合併；段界線不能刪
+  const de = Core.deleteEdge(ds, 2, 3); assert.equal(de.merged.length, 1); assert.throws(() => Core.deleteEdge(ds, 5, 6), /段界線/);
+  // 新增面：在空地 20–30 圍一塊；圍在宗地上會被擋
+  const ds2 = mk([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 0, 20], [6, 10, 20]], [ring(1, 1, 0, [1, 2, 3, 4])]);
+  const f = Core.addFace(ds2, [2, 5, 6, 3], 9001); near(ds2.parcels[f.idx ?? ds2.parcels.length - 1].area, 100, 1e-6); assert.ok(/^9001/.test(f.label));
+  assert.throws(() => Core.addFace(ds2, [1, 2, 3, 4], 9001), /已經是宗地/);
+}
 console.log('SYNTHETIC OK');

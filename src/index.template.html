@@ -32,6 +32,7 @@ main.nosb{--sw:0px}main.nosb aside{display:none}main.noflow{--fw:0px}main.noflow
 .step .sh{display:flex;align-items:center;gap:6px}.step .sh b{font-size:14px}
 .step .sn{position:absolute;left:0;top:9px;width:24px;height:24px;border-radius:50%;background:var(--bg);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
 .step .chip{margin-left:auto;font-size:11px;border:1px solid;border-radius:10px;padding:0 7px;white-space:nowrap}
+.tgrp{margin:4px 0 8px}.tgrp>b{font-size:12px;color:var(--muted);display:block;margin-bottom:3px}
 .step .sd{font-size:12px;color:var(--muted);margin:2px 0 6px}.step .sr{color:var(--ink);margin-top:5px;white-space:pre-wrap}.step .sr:empty{display:none}
 .plan{list-style:none;margin:0;padding:0}.plan li{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}.plan li .muted{margin-left:auto;font-size:11px}
 
@@ -132,7 +133,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
       <button data-act="undo">復原<small>Ctrl+Z</small></button><button data-act="redo">重做<small>Ctrl+Y</small></button><button data-act="reset">還原全部…</button><hr>
       <button data-act="pts">界址點編修…<small>新增／修改／刪除</small></button><button data-act="ptline">點移到線上…<small>垂足</small></button><button data-act="addpt">加點工具<small>A</small></button><button data-act="delpt">刪除所選界址點<small>Del</small></button><button data-act="clean">一鍵清理多餘點…</button><button data-act="ring">界址串檢查與編修…<small>地中地、跳線、重繪</small></button><button data-act="delhole">刪除所選宗地<small>地中地併入外圈</small></button><button data-act="merge">合併所選宗地<small>相連、不留空洞</small></button><button data-act="unreg">未登記土地分割合併…<small>9000 號以上</small></button><hr>
-      <button data-act="move">移動／旋轉／對位…</button></div></div>
+      <button data-act="move">移動／旋轉／對位…</button><hr><button data-act="topo">點線面編修工具箱…<small>逐筆手工修</small></button></div></div>
     <div class="menu"><button class="mbtn">檢視</button><div class="mlist">
       <button data-act="fit">全圖</button><button data-act="style">圖層與樣式…</button><button data-act="base">底圖…</button><button data-act="img">影像圖層…</button><hr>
       <button data-act="flow">顯示／隱藏作業流程欄</button><button data-act="sidebar">顯示／隱藏右側欄</button></div></div>
@@ -145,7 +146,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="addpt" title="在界址線上加界址點 (A)">加點</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button><button data-tool="img" title="平移疊合的影像（JPG／JGW）對位 (I)">移影像</button></div>
   <div class="seg" id="filters" title="可複選：決定能選取哪些要素 (1/2/3)">
     <button data-f="pt" class="on">點</button><button data-f="edge" class="on">線</button><button data-f="par" class="on">面</button></div>
-  <button class="btn" id="btnUndo" disabled>復原</button><button class="btn" id="btnRedo" disabled>重做</button>
+  <button class="btn" data-act="topo" title="點線面編修工具箱：點貼到線、點併點、刪點、加點、新增／刪除線、新增／刪除／合併面，附待修清單逐筆跳">工具箱</button><button class="btn" id="btnUndo" disabled>復原</button><button class="btn" id="btnRedo" disabled>重做</button>
   <button class="btn" id="btnFit">全圖</button>
   <input type="search" id="findTop" list="parList" placeholder="跳至地號／點號 (Ctrl+F)" title="輸入地號（例 1092-2，可只打母號）或「點 123」後按 Enter" style="width:170px"><datalist id="parList"></datalist>
   <span style="flex:1"></span>
@@ -260,11 +261,20 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="blList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
       <div class="small muted" style="margin-top:4px">圖上：紅＝遺漏（接圖前有、現在沒有）、橘＝只有一部分在圖內的接圖前宗地、粉紅框＝面積超限。點表格一列可放大檢視。</div></section>
     </div></dialog>
+<dialog class="fp" id="dlgTopo"><div class="fphead"><b>點線面編修工具箱</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody">
+<section><h2>待修清單（看完報告逐筆修）</h2>
+  <div class="row small"><select id="tqSrc"><option value="chk">舊圖檢核（紅／黃／碎片）</option><option value="neg">較差為負：遺漏、面積不足、被佔用</option><option value="area">面積超過公差（全部）</option><option value="unreg">未登記地需分割</option><option value="ring">界址串問題</option></select>
+    <button class="btn" id="tqPrev" title="上一筆">◀</button><span id="tqPos" class="muted"></span><button class="btn" id="tqNext" title="下一筆">▶</button><button class="btn" id="tqDone" title="這筆修好了，從清單劃掉並跳下一筆">✓ 修好了</button></div>
+  <div id="tqInfo" class="small" style="margin-top:4px"></div></section>
+<section><h2>工具</h2><div id="topoTools"></div>
+  <div id="topoHint" class="small" style="margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px"></div>
+  <div class="small muted" style="margin-top:6px">工具選好後在圖上依序點選（橘色＝已點選），湊齊就執行並留在同一工具，可連續修下一筆。Esc 結束、Enter 完成（新增面、合併面）、Backspace 退一步；每個動作都可 Ctrl+Z 復原。點線面之間的位相（共用點、共用線、鄰宗）會一起維護：點貼到線會接進線兩側的宗地，刪線＝兩宗合併，新增線＝切成兩宗。</div></section>
+</div></dialog>
 <dialog class="fp" id="dlgChk"><div class="fphead"><b>舊圖檢核（原分幅向量圖、舊圖影像）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>比對來源</h2>
       <div id="chkSrc" class="small"></div>
       <div class="small muted" style="margin-top:4px">每宗地先自動小幅平移去配舊圖（舊圖紙張伸縮、掃描定位誤差），再看形狀：界址線離舊圖界線太遠（多畫、跑掉）、舊圖界線穿過宗地內部（少分、併錯）、影像上該處沒有墨線。兩側都是未登記地的分割線不檢查。</div>
       <div class="row small" style="margin-top:6px"><span class="muted">向量容差</span><input type="number" id="chkTol" value="1" step="0.1" min="0.1" style="width:56px"><span class="muted">m　影像容差</span><input type="number" id="chkInkTol" value="0.6" step="0.1" min="0.1" style="width:56px"><span class="muted">m　影像平移 ±</span><input type="number" id="chkShift" value="5" step="0.5" min="0" style="width:52px"><span class="muted">m</span></div>
-      <div class="row small" style="margin-top:6px"><button class="btn primary" id="btnChkRun">開始檢核</button><button class="btn" id="btnChkFix" disabled title="遺漏地號依接圖前界址切回；較差為負且接圖後產生者依接圖前界址從相鄰未登記地補回（登記地不動）；碎片併入建議的鄰宗。可一次復原，修完重新檢核並輸出報告">一鍵修正並出報告</button><button class="btn" id="btnChkCsv" disabled>報告 CSV</button><button class="btn" id="btnChkHtml" disabled title="每筆一張卡片附局部圖，可篩選、勾已處理、寫備註、列印成 PDF；有做接圖前比對會一起放進去">互動報告（HTML／PDF）</button><label class="chk"><input type="checkbox" id="chkMap" checked>圖上標記</label><label class="chk" title="報告只列計算面積小於登記面積的宗地（遺漏一律列）"><input type="checkbox" id="rptNeg" checked>報告只列較差為負</label></div>
+      <div class="row small" style="margin-top:6px"><button class="btn primary" id="btnChkRun">開始檢核</button><button class="btn" data-act="topo" title="開工具箱，用待修清單逐筆手工修">工具箱逐筆修 →</button><button class="btn" id="btnChkFix" disabled title="遺漏地號依接圖前界址切回；較差為負且接圖後產生者依接圖前界址從相鄰未登記地補回（登記地不動）；碎片併入建議的鄰宗。可一次復原，修完重新檢核並輸出報告">一鍵修正並出報告</button><button class="btn" id="btnChkCsv" disabled>報告 CSV</button><button class="btn" id="btnChkHtml" disabled title="每筆一張卡片附局部圖，可篩選、勾已處理、寫備註、列印成 PDF；有做接圖前比對會一起放進去">互動報告（HTML／PDF）</button><label class="chk"><input type="checkbox" id="chkMap" checked>圖上標記</label><label class="chk" title="報告只列計算面積小於登記面積的宗地（遺漏一律列）"><input type="checkbox" id="rptNeg" checked>報告只列較差為負</label></div>
       <div id="chkSum" class="small" style="margin:6px 0"></div>
       <div id="chkList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
       <div class="small muted" style="margin-top:4px">圖上：紅粗線＝影像上沒有墨線、紫＝離分幅舊圖界線超過容差、藍虛線＝舊圖界線穿過宗地內部、灰框＝影像對不上（未判斷）。碎片（&lt; 30 m²）可一鍵併入建議的相鄰宗地；其餘請人工判斷後修正，按「已確認」劃掉。</div></section>
@@ -356,6 +366,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="row small" style="margin-top:8px"><button class="btn" id="btnStyleReset">全部還原預設</button><span class="muted">設定會記在這台電腦的瀏覽器；列印成果圖同樣套用。</span></div></section></div></dialog>
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
 <p><b>作業流程</b>：左側「作業流程」欄（上方「☰ 流程」開關）照順序做：<b>1 讀檔</b>（「開啟專案資料夾」一次讀入案件、舊圖影像、分幅舊圖、鄰段、EXAM.MDB）→ <b>2 自動接圖</b>（開發中）→ <b>3 鄰段接合</b> → <b>4 未登記土地合併分割</b> → <b>5 去除雜點</b> → <b>6 檢核</b>。每步按「一鍵執行」用預設值做完並顯示結果，「詳細設定…」開原本的面板調整；全部可復原。專案資料夾的慣例：鄰段放在名稱含「鄰段」的資料夾、分幅舊圖放在含「分幅」的資料夾。</p>
+<p><b>點線面編修工具箱</b>（上方「工具箱」）：看完檢核報告逐筆手工修。上半是<b>待修清單</b>（舊圖檢核、較差為負、面積超限、未登記地、界址串問題），◀ ▶ 跳到下一筆、「✓ 修好了」劃掉。下半是工具：點（線上加點、加孤立點、移動、刪點、點貼到線、點併點）、線（新增線＝切開宗地、刪除線＝兩宗合併）、面（新增面＝空地建新地號、刪除面、合併面、重繪界址串）。選工具後在圖上依序點選，湊齊就執行；Esc 結束、Enter 完成、Backspace 退一步，Ctrl+Z 復原。</p>
 <p><b>舊圖檢核</b>（步驟 6，「處理→舊圖檢核」）：每宗地先小幅平移去配舊圖，再比形狀——界址線離分幅舊圖界線太遠（紫）、舊圖界線穿過宗地內部（藍虛線）、舊圖影像上該處沒有墨線（紅）。影像對不上的方格（灰框）不判斷。碎片（&lt; 30 m²）可一鍵併入建議的相鄰宗地；其餘請人工判斷後修正，按「已確認」劃掉。</p>
 <p><b>版面</b>：上方是<b>功能列表</b>（檔案／編輯／檢視／處理／說明）與常用工具列；細項設定都在選單開出的<b>浮動面板</b>裡（開著也能操作圖面，✕ 關閉）。右側欄只留兩塊：選取資訊與面積較差表，可收折，也可在「檢視」隱藏。</p>
 <p><b>界址點編修</b>：「編輯→界址點編修」或工具列「加點」(<kbd>A</kbd>)。<b>新增</b>：在界址線上點一下，新點落在線上（垂足），所有以該線為界的宗地都一併插入、面積不變；Shift＋點空白處＝孤立點；也可輸入座標新增。<b>修改</b>：拖曳、方向鍵或輸入座標。<b>刪除</b>：選取點按 <kbd>Del</kbd>，會從所有含該點的宗地移除，環不能少於 3 點，圓弧的點不能刪。全部可復原。新增／刪除後請輸出 D14 與 D13（D13 輸出尚未用 NECEXE 驗證）。</p>

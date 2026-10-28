@@ -1578,6 +1578,62 @@ const Core = (() => {
     const left = ds.parcels.filter(p => ok(p) && p.area < minArea && (!only || only.has(p.idx))).map(p => p.label);
     return { deltas, merged, left };
   }
+  // ── 點線面編修工具箱（v0.27.0）：手工逐筆修正用的位相編輯。每個函式回傳 {delta, …}，由呼叫端放進復原堆疊 ──
+  const ringHasArc = p => !!(p.mid && p.mid.some(Boolean));
+  const dedupRing = ids => { const out = []; for (const id of ids) if (out[out.length - 1] !== id) out.push(id); while (out.length > 1 && out[0] === out[out.length - 1]) out.pop(); return out; };
+  // 點併點：點 from 的所有用法改成 to（兩點變一點，to 的坐標不動），from 刪除。環不能少於 3 點、也不能因此重複經過同一點
+  function mergePoints(ds, from, to) {
+    if (from === to) throw new Error('請點兩個不同的界址點'); if (!ds.points.has(from) || !ds.points.has(to)) throw new Error('找不到界址點');
+    const d = newDelta();
+    for (const pi of ds.pointParcels.get(from) || []) {
+      const p = ds.parcels[pi]; if (p.deleted) continue; if (ringHasArc(p)) throw new Error(`${p.label} 含圓弧，暫不支援`);
+      const ids = dedupRing(p.ids.map(id => (id === from ? to : id)));
+      if (ids.length < 3) throw new Error(`${p.label} 會少於 3 點`); if (new Set(ids).size !== ids.length) throw new Error(`${p.label} 會重複經過界址點 ${to}（自我接觸），請改用重繪界址串`);
+      touchParcel(d, p); p.ids = ids; p.mid = ids.map(() => false);
+    }
+    const q = ds.points.get(from); ds.points.delete(from); d.removed.push(q);
+    return { delta: closeDelta(ds, d), removed: from, into: to };
+  }
+  // 點貼到線：把點 id 移到界址線 a–b 的垂足，並接進所有以 a–b 為界的宗地（T 字接點補齊）。坐標移動不在 delta 內，回傳 from/to 由呼叫端一併復原
+  function snapPointToEdge(ds, id, a, b) {
+    if (id === a || id === b) throw new Error('點就是這條線的端點'); const e = ds.edges.get(segKey(a, b)); if (!e) throw new Error(`找不到界址線 ${a}–${b}`); if (e.arcPart) throw new Error('圓弧上的線段暫不支援');
+    const P = ds.points.get(id), A = ds.points.get(a), B = ds.points.get(b), dx = B.x - A.x, dy = B.y - A.y, l2 = dx * dx + dy * dy, t = ((P.x - A.x) * dx + (P.y - A.y) * dy) / l2;
+    if (!(t > 1e-6 && t < 1 - 1e-6)) throw new Error('垂足不在線段上（點在線段兩端之外），請改用點併點');
+    const from = { y: P.y, x: P.x }, to = { y: A.y + t * dy, x: A.x + t * dx }, d = newDelta();
+    for (const pi of ds.pointParcels.get(id) || []) touchParcel(d, ds.parcels[pi]);   // 點移動，原本用到它的宗地面積也要重算
+    P.y = to.y; P.x = to.x;
+    for (const p of ds.parcels) { if (p.deleted) continue; const k = p.ids.length;
+      for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) { if (p.ids.includes(id)) throw new Error(`${p.label} 已經用到點 ${id}，貼上去會自我接觸`); touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); break; } } }
+    return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y) };
+  }
+  // 新增線：在宗地 pi 內連接兩個既有界址點，切成兩宗（切下的一側編新子號，同母號接續；較大的一側保留原地號）
+  function splitByChord(ds, pi, a, b) {
+    const p = ds.parcels[pi]; if (!p || p.deleted) throw new Error('宗地不存在'); if (ringHasArc(p)) throw new Error(`${p.label} 含圓弧，暫不支援`);
+    if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，暫不支援切開`);
+    const ring = ccwIds(p.ids, ds.points), i = ring.indexOf(a), j = ring.indexOf(b); if (i < 0 || j < 0) throw new Error(`兩點都要是 ${p.label} 的界址點`);
+    if (Math.abs(i - j) === 1 || Math.abs(i - j) === ring.length - 1) throw new Error('兩點已經相鄰（本來就有這條線）');
+    if (!chordInside(ring, i, j, ds.points)) throw new Error('這條線不完全在宗地內，或碰到其他界址點');
+    const [s, e] = i < j ? [i, j] : [j, i], c1 = ring.slice(s, e + 1), c2 = ring.slice(e).concat(ring.slice(0, s + 1));
+    const [small, big] = Math.abs(signedArea(c1, ds.points)) <= Math.abs(signedArea(c2, ds.points)) ? [c1, c2] : [c2, c1];
+    const d = newDelta(); touchParcel(d, p); p.ids = big; p.mid = big.map(() => false); p.unregEdit = true;
+    const q = createParcel(ds, d, mainNo(p), small, p); return { delta: closeDelta(ds, d), keep: p.label, created: q.label };
+  }
+  // 刪除線：刪掉兩宗之間的界址線＝兩宗合併（保留 keep，預設已登記且地號小者）。段界線（只屬一宗）不能刪
+  function deleteEdge(ds, a, b, keep) {
+    const e = ds.edges.get(segKey(a, b)); if (!e) throw new Error(`找不到界址線 ${a}–${b}`);
+    const ps = e.parcels.filter(i => !ds.parcels[i].deleted); if (ps.length < 2) throw new Error('這是段界線（只屬於一宗），刪了會出現缺口；要刪整宗請用「刪除面」');
+    return mergeParcels(ds, ps, keep);
+  }
+  // 新增面：依序點選的界址點圍出的範圍建為新宗地（只能建在沒有宗地的地方，例如縫、空隙）
+  function addFace(ds, ids, mother) {
+    ids = dedupRing(ids); if (ids.length < 3) throw new Error('至少 3 點'); if (new Set(ids).size !== ids.length) throw new Error('同一點點了兩次');
+    const P = ds.points, ring = ccwIds(ids, P); if (Math.abs(signedArea(ring, P)) < 0.01) throw new Error('圍出的面積太小');
+    const ip = interiorPoint(ring, P), inside = new Set(ring);
+    for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3) continue;
+      if (pointInRing(p.ids, P, ip.y, ip.x) && !(p.holes || []).some(h => pointInRing(ds.parcels[h].ids, P, ip.y, ip.x))) throw new Error(`範圍內已經是宗地 ${p.label}，新增面只能建在空地`);
+      for (const id of p.ids) { if (inside.has(id)) continue; const q = P.get(id); if (pointInRing(ring, P, q.y, q.x)) throw new Error(`範圍內有 ${p.label} 的界址點 ${id}，請沿著既有界址點圍`); } }
+    return fillRegion(ds, ring, mother);
+  }
   // 空隙或凹口建為新的未登記地
   function fillRegion(ds, ids, mother) {
     if (ids.length < 3) throw new Error('範圍至少 3 點'); const d = newDelta(), p = createParcel(ds, d, mother, ccwIds(ids, ds.points), null);
@@ -2724,7 +2780,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, absorbSlivers, seamGaps, fillSeamGap, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, absorbSlivers, mergePoints, snapPointToEdge, splitByChord, deleteEdge, addFace, seamGaps, fillSeamGap, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall,
