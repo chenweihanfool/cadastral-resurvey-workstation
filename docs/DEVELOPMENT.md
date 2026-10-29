@@ -156,6 +156,9 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 - **瀏覽器自動化測試**：以本機 `python -m http.server` 開頁，用 `DataTransfer` 把檔案塞進 `#fileIn` 觸發載入；用 `CadastralAPI.getView()` 換算螢幕座標；截圖座標可能有縮放；視窗被遮住時 `requestAnimationFrame` 會停。
 - **GitHub**：倉庫名不可含中文；`main` 已設定必須通過 `test` 檢查；PR 已通過 CI 時 `set_auto_merge` 會回「clean status」，直接 `gh pr merge --squash --delete-branch`。
 
+- **render() 內的區域函式**：`tracePoly` 等是 `render()` 裡的區域函式，`drawTopo` 之類的外部繪圖函式不能用。v0.27.0 在 `drawTopo` 用了 `tracePoly`，丟例外時 `ctx.save()` 沒 `restore()`，`globalAlpha=0.25` 殘留，整張圖變淡（使用者回報「合併面後顏色變淡」）。v0.28.0 起 `render()` 開頭重設 `globalAlpha`／`setLineDash`。
+- **待修清單索引**：`S.tq.items` 是上一次的清單；「修好了」之後要重算（`tqLive()`）再跳，否則畫面跳到剛修好的那宗、對話框顯示下一筆（v0.27.0）。
+
 ## 7. 在雲端／新環境接手
 
 ```bash
@@ -178,3 +181,9 @@ node build.mjs               # 產生 product/index.html
 - 對外動作（建立倉庫、設定、上傳）要先符合使用者明確要求；**真實案件資料與廠商軟體絕不上傳**。
 
 **空隙建號的重疊檢查（v0.27.1）**：`seamGaps`、`freeRegions` 的面只用「內部一點」判斷是否為空地，空地裡有不相連的宗地（孤島）時內部點落在空處，建出來卻把孤島包進去（`ringConflicts` 也查不到，因為兩環沒有邊交錯）。現在 `overlapParcel(ds, pts, tol)` 逐宗用 `polysOverlap`（頂點深入對方內部 > tol、邊在離端點 > tol 處交錯、內部點互含）比對：`seamGaps` 把會蓋到本段或鄰段宗地的面放進 `out.skipped`（不列），`fillSeamGap`／`fillRegion`（含 `addFace`、凹口）建立前再擋一次。使用者回報 KC0336 的空隙建號與鄰地重疊、合併分割跑不出結果；合成資料重現的是孤島情形，**尚未用 KC0336 確認是同一原因**。
+
+**點貼到線的位相重建（v0.28.0）**：`snapPointToEdge` 把點插進以 a–b 為界的宗地後，呼叫 `healAround(ds, d, [id, a, b])`：取用到這些點的宗地與它們的鄰宗（共點），以 `healJunctions` 補 T 字接點（某宗的界址點落在另一宗的邊上就插進那條邊，所有用那條邊的宗地一起插；已用到該點的宗地不插，避免自我接觸）。典型情形：原本用這一點的宗地，其相鄰邊在貼上後與被貼的線部分共線，線上的界址點（例如 a）落在那條邊上——沒補的話 NECEXE .ERR 報重疊。`mergePoints` 也做同樣處理。合成資料（test/synthetic）驗證 `ringConflicts` 為 0；**尚未用使用者的 ERR 案例確認是同一原因**。
+
+**分幅線（v0.28.0）**：`Core.sheetLines(cur, sets, {gap=6, align})`：同一組（例如「單幅」資料夾）兩幅以上時，每幅的外緣邊（只屬一宗）用 `baselineAlign` 轉到作業圖，中點與兩端都在另一幅外緣 `gap` m 內的邊＝接合處；兩幅各一條只留編號小的那幅。`nearSheetLines(cur, sl, dist=10)`：界址線取樣點離分幅線 ≤ dist 的宗地，依接合處（兩幅一對）分組、沿線排序。介面在步驟 2 一鍵執行、載入多幅分幅舊圖時自動執行（`sheetAuto`）；待修清單 `tqSort` 把附近的排前面。之後自動接圖會以這組線為基準。只用合成資料驗證，**尚未用 KC0336 的 18 個單幅看結果**。
+
+**專案檔（v0.28.0）**：`.crwp`＝JSON（`format: cadastral-resurvey-workstation/project@1`）。`source`＝讀入的原始檔案（`{path, base64}`；main＝`loadFiles` 收到的非影像檔，nb、bl（每組一份，含名稱與是否為案件資料夾內 COA）、img（可選）、own＝另外讀的 MDB），由各載入函式記在 `S.src`（`srcRec`），存檔時只留仍在使用的（`srcLive`）。`state`＝`Core.datasetState(ds)`（全部點位物件、每宗的欄位，不含 idx／area）＋`S.wf`、`S.bl.res`、`S.chk.res`（`bl` 另存一份）與 `S.chk.ok`、待修清單、分幅線、鄰段模式、各面板 input 值、`view`。開啟（`openProjectData`）＝清空鄰段／分幅舊圖／影像 → 照原樣重新讀入原始檔（D 檔原始位元組、面積基準、`ds.orig` 都與當初相同，輸出時就地修補照舊）→ `Core.applyDatasetState`（前 n0 宗的 key 必須相同，否則拒絕）→ 套回其餘狀態。復原記錄不存。自動暫存：IndexedDB `kv` 表的 `src`（File／Blob，讀入新檔後寫一次；影像總和 < 400 MB 才存）、`state`、`meta`（每次修改約 3 秒後），啟動時 `resumeOffer` 顯示「接著做」。在 file:// 下 Chrome 能否用 IndexedDB 與 `showSaveFilePicker` 未在使用者電腦確認（headless Chromium 可）；不支援時存檔改成下載。

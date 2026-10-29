@@ -28,6 +28,9 @@ main.nosb{--sw:0px}main.nosb aside{display:none}main.noflow{--fw:0px}main.noflow
 #flowTabs{margin:10px 12px 4px;display:flex}#flowTabs button{flex:1}
 #flow .stage{padding:0 12px 12px}#flow .stage h3{font-size:12px;color:var(--muted);font-weight:600;margin:10px 0 4px;letter-spacing:.04em}
 .steps{list-style:none;margin:0;padding:0;counter-reset:s}
+.prog{margin:10px 12px 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px}.prog .ph{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}.prog .ph span{font-weight:700;color:var(--ok)}
+.pbar{height:7px;border-radius:4px;background:var(--line);overflow:hidden;margin:3px 0}.pbar i{display:block;height:100%;width:0;background:var(--ok);transition:width .3s}.pbar.fix i{background:#1c7ed6}
+.resume{margin:10px 12px 0;padding:8px 10px;border:1px solid #1c7ed6;border-radius:8px;background:color-mix(in srgb,#1c7ed6 8%,transparent)}
 .step{position:relative;padding:10px 0 10px 34px;border-bottom:1px solid var(--line)}
 .step .sh{display:flex;align-items:center;gap:6px}.step .sh b{font-size:14px}
 .step .sn{position:absolute;left:0;top:9px;width:24px;height:24px;border-radius:50%;background:var(--bg);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
@@ -123,11 +126,12 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <header>
   <button class="btn" id="btnFlow" title="顯示／隱藏作業流程欄">☰ 流程</button><h1>地籍圖重測工作站</h1>
   <input type="file" id="fileIn" multiple hidden>
-  <input type="file" id="dirIn" webkitdirectory hidden><input type="file" id="projDir" webkitdirectory hidden>
+  <input type="file" id="dirIn" webkitdirectory hidden><input type="file" id="projDir" webkitdirectory hidden><input type="file" id="projIn" accept=".crwp" hidden>
   <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden><input type="file" id="blIn" multiple hidden><input type="file" id="ownIn" accept=".mdb,.MDB" hidden><input type="file" id="blDir" webkitdirectory hidden>
   <nav id="menubar">
     <div class="menu"><button class="mbtn">檔案</button><div class="mlist">
       <button data-act="project">開啟專案資料夾…<small>案件、影像、分幅、鄰段一次讀入</small></button><button data-act="open">開啟檔案…</button><button data-act="folder">開啟案件資料夾…</button><hr>
+      <button data-act="projopen">開啟專案檔…<small>.crwp，接著上次做</small></button><button data-act="projsave">儲存專案檔<small>Ctrl+S</small></button><button data-act="projsaveas">另存專案檔…<small>Ctrl+Shift+S</small></button><hr>
       <button data-act="data">資料來源與匯入…<small>鄰段、影像、控制點</small></button><button data-act="imp">匯入現況點…</button><hr>
       <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
@@ -154,6 +158,10 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 </header>
 <main>
   <nav id="flow" aria-label="作業流程">
+    <div id="resume" class="resume small" hidden></div>
+    <div id="prog" class="prog" hidden><div class="ph"><b id="progName"></b><span id="progPct"></span></div>
+      <div class="pbar" title="圖資準備（步驟 1～6）"><i id="progPrep"></i></div><div class="pbar fix" title="檢核後逐筆修：劃掉的筆數"><i id="progFix"></i></div>
+      <div id="progText" class="small"></div><div class="row small" style="margin-top:4px"><button class="btn" data-act="projsave" title="原始檔案與目前進度存成一個 .crwp 檔（Ctrl+S）">儲存專案檔</button><button class="btn" data-act="projopen">開啟專案檔</button><span id="progSave" class="muted"></span></div></div>
     <div class="seg" id="flowTabs"><button data-stage="stPrep" class="on">圖資準備</button><button data-stage="stAdj">重測調整</button><button data-stage="stOut">成果</button></div>
     <div class="stage" id="stPrep"><ol class="steps" id="steps"></ol>
       <div class="row" style="margin-top:10px"><button class="btn" id="wfRunAll" title="依序執行步驟 3～6；任何一步失敗就停下">依序執行 3～6</button><span class="small muted">每一步都可復原（Ctrl+Z）</span></div>
@@ -263,8 +271,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     </div></dialog>
 <dialog class="fp" id="dlgTopo"><div class="fphead"><b>點線面編修工具箱</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody">
 <section><h2>待修清單（看完報告逐筆修）</h2>
-  <div class="row small"><select id="tqSrc"><option value="chk">舊圖檢核（紅／黃／碎片）</option><option value="neg">較差為負：遺漏、面積不足、被佔用</option><option value="area">面積超過公差（全部）</option><option value="unreg">未登記地需分割</option><option value="ring">界址串問題</option></select>
+  <div class="row small"><select id="tqSrc"><option value="chk">舊圖檢核（紅／黃／碎片）</option><option value="neg">較差為負：遺漏、面積不足、被佔用</option><option value="area">面積超過公差（全部）</option><option value="unreg">未登記地需分割</option><option value="ring">界址串問題</option><option value="sheet">分幅線附近（沿接合線逐宗看）</option></select>
     <button class="btn" id="tqPrev" title="上一筆">◀</button><span id="tqPos" class="muted"></span><button class="btn" id="tqNext" title="下一筆">▶</button><button class="btn" id="tqDone" title="這筆修好了，從清單劃掉並跳下一筆">✓ 修好了</button></div>
+  <div class="row small" style="margin-top:4px"><label class="chk" title="分幅線（步驟 2）附近的地號排在最前面：接圖出問題的多半在分幅線附近"><input type="checkbox" id="tqSheet" checked>分幅線附近優先</label><label>距離 ≤ <input id="sheetDist" type="number" value="10" min="1" step="1" style="width:4em"> m</label><label class="chk"><input type="checkbox" id="sheetShow" checked>圖上顯示分幅線</label></div>
   <div id="tqInfo" class="small" style="margin-top:4px"></div></section>
 <section><h2>工具</h2><div id="topoTools"></div>
   <div id="topoHint" class="small" style="margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px"></div>
@@ -365,8 +374,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <dialog class="fp" id="dlgStyle"><div class="fphead"><b>圖層與樣式</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><div id="styleRows"></div>
   <div class="row small" style="margin-top:8px"><button class="btn" id="btnStyleReset">全部還原預設</button><span class="muted">設定會記在這台電腦的瀏覽器；列印成果圖同樣套用。</span></div></section></div></dialog>
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
-<p><b>作業流程</b>：左側「作業流程」欄（上方「☰ 流程」開關）照順序做：<b>1 讀檔</b>（「開啟專案資料夾」一次讀入案件、舊圖影像、分幅舊圖、鄰段、EXAM.MDB）→ <b>2 自動接圖</b>（開發中）→ <b>3 鄰段接合</b> → <b>4 未登記土地合併分割</b> → <b>5 去除雜點</b> → <b>6 檢核</b>。每步按「一鍵執行」用預設值做完並顯示結果，「詳細設定…」開原本的面板調整；全部可復原。專案資料夾的慣例：鄰段放在名稱含「鄰段」的資料夾、分幅舊圖放在含「分幅」的資料夾。</p>
-<p><b>點線面編修工具箱</b>（上方「工具箱」）：看完檢核報告逐筆手工修。上半是<b>待修清單</b>（舊圖檢核、較差為負、面積超限、未登記地、界址串問題），◀ ▶ 跳到下一筆、「✓ 修好了」劃掉。下半是工具：點（線上加點、加孤立點、移動、刪點、點貼到線、點併點）、線（新增線＝切開宗地、刪除線＝兩宗合併）、面（新增面＝空地建新地號、刪除面、合併面、重繪界址串）。選工具後在圖上依序點選，湊齊就執行；Esc 結束、Enter 完成、Backspace 退一步，Ctrl+Z 復原。</p>
+<p><b>作業流程</b>：左側「作業流程」欄（上方「☰ 流程」開關）照順序做：<b>1 讀檔</b>（「開啟專案資料夾」一次讀入案件、舊圖影像、分幅舊圖、鄰段、EXAM.MDB）→ <b>2 自動接圖</b>（目前先加入分幅線：分幅舊圖各幅的接合處，載入兩幅以上時自動加入；依分幅線自動接圖開發中）→ <b>3 鄰段接合</b> → <b>4 未登記土地合併分割</b> → <b>5 去除雜點</b> → <b>6 檢核</b>。每步按「一鍵執行」用預設值做完並顯示結果，「詳細設定…」開原本的面板調整；全部可復原。專案資料夾的慣例：鄰段放在名稱含「鄰段」的資料夾、分幅舊圖放在含「分幅」的資料夾。</p>
+<p><b>點線面編修工具箱</b>（上方「工具箱」）：看完檢核報告逐筆手工修。上半是<b>待修清單</b>（舊圖檢核、較差為負、面積超限、未登記地、界址串問題），◀ ▶ 跳到下一筆、「✓ 修好了」劃掉。下半是工具：點（線上加點、加孤立點、移動、刪點、點貼到線、點併點）、線（新增線＝切開宗地、刪除線＝兩宗合併）、面（新增面＝空地建新地號、刪除面、合併面、重繪界址串）。選工具後在圖上依序點選，湊齊就執行；Esc 結束、Enter 完成、Backspace 退一步，Ctrl+Z 復原。勾「分幅線附近優先」時，分幅線附近的地號排在清單最前面（也可選「分幅線附近」沿接合線逐宗看）。</p>
+<p><b>專案檔</b>（檔案 → 儲存專案檔，Ctrl+S）：把讀入的原始檔案（案件、鄰段、分幅舊圖、EXAM.MDB，可選含影像）與目前進度（點位、界址串、各步驟結果、檢核報告與「修好了」、待修清單、分幅線、設定）存成一個 <code>.crwp</code> 檔；下次「開啟專案檔」或把它拖進畫面就接著做（復原記錄不存）。程式也會自動暫存在瀏覽器，重開時流程欄上方會出現「接著做」。流程欄上方的進度條：綠＝圖資準備 6 步、藍＝檢核後逐筆修劃掉的比例。</p>
 <p><b>舊圖檢核</b>（步驟 6，「處理→舊圖檢核」）：每宗地先小幅平移去配舊圖，再比形狀——界址線離分幅舊圖界線太遠（紫）、舊圖界線穿過宗地內部（藍虛線）、舊圖影像上該處沒有墨線（紅）。影像對不上的方格（灰框）不判斷。碎片（&lt; 30 m²）可一鍵併入建議的相鄰宗地；其餘請人工判斷後修正，按「已確認」劃掉。</p>
 <p><b>版面</b>：上方是<b>功能列表</b>（檔案／編輯／檢視／處理／說明）與常用工具列；細項設定都在選單開出的<b>浮動面板</b>裡（開著也能操作圖面，✕ 關閉）。右側欄只留兩塊：選取資訊與面積較差表，可收折，也可在「檢視」隱藏。</p>
 <p><b>界址點編修</b>：「編輯→界址點編修」或工具列「加點」(<kbd>A</kbd>)。<b>新增</b>：在界址線上點一下，新點落在線上（垂足），所有以該線為界的宗地都一併插入、面積不變；Shift＋點空白處＝孤立點；也可輸入座標新增。<b>修改</b>：拖曳、方向鍵或輸入座標。<b>刪除</b>：選取點按 <kbd>Del</kbd>，會從所有含該點的宗地移除，環不能少於 3 點，圓弧的點不能刪。全部可復原。新增／刪除後請輸出 D14 與 D13（D13 輸出尚未用 NECEXE 驗證）。</p>
