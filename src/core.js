@@ -2779,16 +2779,28 @@ svg text{font-family:sans-serif;text-anchor:middle;dominant-baseline:middle}svg 
 <main><div class="sum">${cats.map(([c, n]) => `<a href="#${(items.find(i => i.cat === c) || {}).id}"><b>${count(c)}</b>${n}</a>`).join('')}</div>
 <p class="legend">圖例：<i style="border-color:#1f6feb"></i>本筆（目前的圖）<i style="border-color:#d1242f;border-top-style:dashed"></i>接圖前界址<i style="border-color:#8a93a6"></i>其他宗地` + (items.some(i => i.cat === 'chk') ? `<i style="border-color:rgba(209,36,47,.75);border-top-width:5px"></i>影像無墨線<i style="border-color:#ae3ec9"></i>離舊圖線<i style="border-color:#1c7ed6;border-top-style:dashed"></i>舊圖線穿過內部` : '') + `</p>
 ${items.length ? items.map(card).join('') : '<p>沒有需要處理的項目。</p>'}</main>
-<script>(()=>{const K='cwreport:${key.replace(/'/g, '')}:',S={get:k=>{try{return localStorage.getItem(K+k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(K+k,v)}catch(e){}}};
+<script>(()=>{const K='cwreport:${key.replace(/'/g, '')}:',S={get:k=>{try{return localStorage.getItem(K+k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(K+k,v)}catch(e){}}},N0=${jsonScript(opt.notes || {})},D0=new Set(${jsonScript([...(opt.done || [])])});
 const cards=[...document.querySelectorAll('.card')];
-for(const c of document.querySelectorAll('[data-k]')){c.checked=S.get('d|'+c.dataset.k)==='1';c.closest('.card').classList.toggle('is-done',c.checked);c.onchange=()=>{S.set('d|'+c.dataset.k,c.checked?'1':'0');c.closest('.card').classList.toggle('is-done',c.checked);run()}}
-for(const t of document.querySelectorAll('[data-n]')){t.value=S.get('n|'+t.dataset.n)||'';t.oninput=()=>S.set('n|'+t.dataset.n,t.value)}
+for(const c of document.querySelectorAll('[data-k]')){const v=S.get('d|'+c.dataset.k);c.checked=v==null?D0.has(c.dataset.k):v==='1';c.closest('.card').classList.toggle('is-done',c.checked);c.onchange=()=>{S.set('d|'+c.dataset.k,c.checked?'1':'0');c.closest('.card').classList.toggle('is-done',c.checked);run()}}
+for(const t of document.querySelectorAll('[data-n]')){const v=S.get('n|'+t.dataset.n);t.value=v==null?(N0[t.dataset.n.split('|').slice(1).join('|')]||''):v;t.oninput=()=>S.set('n|'+t.dataset.n,t.value)}
 const run=()=>{const on=new Set([...document.querySelectorAll('[data-f]')].filter(x=>x.checked).map(x=>x.dataset.f)),q=document.getElementById('q').value.trim(),u=document.getElementById('undone').checked;let n=0;
 for(const c of cards){const v=on.has(c.dataset.cat)&&(!q||c.dataset.label.startsWith(q))&&!(u&&c.classList.contains('is-done'));c.classList.toggle('hide',!v);if(v)n++}document.getElementById('cnt').textContent='顯示 '+n+' / '+cards.length+' 筆'};
 document.querySelectorAll('[data-f],#undone').forEach(x=>x.onchange=run);document.getElementById('q').oninput=run;run();
-document.getElementById('csv').onclick=()=>{const q=v=>'"'+String(v).replace(/"/g,'""')+'"',rows=[['類別','地號','已處理','備註'].join(',')];
-for(const c of cards){const k=c.querySelector('[data-k]').dataset.k;rows.push([c.querySelector('.cat').textContent,c.dataset.label,c.querySelector('[data-k]').checked?'是':'',c.querySelector('textarea').value].map(q).join(','))}
+document.getElementById('csv').onclick=()=>{const q=v=>'"'+String(v).replace(/"/g,'""')+'"',rows=[['類別','地號','已處理','備註','鍵'].join(',')];
+for(const c of cards){const k=c.querySelector('[data-k]').dataset.k;rows.push([c.querySelector('.cat').textContent,c.dataset.label,c.querySelector('[data-k]').checked?'是':'',c.querySelector('textarea').value,k].map(q).join(','))}
 const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufeff'+rows.join('\\r\\n')],{type:'text/csv'}));a.download='${key.replace(/'/g, '')}_比對備註.csv';a.click()};})();</script></body></html>`;
+  }
+  const jsonScript = v => JSON.stringify(v).replace(/</g, '\\u003c');   // 嵌進 <script> 的資料
+  // 互動報告「匯出備註 CSV」匯回工作站：[{key:'類別|地號', cat, label, done, note}]（v0.29.0 起多「鍵」欄；舊檔用類別名稱對回）
+  const REPORT_CATS = { 遺漏: 'missing', 面積超限: 'area', 被未登記地佔用: 'occupied', 部分在區內: 'partial', 接圖前沒有: 'extra', 舊圖檢核: 'chk' };
+  function parseReportNotes(text) {
+    const rows = [], src = String(text).replace(/^\ufeff/, ''); let row = [], cur = '', q = false;
+    for (let i = 0; i < src.length; i++) { const ch = src[i];
+      if (q) { if (ch === '"') { if (src[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; continue; }
+      if (ch === '"') q = true; else if (ch === ',') { row.push(cur); cur = ''; } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && src[i + 1] === '\n') i++; row.push(cur); rows.push(row); row = []; cur = ''; } else cur += ch; }
+    if (cur || row.length) { row.push(cur); rows.push(row); }
+    const h = rows.shift() || []; if (h[1] !== '地號') throw new Error('不是互動報告匯出的備註 CSV（第一列應為「類別,地號,已處理,備註」）');
+    return rows.filter(r => r.length >= 4 && r[1]).map(r => { const cat = r[4] ? r[4].split('|')[0] : REPORT_CATS[r[0]] || r[0]; return { key: r[4] || cat + '|' + r[1], cat, label: r[1], done: r[2] === '是', note: r[3] || '' }; });
   }
   function baselineCsv(r) {
     const q = v => (v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v)), f = (v, d = 2) => (v == null ? '' : v.toFixed(d));
@@ -2842,18 +2854,103 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     return out.sort((u, v) => (u.pair === v.pair ? u.t - v.t : (pairLen.get(v.pair) || 0) - (pairLen.get(u.pair) || 0) || u.pair.localeCompare(v.pair)));
   }
 
+  // ── 即時檢查（v0.29.0）：只看 idxs（剛改過的宗地）附近——交錯、重疊（edgeRelation），T 字接點（某宗的界址點落在另一宗的邊上卻沒接進去，≤ tol m）。
+  // 回傳 [{kind:'cross'|'overlap'|'tee', x, y, text, parcels:[地號]}]。編修當下就標出來，不必等匯出後 NECEXE 的 .ERR
+  function localConflicts(ds, idxs, tol = 0.02) {
+    const P = ds.points, focus = new Set(idxs.filter(i => ds.parcels[i] && !ds.parcels[i].deleted && ds.parcels[i].ids.length >= 3)); if (!focus.size) return [];
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const i of focus) for (const id of ds.parcels[i].ids) { const q = P.get(id); if (!q) continue; x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
+    x0 -= 1; x1 += 1; y0 -= 1; y1 += 1; const inBox = q => q.x >= x0 && q.x <= x1 && q.y >= y0 && q.y <= y1;
+    const E = [], mine = e => e.parcels.some(i => focus.has(i));
+    for (const e of ds.edges.values()) { if (e.arcPart) continue; const a = P.get(e.a), b = P.get(e.b); if (!a || !b) continue; if (!(Math.max(a.x, b.x) < x0 || Math.min(a.x, b.x) > x1 || Math.max(a.y, b.y) < y0 || Math.min(a.y, b.y) > y1)) E.push(e); }
+    const out = [], seen = new Set(), lab = e => e.parcels.map(i => ds.parcels[i].label);
+    for (let i = 0; i < E.length; i++) for (let j = i + 1; j < E.length; j++) {
+      if (!mine(E[i]) && !mine(E[j])) continue; const r = edgeRelation(ds, E[i], E[j]); if (!r) continue;
+      const a = P.get(E[i].a), b = P.get(E[i].b), c = P.get(E[j].a), d = P.get(E[j].b);
+      out.push({ kind: r === 'cross' ? 'cross' : 'overlap', x: (a.x + b.x + c.x + d.x) / 4, y: (a.y + b.y + c.y + d.y) / 4, text: `${r === 'cross' ? '交錯' : '重疊'}：${E[i].a}–${E[i].b} 與 ${E[j].a}–${E[j].b}`, parcels: [...new Set(lab(E[i]).concat(lab(E[j])))] });
+    }
+    const focusPts = new Set(); for (const i of focus) for (const id of ds.parcels[i].ids) focusPts.add(id);
+    const V = new Set(); for (const e of E) { V.add(e.a); V.add(e.b); }
+    for (const e of E) { const A = P.get(e.a), B = P.get(e.b), bx = B.x - A.x, by = B.y - A.y, L2 = bx * bx + by * by; if (L2 < 1e-8) continue; const L = Math.sqrt(L2), em = mine(e);
+      for (const v of V) {
+        if (v === e.a || v === e.b || (!em && !focusPts.has(v))) continue; const Q = P.get(v); if (!inBox(Q)) continue;
+        const t = ((Q.x - A.x) * bx + (Q.y - A.y) * by) / L2; if (t <= 1e-6 || t >= 1 - 1e-6) continue;
+        if (Math.abs(bx * (Q.y - A.y) - by * (Q.x - A.x)) / L > tol) continue; if (e.parcels.some(i => ds.parcels[i].ids.includes(v))) continue;
+        const k = v + '@' + e.key; if (seen.has(k)) continue; seen.add(k);
+        out.push({ kind: 'tee', x: Q.x, y: Q.y, id: v, a: e.a, b: e.b, text: `T 字接點：點 ${v} 在 ${e.a}–${e.b} 上但沒接進 ${lab(e).join('、')}`, parcels: lab(e) });
+      } }
+    return out;
+  }
+  // ── 批次處理候選（v0.29.0）──
+  const usedPointIds = ds => { const s = new Set(); for (const p of ds.parcels) if (!p.deleted) for (const id of p.ids) s.add(id); return s; };
+  // 重複點：兩個不同點號相距 ≤ tol m（兩兩配對，近的先配，每點只配一次）。keep＝用到的宗地較多者（同數取原有點、點號小）
+  function nearDupPoints(ds, tol = 0.05, ids = null) {
+    const P = ds.points, list = [...(ids || usedPointIds(ds))].map(id => P.get(id)).filter(Boolean), cell = Math.max(tol, 0.01) * 2, g = new Map(), k = (x, y) => Math.floor(x / cell) + ',' + Math.floor(y / cell);
+    for (const q of list) { const c = k(q.x, q.y); (g.get(c) || g.set(c, []).get(c)).push(q); }
+    const cand = [];
+    for (const q of list) { const cx = Math.floor(q.x / cell), cy = Math.floor(q.y / cell);
+      for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++) for (const r of g.get(i + ',' + j) || []) { if (r.id <= q.id) continue; const d = Math.hypot(r.x - q.x, r.y - q.y); if (d <= tol) cand.push({ a: q.id, b: r.id, d }); } }
+    cand.sort((u, v) => u.d - v.d); const used = new Set(), out = [], deg = id => (ds.pointParcels.get(id) || []).length;
+    for (const c of cand) { if (used.has(c.a) || used.has(c.b)) continue; used.add(c.a); used.add(c.b);
+      const A = P.get(c.a), B = P.get(c.b), keepA = deg(c.a) !== deg(c.b) ? deg(c.a) > deg(c.b) : !!A.added !== !!B.added ? !A.added : c.a < c.b;
+      out.push({ from: keepA ? c.b : c.a, to: keepA ? c.a : c.b, d: c.d, x: (A.x + B.x) / 2, y: (A.y + B.y) / 2, edge: ds.edges.has(segKey(c.a, c.b)) }); }
+    return out;
+  }
+  // 離線點：界址點離某條界址線 ≤ tol m（垂足在線段內），那條線兩側的宗地卻沒有這一點（T 字接點沒接上）→ 點貼到線的候選。每點只取最近的一條線
+  function nearEdgePoints(ds, tol = 0.05) {
+    const P = ds.points, cell = 10, grid = new Map(), cc = v => Math.floor(v / cell), out = [];
+    for (const e of ds.edges.values()) { if (e.arcPart) continue; const a = P.get(e.a), b = P.get(e.b); if (!a || !b) continue;
+      for (let i = cc(Math.min(a.x, b.x) - tol); i <= cc(Math.max(a.x, b.x) + tol); i++) for (let j = cc(Math.min(a.y, b.y) - tol); j <= cc(Math.max(a.y, b.y) + tol); j++) { const k = i + ',' + j; (grid.get(k) || grid.set(k, []).get(k)).push(e); } }
+    for (const id of usedPointIds(ds)) { const q = P.get(id); if (!q) continue; let best = null;
+      for (const e of grid.get(cc(q.x) + ',' + cc(q.y)) || []) {
+        if (e.a === id || e.b === id) continue; const A = P.get(e.a), B = P.get(e.b), bx = B.x - A.x, by = B.y - A.y, L2 = bx * bx + by * by; if (L2 < 1e-8) continue;
+        const t = ((q.x - A.x) * bx + (q.y - A.y) * by) / L2; if (t <= 1e-6 || t >= 1 - 1e-6) continue;
+        const d = Math.abs(bx * (q.y - A.y) - by * (q.x - A.x)) / Math.sqrt(L2); if (d > tol || (best && d >= best.d)) continue;
+        if (e.parcels.some(i => ds.parcels[i].ids.includes(id))) continue; best = { id, a: e.a, b: e.b, d, x: q.x, y: q.y }; }
+      if (best) out.push(best); }
+    return out.sort((u, v) => u.d - v.d);
+  }
+  // 分幅線接合點配對：分幅線 band m 內的界址點，彼此最近（互為最近）且相距 ≤ max m 的成一對；< ok m 為綠（可一鍵併），其餘黃（人工判斷）
+  function seamPointPairs(ds, sl, opt = {}) {
+    const band = opt.band ?? 3, max = opt.max ?? 2, ok = opt.ok ?? 0.3, segs = sl.segs || sl; if (!segs.length) return [];
+    const idx = segIndex(segs, Math.max(5, band)), P = ds.points, pts = [];
+    for (const id of usedPointIds(ds)) { const q = P.get(id); const h = q && idx.nearest(q.x, q.y, band); if (h) pts.push({ q, n: h.n }); }
+    const cell = Math.max(max, 0.5), g = new Map(); for (const o of pts) { const c = Math.floor(o.q.x / cell) + ',' + Math.floor(o.q.y / cell); (g.get(c) || g.set(c, []).get(c)).push(o); }
+    const nn = new Map(); for (const o of pts) { const cx = Math.floor(o.q.x / cell), cy = Math.floor(o.q.y / cell); let best = null;
+      for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++) for (const r of g.get(i + ',' + j) || []) { if (r === o) continue; const d = Math.hypot(r.q.x - o.q.x, r.q.y - o.q.y); if (d <= max && (!best || d < best.d)) best = { r, d }; }
+      if (best) nn.set(o.q.id, best); }
+    const out = [], deg = id => (ds.pointParcels.get(id) || []).length;
+    for (const o of pts) { const b = nn.get(o.q.id); if (!b || o.q.id > b.r.q.id) continue; const back = nn.get(b.r.q.id); if (!back || back.r !== o) continue;
+      const A = o.q, B = b.r.q, keepA = deg(A.id) !== deg(B.id) ? deg(A.id) > deg(B.id) : !!A.added !== !!B.added ? !A.added : A.id < B.id, s = segs[o.n];
+      out.push({ from: keepA ? B.id : A.id, to: keepA ? A.id : B.id, d: b.d, level: b.d < ok ? 'ok' : 'warn', x: (A.x + B.x) / 2, y: (A.y + B.y) / 2, sheets: s.a + '｜' + s.b, edge: ds.edges.has(segKey(A.id, B.id)) }); }
+    return out.sort((u, v) => u.d - v.d);
+  }
+  // ── 里程碑比較（v0.29.0）：ms＝{state: datasetState, areas: [面積]}，與目前的 ds 比。回傳 {parcels:[{idx,label,kind,a0,a1}], moved:[id], added:[id], removed:[id]}
+  function diffState(ds, ms) {
+    const st = ms.state, out = { parcels: [], moved: [], added: [], removed: [] }, n = Math.max(st.parcels.length, ds.parcels.length);
+    for (let i = 0; i < n; i++) { const o = st.parcels[i], p = ds.parcels[i]; const live0 = o && !o.deleted && o.ids.length >= 3, live1 = p && !p.deleted && p.ids.length >= 3;
+      if (!live0 && !live1) continue; const a0 = live0 ? ms.areas[i] : null, a1 = live1 ? p.area : null;
+      const kind = !live0 ? '新增' : !live1 ? '刪除' : o.ids.join(',') !== p.ids.join(',') ? '界址串改變' : Math.abs(a0 - a1) > 1e-4 ? '面積改變' : null;
+      if (kind) out.parcels.push({ idx: i, label: (p || o).label, kind, a0, a1, ring0: live0 ? o.ids : null }); }
+    const P0 = new Map(st.points.map(q => [q.id, q]));
+    for (const [id, q] of ds.points) { const o = P0.get(id); if (!o) out.added.push(id); else if (Math.hypot(o.x - q.x, o.y - q.y) > 1e-4) out.moved.push(id); }
+    for (const id of P0.keys()) if (!ds.points.has(id)) out.removed.push(id);
+    return out;
+  }
+
   // ── 專案檔（v0.28.0）：作業圖目前的點位與界址串。原始檔案另存在專案檔裡，開啟時先照原樣讀入（D 檔原始位元組、面積基準、還原全部的原貌都不變），再套用這份狀態 ──
   function datasetState(ds) {
     const n0 = ds.orig ? ds.orig.rings.length : ds.parcels.length;
     return { n0, keys: ds.parcels.slice(0, n0).map(p => p.key), points: [...ds.points.values()].map(q => ({ ...q })),
-      parcels: ds.parcels.map(p => { const o = {}; for (const [k, v] of Object.entries(p)) if (k !== 'idx' && k !== 'area' && typeof v !== 'function') o[k] = v; return o; }) };
+      parcels: ds.parcels.map(p => { const o = {}; for (const [k, v] of Object.entries(p)) if (k !== 'idx' && k !== 'area' && typeof v !== 'function') o[k] = Array.isArray(v) ? v.slice() : v; return o; }) };   // 陣列要複製：之後的編修（splice）不可改到存下的狀態（里程碑）
   }
   function applyDatasetState(ds, st) {
     if (!st || !Array.isArray(st.parcels) || !Array.isArray(st.points)) throw new Error('專案檔沒有作業圖狀態');
     const n0 = ds.orig ? ds.orig.rings.length : ds.parcels.length;
     if (st.n0 !== n0 || (st.keys && st.keys.some((k, i) => ds.parcels[i].key !== k))) throw new Error(`專案檔記錄的原始圖資（${st.n0} 宗）與讀入的檔案（${n0} 宗）不同，不能套用`);
     ds.points = new Map(st.points.map(q => [q.id, { ...q }]));
-    st.parcels.forEach((o, i) => { if (i < n0) { const a0 = ds.parcels[i].areaOrig; Object.assign(ds.parcels[i], o, { areaOrig: a0 }); } else ds.parcels[i] = { ...o }; });
+    const cp = o => { const c = {}; for (const [k, v] of Object.entries(o)) c[k] = Array.isArray(v) ? v.slice() : v; return c; };
+    st.parcels.forEach((o, i) => { if (i < n0) { const t = ds.parcels[i], a0 = t.areaOrig; for (const k of Object.keys(t)) if (!(k in o) && k !== 'idx') delete t[k]; Object.assign(t, cp(o), { areaOrig: a0 }); } else ds.parcels[i] = cp(o); });   // 存檔時沒有的欄位（例如之後才標的 deleted）要清掉
     ds.parcels.length = st.parcels.length;
     buildTopology(ds); buildArcs(ds); recalc(ds, new Set(ds.parcels.map((_, i) => i)));
     return ds;
@@ -2882,6 +2979,6 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall,
     baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
-    parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner, sheetLines, nearSheetLines, datasetState, applyDatasetState, healAround };
+    parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner, sheetLines, nearSheetLines, datasetState, applyDatasetState, healAround, localConflicts, nearDupPoints, nearEdgePoints, seamPointPairs, diffState, parseReportNotes };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
