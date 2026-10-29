@@ -1575,6 +1575,43 @@ $('blList').addEventListener('click', e => { const fx = e.target.closest('[data-
   if (e.target.closest('#btnBlFixAll')) { try { blFix(S.bl.res.missing.slice()); } catch (err) { msg(err.message); } return; }
   const tr = e.target.closest('tr[data-bl]'); if (!tr) return; const [k, i] = tr.dataset.bl.split(':'); blFocus(k, +i); });
 $('dlgBl').addEventListener('close', () => { S.bl.focus = null; draw(); });
+// 依舊界改正（v0.31.0）：較差為正、接圖後外側漏畫未登記地——沿接圖前界址切回，切出的部分建為未登記地或併入鄰宗
+const TRIM_REC = { unreg: ['建未登記地', '#1a7f37'], review: ['請確認', '#8a5a00'], skip: ['不做', '#57606a'] };
+function trimPlan(labels) {
+  if (!S.ds) throw new Error('請先載入作業圖'); if (!S.bl.res) blRun();
+  S.trim = Core.planTrimExcess(S.ds, S.bl.res, { labels, minFace: +$('trimMin').value || 0 }); trimPanel(); return S.trim;
+}
+function trimPanel() {
+  const l = S.trim || [], n = v => (v == null ? '' : v.toFixed(1)), c = k => l.filter(x => x.recommend === k).length;
+  $('btnTrimAll').disabled = !c('unreg');
+  $('trimSum').textContent = l.length ? `建未登記地 ${c('unreg')}、請確認 ${c('review')}、不做 ${c('skip')}` : '';
+  $('trimList').innerHTML = l.length ? `<table><thead><tr><th>地號</th><th>登記㎡</th><th>目前→改正㎡</th><th>切出㎡</th><th>建議</th><th>處理</th><th></th></tr></thead><tbody>${l.map((x, i) => {
+    const nb = [...new Set((x.faces || []).flatMap(f => f.neighbors))], opts = x.recommend === 'skip' ? '' : `<select data-trimto="${i}"><option value="unreg">建未登記地</option>${nb.map(v => `<option value="${esc(v)}">併入 ${esc(v)}</option>`).join('')}</select>`;
+    return `<tr data-trim="${i}" style="cursor:pointer"><td>${esc(x.label)}</td><td>${n(x.reg)}</td><td>${n(x.area)}${x.area1 != null ? '→' + n(x.area1) : ''}</td><td>${n(x.cut)}</td><td style="color:${TRIM_REC[x.recommend][1]}" title="${esc(x.why)}">${TRIM_REC[x.recommend][0]}<div class="muted" style="white-space:normal">${esc(x.why)}</div></td><td>${opts}</td><td>${x.recommend === 'skip' ? '' : `<button class="btn" data-trimgo="${i}">套用</button>`}</td></tr>`; }).join('')}</tbody></table>` : '';
+}
+// items：[{label, to:'unreg'|'keep'|鄰宗地號, mother, faces}]；全部同一步復原，做完重新比對
+function trimApply(items) {
+  if (!S.ds) throw new Error('請先載入作業圖'); if (!S.bl.res) blRun();
+  const deltas = [], done = [], failed = [], mother = +$('trimMother').value || 9001, minFace = +$('trimMin').value || 0;
+  for (const it of items) {
+    const x = S.bl.res.area.find(a => a.label === String(it.label)); if (!x) { failed.push({ label: it.label, reason: '沒有面積比對' }); continue; }
+    try { const r = Core.trimExcess(S.ds, x, { to: it.to ?? 'unreg', faces: it.faces, mother: it.mother ?? mother, minFace: it.minFace ?? minFace }); deltas.push(r.delta); done.push({ label: x.label, area0: r.area0, area1: r.area1, created: r.created, into: r.into }); }
+    catch (e) { failed.push({ label: it.label, reason: e.message }); }
+  }
+  if (deltas.length) pushMulti(deltas, `依舊界改正 ${done.map(d => d.label).join('、')}`);
+  blRun(); if (S.trim) trimPlan(); refresh();
+  msg((done.length ? `依舊界改正：${done.map(d => `${d.label} ${d.area0.toFixed(1)}→${d.area1.toFixed(1)} m²` + (d.created.length ? `（新增 ${d.created.join('、')}）` : '') + (d.into.length ? `（併入 ${d.into.join('、')}）` : '')).join('；')}。可一次復原` : '沒有改正任何宗地') + (failed.length ? `。未改正：${failed.map(f => `${f.label}（${f.reason}）`).join('；')}` : ''));
+  return { done, failed };
+}
+$('btnTrimPlan').onclick = () => { try { const l = trimPlan(); msg(`依舊界改正：${l.length} 筆較差為正超過公差`); } catch (e) { msg(e.message); } };
+$('btnTrimAll').onclick = () => { const l = (S.trim || []).filter(x => x.recommend === 'unreg'); if (!l.length || !confirm(`把 ${l.map(x => x.label).join('、')} 沿接圖前界址切回，切出的部分建為未登記地（${$('trimMother').value} 號）？可一次復原。`)) return; try { trimApply(l.map(x => ({ label: x.label, to: 'unreg' }))); } catch (e) { msg(e.message); } };
+$('trimList').addEventListener('click', e => {
+  const go = e.target.closest('[data-trimgo]'); if (go) { const x = S.trim[+go.dataset.trimgo], to = $('trimList').querySelector(`[data-trimto="${go.dataset.trimgo}"]`).value;
+    if (confirm(`${x.label}：沿接圖前界址切回（${x.area.toFixed(1)}→${x.area1.toFixed(1)} m²），切出的 ${x.cut.toFixed(1)} m² ${to === 'unreg' ? `建為未登記地（${$('trimMother').value} 號）` : '併入 ' + to}？可復原。`)) { try { trimApply([{ label: x.label, to }]); } catch (err) { msg(err.message); } } return; }
+  if (e.target.closest('select')) return;
+  const tr = e.target.closest('tr[data-trim]'); if (!tr) return; const x = S.trim[+tr.dataset.trim], p = S.ds.parcels.find(q => !q.deleted && q.label === x.label); if (p) blFocus('par', p.idx);
+  if (x.why) msg(`${x.label}：${x.why}`);
+});
 // ── 所有權人分析（EXAM.MDB）：載入、分析、面板、著色、選取資訊 ─────────────────────────
 async function loadOwners(file, quiet = false) {
   try {
@@ -2766,6 +2803,10 @@ const api = {
   // ── 點線面編修（MCP）：與工具箱同一組核心；每個都可 undo ──
   snapPointToEdge: ({ id, a, b }) => { const r = Core.snapPointToEdge(S.ds, id, a, b), d = r.delta, setXY = q => { const p = S.ds.points.get(id); p.y = q.y; p.x = q.x; }; pushUndo({ undoFn: () => { setXY(r.from); Core.applyDelta(S.ds, d, 'undo'); }, redoFn: () => { setXY(r.to); Core.applyDelta(S.ds, d, 'redo'); }, label: `點 ${id} 貼到線 ${a}–${b}` }); return { moved_m: r.dist, parcels: parLabels(d) }; },
   mergePoints: ({ from, to }) => { const r = Core.mergePoints(S.ds, from, to); pushStruct(r.delta, `點 ${from} 併入 ${to}`); return { parcels: parLabels(r.delta) }; },
+  // 依舊界改正（v0.31.0）：planTrimExcess 只算建議不改圖（labels 省略＝全部較差為正超過公差者）；trimExcess 逐筆或整批套用（items 一次復原）
+  planTrimExcess: ({ labels, minFace } = {}) => { if (minFace != null) $('trimMin').value = minFace; return trimPlan(labels).map(({ faces, adds, ...x }) => ({ ...x, faces: faces && faces.map(f => ({ area: +f.area.toFixed(2), neighbors: f.neighbors })), new_points: adds ? adds.free + adds.edge : undefined })); },
+  trimExcess: ({ label, to = 'unreg', faces, mother, minFace, items } = {}) => trimApply(items || [{ label, to, faces, mother, minFace }]),
+  getBaselineRings: ({ label }) => { if (!S.bl.res) blRun(); const x = [...S.bl.res.area, ...S.bl.res.missing, ...S.bl.res.partial, ...S.bl.res.unreg].find(a => a.label === String(label)); if (!x) throw new Error('接圖前比對沒有 ' + label); return { label: x.label, rings: (x.rings || []).map(r => r.map(q => ({ y: q.y, x: q.x }))) }; },
   splitByChord: ({ parcel, a, b }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitByChord(S.ds, p.idx, a, b); pushStruct(r.delta, `新增線 ${a}–${b}`); return { keep: r.keep, created: r.created }; },
   deleteEdge: ({ a, b }) => { const r = Core.deleteEdge(S.ds, a, b); pushStruct(r.delta, `刪除線 ${a}–${b}`); return { keep: r.keep, merged: r.merged }; },
   addFace: ({ ids, mother = 9001 }) => { const r = Core.addFace(S.ds, ids, mother); pushStruct(r.delta, `新增面 ${r.label}`); return { label: r.label }; },
@@ -2835,7 +2876,7 @@ const api = {
 window.CadastralAPI = api;
 // ── AI 橋接（MCP）：頁面主動連到本機 tools/mcp-bridge.mjs 的 WebSocket，收 {id,method,params}、回 {id,result|error} ──
 // 權限由使用者在「說明 → 連接 AI（MCP）」決定：唯讀／每次問我／直接修改。AI 的每個修改都進作業紀錄、可 Ctrl+Z
-const AI_READ = /^(get|list|find|check|compare|export|toLatLon|liveCheck|batchFind|seamPointPairs|seamGaps|ringIssues|unregSummary|saveProjectJson|benchRender|select|gotoFixItem|setBasemap|setStyle)/;
+const AI_READ = /^(get|list|find|check|compare|plan|export|toLatLon|liveCheck|batchFind|seamPointPairs|seamGaps|ringIssues|unregSummary|saveProjectJson|benchRender|select|gotoFixItem|setBasemap|setStyle)/;
 function aiReadOnly(m) { return AI_READ.test(m) && m !== 'checkUpdate'; }
 const AI = { ws: null, want: false, mode: 'ask', url: 'ws://127.0.0.1:8765', calls: [], timer: null };
 try { const j = JSON.parse(localStorage.getItem('cw.ai') || 'null'); if (j) { if (j.url) AI.url = j.url; if (['read', 'ask', 'write'].includes(j.mode)) AI.mode = j.mode; } } catch (e) { /* ignore */ }

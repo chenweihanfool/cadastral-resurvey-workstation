@@ -20,7 +20,7 @@ try {
     const m = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
     assert.equal(m.result.protocolVersion, '2025-06-18'); assert.ok(m.result.capabilities.tools);
     const l = await rpc('tools/list', {}); const names = l.result.tools.map(x => x.name);
-    for (const n of ['workstation_status', 'fix_queue_list', 'fix_queue_goto', 'fix_queue_done', 'call_api']) assert.ok(names.includes(n), n);
+    for (const n of ['workstation_status', 'fix_queue_list', 'fix_queue_goto', 'fix_queue_done', 'plan_old_map_trim', 'trim_excess', 'call_api']) assert.ok(names.includes(n), n);
     assert.ok(l.result.tools.every(x => x.inputSchema && x.inputSchema.type === 'object' && !('run' in x)));
   });
   await t('頁面未連線時回清楚的錯誤', async () => { const r = await call('fix_queue_list', {}); assert.ok(r.err); assert.match(r.text, /尚未連線/); });

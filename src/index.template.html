@@ -59,7 +59,7 @@ label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
 table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
 th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
 #blList td.small,#ownList td.small{white-space:normal;text-align:left;min-width:90px}
-#blList,#ownList{scrollbar-gutter:stable;padding-right:2px}#blList table,#ownList table{width:100%}#blList td.cause{white-space:normal;text-align:left;min-width:4.5em}
+#blList,#ownList,#trimList{scrollbar-gutter:stable;padding-right:2px}#blList table,#ownList table,#trimList table{width:100%}#trimList td{vertical-align:top}#blList td.cause{white-space:normal;text-align:left;min-width:4.5em}
 #ringList td,#ringList th{text-align:left;vertical-align:top}#ringList td:nth-child(3){white-space:normal;min-width:220px}
 th:first-child,td:first-child{text-align:left} th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
 tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-child{box-shadow:inset 3px 0 var(--sel)}
@@ -271,6 +271,11 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="blSum" class="small" style="margin:6px 0"></div>
       <div id="blList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
       <div class="small muted" style="margin-top:4px">圖上：紅＝遺漏（接圖前有、現在沒有）、橘＝只有一部分在圖內的接圖前宗地、粉紅框＝面積超限。點表格一列可放大檢視。</div></section>
+    <section><h2>依舊界改正（面積較差為正）</h2>
+      <div class="small muted" style="margin-bottom:6px">接圖時界址被拉到接圖線、外側漏畫未登記地：沿接圖前界址切回，切出的部分建為未登記地或併入鄰宗。只列較差為正、超過 1 倍公差、只有一塊的宗地；「接圖前即不符」、舊點在宗地外（被鄰地佔用）、改正後離登記更遠的不做。</div>
+      <div class="row small"><button class="btn primary" id="btnTrimPlan">算建議</button><label>未登記地母號 <input type="number" id="trimMother" value="9001" min="9000" step="1" style="width:5em"></label><label title="切出的面小於這個面積視為圖解誤差，沿用目前的界線">小於 <input type="number" id="trimMin" value="5" min="0" step="1" style="width:3.5em"> m² 不切</label><button class="btn" id="btnTrimAll" disabled title="建議為「建未登記地」的全部套用；可一次復原">套用全部「建未登記地」</button></div>
+      <div id="trimSum" class="small" style="margin:6px 0"></div>
+      <div id="trimList" style="max-height:36vh;overflow-y:auto;overflow-x:hidden"></div></section>
     </div></dialog>
 <dialog class="fp" id="dlgLog"><div class="fphead"><b>作業紀錄</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
   <div class="row small"><input id="logFind" type="search" placeholder="找地號或動作"><button class="btn" id="btnLogCsv">輸出 CSV</button><button class="btn" id="btnLogHtml" title="可列印、另存 PDF，附作業人員／審核簽名欄">輸出列印版（HTML）</button></div>
