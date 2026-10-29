@@ -742,6 +742,11 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.deepEqual(k.flagged.map(x => x.label), ['2'], '只有 2 的右邊沒有墨線');
   near(k.flagged[0].offLen, 20, 1e-6); near(k.offLen, 20, 1e-6); near(k.checkedLen, 140, 1e-6);
   assert.equal(Core.oldMapReport(r, k)[0].label, '2');
+  // 紅線（分割時謄上）：2 的東邊改畫紅線 → 預設不檢核（不算沒墨線、另計紅線長度）；redInk:'ink' 時當墨線
+  { const im2 = new Uint8ClampedArray(img); const red = (a, b) => { const [u0, v0] = toPx(...a), [u1, v1] = toPx(...b), n = Math.max(Math.abs(u1 - u0), Math.abs(v1 - v0)); for (let q = 0; q <= n; q++) { const u = Math.round(u0 + (u1 - u0) * q / n), v = Math.round(v0 + (v1 - v0) * q / n), i = (v * W + u) * 4; im2[i] = 200; im2[i + 1] = 40; im2[i + 2] = 40; } };
+    red([0, 40], [20, 40]); const gr = (x0, y0, x1, y1) => { const r0 = getRegion(x0, y0, x1, y1); if (!r0) return r0; const u0 = Math.max(0, Math.floor((x0 - wf.c) / px)), v0 = Math.max(0, Math.floor((wf.f - y1) / px)); for (let v = 0; v < r0.h; v++) r0.rgba.set(im2.subarray(((v + v0) * W + u0) * 4, ((v + v0) * W + u0 + r0.w) * 4), v * r0.w * 4); return r0; };
+    const kr = Core.inkCheck(two, gr, { block: 100, shift: 1, ratio: 0.15, minLen: 3 }); assert.equal(kr.flagged.length, 0, '紅線上的界址不檢核'); near(kr.redLen, 20, 1e-6); near(kr.checkedLen, 120, 1e-6);
+    const ki = Core.inkCheck(two, gr, { block: 100, shift: 1, ratio: 0.15, minLen: 3, redInk: 'ink' }); assert.equal(ki.flagged.length, 0); near(ki.checkedLen, 140, 1e-6); }
   // 整片空白（或對位偏太多）：不判斷，列為對位不良
   const blank = Core.inkCheck(two, () => ({ rgba: new Uint8ClampedArray(40 * 40 * 4).fill(235), w: 40, h: 40, wf: { a: 2, b: 0, d: 0, e: -2, c: X - 20, f: Y + 60 } }), { block: 100, shift: 1 });
   assert.equal(blank.flagged.length, 0); assert.equal(blank.poor, 1); near(blank.checkedLen, 0, 1e-9);
