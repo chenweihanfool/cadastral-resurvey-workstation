@@ -59,7 +59,7 @@ label.chk{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
 table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
 th,td{padding:3px 5px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
 #blList td.small,#ownList td.small{white-space:normal;text-align:left;min-width:90px}
-#blList,#ownList{scrollbar-gutter:stable;padding-right:2px}#blList table,#ownList table{width:100%}#blList td.cause{white-space:normal;text-align:left;min-width:4.5em}
+#blList,#ownList,#trimList{scrollbar-gutter:stable;padding-right:2px}#blList table,#ownList table,#trimList table{width:100%}#trimList td{vertical-align:top}#blList td.cause{white-space:normal;text-align:left;min-width:4.5em}
 #ringList td,#ringList th{text-align:left;vertical-align:top}#ringList td:nth-child(3){white-space:normal;min-width:220px}
 th:first-child,td:first-child{text-align:left} th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
 tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)} tr.sel td:first-child{box-shadow:inset 3px 0 var(--sel)}
@@ -271,6 +271,11 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="blSum" class="small" style="margin:6px 0"></div>
       <div id="blList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
       <div class="small muted" style="margin-top:4px">圖上：紅＝遺漏（接圖前有、現在沒有）、橘＝只有一部分在圖內的接圖前宗地、粉紅框＝面積超限。點表格一列可放大檢視。</div></section>
+    <section><h2>依舊界改正（面積較差為正）</h2>
+      <div class="small muted" style="margin-bottom:6px">接圖時界址被拉到接圖線、外側漏畫未登記地：沿接圖前界址切回，切出的部分建為未登記地或併入鄰宗。只列較差為正、超過 1 倍公差、只有一塊的宗地；「接圖前即不符」、舊點在宗地外（被鄰地佔用）、改正後離登記更遠的不做。</div>
+      <div class="row small"><button class="btn primary" id="btnTrimPlan">算建議</button><label>未登記地母號 <input type="number" id="trimMother" value="9001" min="9000" step="1" style="width:5em"></label><label title="切出的面小於這個面積視為圖解誤差，沿用目前的界線">小於 <input type="number" id="trimMin" value="5" min="0" step="1" style="width:3.5em"> m² 不切</label><button class="btn" id="btnTrimAll" disabled title="建議為「建未登記地」的全部套用；可一次復原">套用全部「建未登記地」</button></div>
+      <div id="trimSum" class="small" style="margin:6px 0"></div>
+      <div id="trimList" style="max-height:36vh;overflow-y:auto;overflow-x:hidden"></div></section>
     </div></dialog>
 <dialog class="fp" id="dlgLog"><div class="fphead"><b>作業紀錄</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
   <div class="row small"><input id="logFind" type="search" placeholder="找地號或動作"><button class="btn" id="btnLogCsv">輸出 CSV</button><button class="btn" id="btnLogHtml" title="可列印、另存 PDF，附作業人員／審核簽名欄">輸出列印版（HTML）</button></div>
@@ -2816,7 +2821,8 @@ const Core = (() => {
       // 跨分幅（參考圖資裡有好幾塊）：各分幅還沒接合，塊與塊之間常有縫或重疊，面積相加不可靠，不據以判斷原因
       const refArea = g ? g.area : null, refRatio = g ? Math.abs(g.area - F) / t : null, split = g ? g.pieces.length > 1 : false;
       const flag = r > ratio, cause = !flag ? '' : !g ? '接圖前無此宗' : split ? '跨分幅，請人工判斷' : refRatio > ratio && (g.area - F) * (A - F) > 0 ? '接圖前即不符' : '接圖後產生';
-      area.push({ label: k, idx: ps[0].idx, idxs: ps.map(p => p.idx), reg: F, area: A, diff: A - F, tol: t, ratio: r, refArea, refRatio, pieces: g ? g.pieces.length : 0, flag, cause, rings: flag && g ? g.pieces.map(pc => pc.ring) : [] });
+      area.push({ label: k, idx: ps[0].idx, idxs: ps.map(p => p.idx), reg: F, area: A, diff: A - F, tol: t, ratio: r, refArea, refRatio, pieces: g ? g.pieces.length : 0, flag, cause,
+        rings: g && (flag || (A - F > t && ps.length === 1 && g.pieces.length === 1)) ? g.pieces.map(pc => pc.ring) : [] });   // 依舊界改正（v0.31.0）也要較差為正、超過 1 倍公差者的接圖前界址
     }
     area.sort((u, v) => v.ratio - u.ratio);
     const byNo = (u, v) => u.label.localeCompare(v.label, 'en', { numeric: true });
@@ -2983,6 +2989,131 @@ const Core = (() => {
     if (!item.rings || !item.rings.length) throw new Error(`${item.label} 沒有接圖前界址`);
     const p = ds.parcels[idxs[0]], before = p.area, r = restoreMissing(ds, { label: item.label, rings: item.rings }, { ...opt, into: p.idx });
     return { ...r, gain: p.area - before };
+  }
+  // ── 依舊界改正（v0.31.0）：面積較差為正、接圖後產生——接圖時界址被拉到接圖線，外側漏畫未登記地（KC0336 1096-1、117-1、117-2 驗證）──
+  // 接圖前界址點（已轉到作業圖坐標）逐點對到目前的環：離既有界址點 ≤ snap 用既有點；離界址線 ≤ onLine 投影到線上成新點（插入所有含該線的宗地，鄰宗面積不變）；
+  // 不在環上而離環 ≤ drop 的點視為清理多餘點刪掉的小偏差、不加回；其餘在宗地內部的成新點，在宗地外（宗地被鄰地佔用，不是多出未登記地）就停下。
+  // 新舊兩環在共同點之間不同的段，各圍出一塊「切出的面」；面積 < minFace 的面屬圖解誤差，該段沿用目前的界線。切出面積加總必須等於面積差（新界跑到現況外就停下）。
+  // opt.to：每一塊切出的面怎麼處理——'unreg'（預設，建為未登記地 opt.mother 號，新子號）、'keep'（不切，留在本宗）、鄰宗索引或地號（併入該鄰宗，可含地中地）；
+  // opt.faces：逐塊指定（陣列，同 to 的值），沒指定的照 opt.to。opt.dry＝只算方案不改圖。
+  // 回傳 {label, area0, area1, faces:[{area, ids, coords, neighbors:[{idx,label,unreg,len}], to}], adds:{free, edge}, delta?, created:[], into:[]}
+  function trimExcess(ds, item, opt = {}) {
+    const snap = opt.snap ?? 0.5, onLine = opt.onLine ?? 0.3, drop = opt.drop ?? 0.6, minFace = opt.minFace ?? 5, P = ds.points;
+    const idxs = item.idxs || [item.idx]; if (idxs.length !== 1) throw new Error(`${item.label} 目前有 ${idxs.length} 塊，請人工處理`);
+    const rings = (item.rings || []).filter(r => r.length >= 3); if (rings.length !== 1) throw new Error(rings.length ? `${item.label} 接圖前有 ${rings.length} 塊，請人工處理` : `${item.label} 沒有接圖前界址`);
+    const T = ds.parcels[idxs[0]]; if (!T || T.deleted) throw new Error('宗地不存在');
+    if ((T.containers || []).length) throw new Error(`${T.label} 是地中地，暫不支援`); if (ringHasArc(T)) throw new Error(`${T.label} 含圓弧，暫不支援`);
+    const R = ccwIds(T.ids, P), xy = n => (n.id != null ? P.get(n.id) : n), nR = R.length;
+    // 1. 接圖前界址點 → 目前環上的節點
+    const nodes = [], edgeNodes = new Map();
+    for (const q of rings[0]) {
+      let bv = null, bd = Infinity; for (const id of R) { const c = P.get(id), d = Math.hypot(c.x - q.x, c.y - q.y); if (d < bd) { bd = d; bv = id; } }
+      if (bd <= snap) { nodes.push({ id: bv }); continue; }
+      let be = null; for (let i = 0; i < nR; i++) { const a = R[i], b = R[(i + 1) % nR], A = P.get(a), B = P.get(b), dx = B.x - A.x, dy = B.y - A.y, l2 = dx * dx + dy * dy; if (!l2) continue;
+        const t = Math.max(0, Math.min(1, ((q.x - A.x) * dx + (q.y - A.y) * dy) / l2)), d = Math.hypot(A.x + t * dx - q.x, A.y + t * dy - q.y); if (!be || d < be.d) be = { i, a, b, t, d, x: A.x + t * dx, y: A.y + t * dy }; }
+      if (be && be.d <= onLine) { if (be.t <= 0.02 || be.t >= 0.98) { nodes.push({ id: be.t <= 0.02 ? be.a : be.b }); continue; } nodes.push({ id: null, x: be.x, y: be.y, edge: be }); continue; }
+      if (be && be.d <= drop) continue;
+      if (!pointInRing(R, P, q.y, q.x)) throw new Error(`${T.label} 的接圖前界址點在目前的宗地外 ${be ? be.d.toFixed(2) : '?'} m：宗地被鄰地佔用，不是多出未登記地，請人工處理`);
+      nodes.push({ id: null, x: q.x, y: q.y });
+    }
+    let N = nodes.filter((n, i) => !(n.id != null && n.id === nodes[(i + 1) % nodes.length].id));
+    // 線上新點若前後都是既有點，只是舊圖小偏差，不加
+    N = N.filter((n, i) => !(n.edge && N[(i - 1 + N.length) % N.length].id != null && N[(i + 1) % N.length].id != null));
+    N = N.filter((n, i) => !(n.id != null && n.id === N[(i + 1) % N.length].id));
+    if (N.length < 3) throw new Error(`${T.label} 的接圖前界址對不上目前的環`);
+    const seen = new Set(); for (const n of N) if (n.id != null) { if (seen.has(n.id)) throw new Error(`${T.label} 改正後會重複經過界址點 ${n.id}，請人工處理`); seen.add(n.id); }
+    // 2. 目前的環插入線上新點（同一條線上多點依位置排序）
+    for (const n of N) if (n.edge) { const k = segKey(n.edge.a, n.edge.b); (edgeNodes.get(k) || edgeNodes.set(k, []).get(k)).push(n); }
+    const R2 = []; for (let i = 0; i < nR; i++) { const a = R[i], b = R[(i + 1) % nR]; R2.push({ id: a }); const on = edgeNodes.get(segKey(a, b)); if (on) R2.push(...on.slice().sort((u, v) => (u.edge.a === a ? u.edge.t - v.edge.t : v.edge.t - u.edge.t))); }
+    const keyOf = n => (n.id != null ? 'i' + n.id : n), rIdx = new Map(R2.map((n, i) => [keyOf(n), i]));
+    const sArea = arr => { const o = xy(arr[0]); let s = 0; for (let i = 0; i < arr.length; i++) { const p = xy(arr[i]), q = xy(arr[(i + 1) % arr.length]); s += (p.x - o.x) * (q.y - o.y) - (q.x - o.x) * (p.y - o.y); } return s / 2; };
+    if (sArea(N) < 0) N.reverse();
+    // 3. 共同點之間不同的段 → 切出的面
+    const common = N.map((n, i) => [n, i]).filter(([n]) => rIdx.has(keyOf(n)));
+    if (common.length < 2) throw new Error(`${T.label} 的接圖前界址與目前的環共同點不足，請人工處理`);
+    const segN = (i0, i1) => { const out = [N[i0]]; for (let i = i0; i !== i1;) { i = (i + 1) % N.length; out.push(N[i]); } return out; };
+    const segR = (j0, j1) => { const out = [R2[j0]]; for (let j = j0; j !== j1;) { j = (j + 1) % R2.length; out.push(R2[j]); } return out; };
+    const parts = [];
+    for (let c = 0; c < common.length; c++) {
+      const [na, ia] = common[c], [nb, ib] = common[(c + 1) % common.length], sn = segN(ia, ib), sr = segR(rIdx.get(keyOf(na)), rIdx.get(keyOf(nb)));
+      const same = sn.length === sr.length && sn.every((n, k) => keyOf(n) === keyOf(sr[k]));
+      if (same) { parts.push({ path: sn.slice(0, -1) }); continue; }
+      const ring = sr.concat(sn.slice(1, -1).reverse()), a = sArea(ring);
+      if (a < -0.01) throw new Error(`${T.label} 的接圖前界線跑到目前的宗地外，請人工處理`);
+      parts.push({ path: sn.slice(0, -1), face: { ring, area: a }, alt: sr.slice(0, -1) });
+    }
+    const A0 = Math.abs(sArea(R2)), faceSel = parts.filter(p => p.face && p.face.area >= minFace);
+    for (const p of parts) if (p.face && p.face.area < minFace) p.path = p.alt;   // 圖解誤差：沿用目前的界線
+    let ring1 = parts.flatMap(p => p.path); ring1 = ring1.filter((n, i) => keyOf(n) !== keyOf(ring1[(i + 1) % ring1.length]));
+    const A1 = Math.abs(sArea(ring1)), sum = faceSel.reduce((t, p) => t + p.face.area, 0);
+    if (Math.abs(A0 - A1 - sum) > Math.max(0.5, 1e-4 * A0)) throw new Error(`${T.label} 切出面積 ${sum.toFixed(1)} 與面積差 ${(A0 - A1).toFixed(1)} 不符（新界線可能自我交錯），請人工處理`);
+    // 每塊面的鄰宗（共用目前界線的宗地）
+    const lenOf = (a, b) => { const A = xy(a), B = xy(b); return Math.hypot(B.x - A.x, B.y - A.y); };
+    const faces = faceSel.map((p, k) => {
+      const nb = new Map(), sr = p.face.ring.slice(0, p.alt.length + 1);
+      for (let i = 0; i + 1 < sr.length; i++) { const u = sr[i], v = sr[i + 1], e = u.id != null && v.id != null ? ds.edges.get(segKey(u.id, v.id)) : null, on = !e && (u.edge || v.edge) ? (u.edge || v.edge) : null, e2 = on ? ds.edges.get(segKey(on.a, on.b)) : e;
+        if (!e2) continue; for (const j of e2.parcels) { if (j === T.idx || ds.parcels[j].deleted) continue; nb.set(j, (nb.get(j) || 0) + lenOf(u, v)); } }
+      const to = opt.faces && opt.faces[k] != null ? opt.faces[k] : (opt.to ?? 'unreg');
+      return { area: p.face.area, nodes: p.face.ring, coords: p.face.ring.map(n => { const c = xy(n); return { x: c.x, y: c.y }; }), to,
+        neighbors: [...nb].sort((u, v) => v[1] - u[1]).map(([j, len]) => ({ idx: j, label: ds.parcels[j].label, unreg: mainNo(ds.parcels[j]) >= UNREG_MIN, len })) };
+    });
+    // 含地中地：地中地不能落在切出的面裡；面積扣掉地中地
+    const holeA = (T.holes || []).reduce((t, hi) => t + ringAreaArc(ds.parcels[hi].ids, ds.parcels[hi].mid, P), 0);
+    for (const hi of T.holes || []) { const h = ds.parcels[hi], ip = interiorPoint(h.ids, P);
+      if (faces.some(f => { const c = f.coords; let ins = false; for (let i = 0, j = c.length - 1; i < c.length; j = i++) if ((c[i].y > ip.y) !== (c[j].y > ip.y) && ip.x < (c[j].x - c[i].x) * (ip.y - c[i].y) / (c[j].y - c[i].y) + c[i].x) ins = !ins; return ins; })) throw new Error(`${T.label} 的地中地 ${h.label} 在要切出的範圍內，請人工處理`); }
+    const used = new Set(ring1.concat(faces.filter(f => f.to !== 'keep').flatMap(f => f.nodes)));
+    const adds = { free: [...used].filter(n => n.id == null && !n.edge).length, edge: [...used].filter(n => n.id == null && n.edge).length };
+    const plan = { label: T.label, idx: T.idx, area0: A0 - holeA, area1: A1 - holeA + faces.filter(f => f.to === 'keep').reduce((t, f) => t + f.area, 0), faces: faces.map(({ nodes, ...f }) => f), adds };
+    if (opt.dry || !faces.length) return plan;
+    // 4. 寫入（中途出錯全部還原）
+    const d = newDelta(), created = [], into = [];
+    try {
+      for (const n of used) if (n.id == null) { const id = nextPointId(ds), np = { id, y: n.y, x: n.x, y0: n.y, x0: n.x, row: null, added: true }; ds.points.set(id, np); d.added.push(np); n.id = id; }
+      for (const [k, list] of edgeNodes) { const e = ds.edges.get(k), ids = list.filter(n => n.id != null); if (!e || !ids.length) continue;
+        for (const pi of e.parcels) { const p = ds.parcels[pi]; if (p.deleted) continue; const n = p.ids.length;
+          for (let i = 0; i < n; i++) { const u = p.ids[i], v = p.ids[(i + 1) % n]; if (segKey(u, v) !== k) continue;
+            const ord = ids.slice().sort((s, t) => (s.edge.a === u ? s.edge.t - t.edge.t : t.edge.t - s.edge.t)).map(x => x.id);
+            touchParcel(d, p); p.ids.splice(i + 1, 0, ...ord); if (p.mid) p.mid.splice(i + 1, 0, ...ord.map(() => false)); break; } } }
+      // 不切的面沿用目前界線
+      let fin = parts.flatMap(p => (p.face && faces.some(f => f.to === 'keep' && f.nodes === p.face.ring) ? p.alt : p.path)).map(n => n.id);
+      fin = fin.filter((id, i) => id !== fin[(i + 1) % fin.length]);
+      touchParcel(d, T); T.ids = fin; T.mid = fin.map(() => false); T.unregEdit = true;
+      buildTopology(ds);
+      for (const f of faces) {
+        if (f.to === 'keep') continue; const ids = ccwIds(f.nodes.map(n => n.id), P);
+        if (f.to === 'unreg') { const q = createParcel(ds, d, opt.mother ?? 9001, ids, null); created.push(q.label); continue; }
+        const nb = typeof f.to === 'number' ? ds.parcels[f.to] : ds.parcels.find(p => !p.deleted && p.label === String(f.to));
+        if (!nb || nb.deleted || nb === T) throw new Error(`找不到要併入的宗地 ${f.to}`); if (ringHasArc(nb)) throw new Error(`${nb.label} 含圓弧，暫不支援併入`);
+        const loops = outlineLoops({ parcels: [{ ids: nb.ids }, { ids }], points: P }, [0, 1]).filter(l => Math.abs(l.area) > 1e-6);
+        if (loops.length !== 1 || loops[0].area <= 0) throw new Error(`切出的面與 ${nb.label} 不相連（或合併後有空洞），不能併入`);
+        touchParcel(d, nb); nb.ids = loops[0].ids.slice(); nb.mid = nb.ids.map(() => false); nb.unregEdit = true; into.push(nb.label); buildTopology(ds);
+      }
+      // 不再有宗地使用的點（例：併入鄰宗後兩宗之間原本的界線點）
+      const usedNow = new Set(); for (const p of ds.parcels) if (!p.deleted) for (const id of p.ids) usedNow.add(id);
+      for (const [, t] of d.parcels) for (const id of t.ids0) if (!usedNow.has(id) && ds.points.has(id)) { d.removed.push(ds.points.get(id)); ds.points.delete(id); }
+      closeDelta(ds, d);
+    } catch (e) { closeDelta(ds, d); applyDelta(ds, d, 'undo'); for (const n of used) if (n.id != null && !ds.points.has(n.id) && d.added.some(q => q.id === n.id)) n.id = null; throw e; }
+    return { ...plan, area1: T.area, delta: d, created, into };
+  }
+  // 依舊界改正的建議（不改圖）：compareBaseline 的面積項目中「較差為正、只有一塊」者逐筆算方案並判斷該不該做。
+  // 建議 recommend：'unreg'（切出建為未登記地）、'review'（切出的面貼著別的登記地，可能是鄰宗的範圍，請人確認）、'skip'（不做，附原因）
+  function planTrimExcess(ds, res, opt = {}) {
+    const only = opt.labels ? new Set(opt.labels.map(String)) : null, out = [];
+    for (const x of res.area) {
+      if (only ? !only.has(x.label) : x.diff <= 0) continue;
+      const base = { label: x.label, reg: x.reg, area: x.area, diff: x.diff, tol: x.tol, ratio: x.ratio, refArea: x.refArea, cause: x.cause };
+      const skip = why => out.push({ ...base, recommend: 'skip', why });
+      if (!only && Math.abs(x.diff) <= x.tol) continue;
+      if (x.cause === '接圖前即不符') { skip('接圖前即不符，不是接圖造成'); continue; }
+      let p; try { p = trimExcess(ds, x, { ...opt, dry: true }); } catch (e) { skip(e.message); continue; }
+      const cut = p.faces.reduce((t, f) => t + f.area, 0);
+      if (!p.faces.length) { skip('界線與接圖前一致，沒有可切的範圍'); continue; }
+      if (Math.abs(p.area1 - x.reg) >= Math.abs(p.area0 - x.reg)) { skip(`改正後 ${p.area1.toFixed(1)} 比目前 ${p.area0.toFixed(1)} 離登記 ${x.reg} 更遠（舊圖本身可能不準，或已人工調整過）`); continue; }
+      const regNb = [...new Set(p.faces.flatMap(f => f.neighbors.filter(n => !n.unreg).map(n => n.label)))];
+      out.push({ ...base, area1: p.area1, cut, faces: p.faces.map(f => ({ area: f.area, neighbors: f.neighbors.map(n => n.label) })), adds: p.adds,
+        recommend: regNb.length ? 'review' : 'unreg', why: regNb.length ? `切出的面貼著登記地 ${regNb.join('、')}，可能是鄰宗的範圍，請確認` : '接圖後外側漏畫未登記地' });
+    }
+    const rank = { unreg: 0, review: 1, skip: 2 }; return out.sort((u, v) => rank[u.recommend] - rank[v.recommend] || v.ratio - u.ratio);
   }
   const ringCentroidXY = arr => { const o = arr[0]; let A = 0, cx = 0, cy = 0;
     for (let i = 0; i < arr.length; i++) { const p = arr[i], q = arr[(i + 1) % arr.length], px = p.x - o.x, py = p.y - o.y, qx = q.x - o.x, qy = q.y - o.y, c = px * qy - qx * py; A += c; cx += (px + qx) * c; cy += (py + qy) * c; }
@@ -3452,7 +3583,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, absorbSlivers, mergePoints, snapPointToEdge, splitByChord, deleteEdge, addFace, seamGaps, fillSeamGap, polysOverlap, overlapParcel, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
-    AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall,
+    AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall, trimExcess, planTrimExcess,
     baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
     parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner, sheetLines, nearSheetLines, datasetState, applyDatasetState, healAround, localConflicts, nearDupPoints, nearEdgePoints, seamPointPairs, diffState, parseReportNotes };
 })();
@@ -3464,6 +3595,17 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.31.0', date: '2026-10-29', type: 'minor',
+    title: '依舊界改正：接圖後外側漏畫未登記地，整批算建議、一鍵切回（AI 也能整批做）',
+    changes: [
+      '接圖前比對新增「依舊界改正（面積較差為正）」：接圖時界址被拉到接圖線、宗地變大的，沿接圖前界址切回，切出的部分建為未登記地（母號可設，例 9012）或併入鄰宗；接圖線上的點不動，跟鄰段仍然密合。全部同一步復原',
+      '「算建議」逐筆判斷：建未登記地（切出的面只貼著未登記地或段外）／請確認（貼著別的登記地，可能是鄰宗的範圍，例 KC0336 72-1 切出的屬 88-2）／不做（接圖前即不符、舊界址點在宗地外＝被鄰地佔用、改正後離登記更遠、地中地在切出範圍內…，附原因）',
+      '切出的面小於 5 m²（可設）視為圖解誤差、沿用目前界線；舊點離界線 0.3 m 內投影到線上（鄰宗同步插點、面積不變），0.6 m 內視為清理多餘點刪掉的小偏差不加回',
+      '接圖前比對的面積項目，較差為正超過 1 倍公差、只有一塊者也保留接圖前界址（rings），供改正使用',
+      'AI／MCP：planTrimExcess（只算建議，唯讀）、trimExcess（label／to／mother，或 items 整批）、getBaselineRings（接圖前界址坐標）；MCP 工具 plan_old_map_trim、trim_excess，一次處理整批不必逐筆往返',
+    ],
+  },
   {
     version: 'v0.30.0', date: '2026-10-29', type: 'minor',
     title: '連接 AI（MCP）：讓 Claude 等 AI 逐筆修待修清單',
@@ -5562,6 +5704,43 @@ $('blList').addEventListener('click', e => { const fx = e.target.closest('[data-
   if (e.target.closest('#btnBlFixAll')) { try { blFix(S.bl.res.missing.slice()); } catch (err) { msg(err.message); } return; }
   const tr = e.target.closest('tr[data-bl]'); if (!tr) return; const [k, i] = tr.dataset.bl.split(':'); blFocus(k, +i); });
 $('dlgBl').addEventListener('close', () => { S.bl.focus = null; draw(); });
+// 依舊界改正（v0.31.0）：較差為正、接圖後外側漏畫未登記地——沿接圖前界址切回，切出的部分建為未登記地或併入鄰宗
+const TRIM_REC = { unreg: ['建未登記地', '#1a7f37'], review: ['請確認', '#8a5a00'], skip: ['不做', '#57606a'] };
+function trimPlan(labels) {
+  if (!S.ds) throw new Error('請先載入作業圖'); if (!S.bl.res) blRun();
+  S.trim = Core.planTrimExcess(S.ds, S.bl.res, { labels, minFace: +$('trimMin').value || 0 }); trimPanel(); return S.trim;
+}
+function trimPanel() {
+  const l = S.trim || [], n = v => (v == null ? '' : v.toFixed(1)), c = k => l.filter(x => x.recommend === k).length;
+  $('btnTrimAll').disabled = !c('unreg');
+  $('trimSum').textContent = l.length ? `建未登記地 ${c('unreg')}、請確認 ${c('review')}、不做 ${c('skip')}` : '';
+  $('trimList').innerHTML = l.length ? `<table><thead><tr><th>地號</th><th>登記㎡</th><th>目前→改正㎡</th><th>切出㎡</th><th>建議</th><th>處理</th><th></th></tr></thead><tbody>${l.map((x, i) => {
+    const nb = [...new Set((x.faces || []).flatMap(f => f.neighbors))], opts = x.recommend === 'skip' ? '' : `<select data-trimto="${i}"><option value="unreg">建未登記地</option>${nb.map(v => `<option value="${esc(v)}">併入 ${esc(v)}</option>`).join('')}</select>`;
+    return `<tr data-trim="${i}" style="cursor:pointer"><td>${esc(x.label)}</td><td>${n(x.reg)}</td><td>${n(x.area)}${x.area1 != null ? '→' + n(x.area1) : ''}</td><td>${n(x.cut)}</td><td style="color:${TRIM_REC[x.recommend][1]}" title="${esc(x.why)}">${TRIM_REC[x.recommend][0]}<div class="muted" style="white-space:normal">${esc(x.why)}</div></td><td>${opts}</td><td>${x.recommend === 'skip' ? '' : `<button class="btn" data-trimgo="${i}">套用</button>`}</td></tr>`; }).join('')}</tbody></table>` : '';
+}
+// items：[{label, to:'unreg'|'keep'|鄰宗地號, mother, faces}]；全部同一步復原，做完重新比對
+function trimApply(items) {
+  if (!S.ds) throw new Error('請先載入作業圖'); if (!S.bl.res) blRun();
+  const deltas = [], done = [], failed = [], mother = +$('trimMother').value || 9001, minFace = +$('trimMin').value || 0;
+  for (const it of items) {
+    const x = S.bl.res.area.find(a => a.label === String(it.label)); if (!x) { failed.push({ label: it.label, reason: '沒有面積比對' }); continue; }
+    try { const r = Core.trimExcess(S.ds, x, { to: it.to ?? 'unreg', faces: it.faces, mother: it.mother ?? mother, minFace: it.minFace ?? minFace }); deltas.push(r.delta); done.push({ label: x.label, area0: r.area0, area1: r.area1, created: r.created, into: r.into }); }
+    catch (e) { failed.push({ label: it.label, reason: e.message }); }
+  }
+  if (deltas.length) pushMulti(deltas, `依舊界改正 ${done.map(d => d.label).join('、')}`);
+  blRun(); if (S.trim) trimPlan(); refresh();
+  msg((done.length ? `依舊界改正：${done.map(d => `${d.label} ${d.area0.toFixed(1)}→${d.area1.toFixed(1)} m²` + (d.created.length ? `（新增 ${d.created.join('、')}）` : '') + (d.into.length ? `（併入 ${d.into.join('、')}）` : '')).join('；')}。可一次復原` : '沒有改正任何宗地') + (failed.length ? `。未改正：${failed.map(f => `${f.label}（${f.reason}）`).join('；')}` : ''));
+  return { done, failed };
+}
+$('btnTrimPlan').onclick = () => { try { const l = trimPlan(); msg(`依舊界改正：${l.length} 筆較差為正超過公差`); } catch (e) { msg(e.message); } };
+$('btnTrimAll').onclick = () => { const l = (S.trim || []).filter(x => x.recommend === 'unreg'); if (!l.length || !confirm(`把 ${l.map(x => x.label).join('、')} 沿接圖前界址切回，切出的部分建為未登記地（${$('trimMother').value} 號）？可一次復原。`)) return; try { trimApply(l.map(x => ({ label: x.label, to: 'unreg' }))); } catch (e) { msg(e.message); } };
+$('trimList').addEventListener('click', e => {
+  const go = e.target.closest('[data-trimgo]'); if (go) { const x = S.trim[+go.dataset.trimgo], to = $('trimList').querySelector(`[data-trimto="${go.dataset.trimgo}"]`).value;
+    if (confirm(`${x.label}：沿接圖前界址切回（${x.area.toFixed(1)}→${x.area1.toFixed(1)} m²），切出的 ${x.cut.toFixed(1)} m² ${to === 'unreg' ? `建為未登記地（${$('trimMother').value} 號）` : '併入 ' + to}？可復原。`)) { try { trimApply([{ label: x.label, to }]); } catch (err) { msg(err.message); } } return; }
+  if (e.target.closest('select')) return;
+  const tr = e.target.closest('tr[data-trim]'); if (!tr) return; const x = S.trim[+tr.dataset.trim], p = S.ds.parcels.find(q => !q.deleted && q.label === x.label); if (p) blFocus('par', p.idx);
+  if (x.why) msg(`${x.label}：${x.why}`);
+});
 // ── 所有權人分析（EXAM.MDB）：載入、分析、面板、著色、選取資訊 ─────────────────────────
 async function loadOwners(file, quiet = false) {
   try {
@@ -6753,6 +6932,10 @@ const api = {
   // ── 點線面編修（MCP）：與工具箱同一組核心；每個都可 undo ──
   snapPointToEdge: ({ id, a, b }) => { const r = Core.snapPointToEdge(S.ds, id, a, b), d = r.delta, setXY = q => { const p = S.ds.points.get(id); p.y = q.y; p.x = q.x; }; pushUndo({ undoFn: () => { setXY(r.from); Core.applyDelta(S.ds, d, 'undo'); }, redoFn: () => { setXY(r.to); Core.applyDelta(S.ds, d, 'redo'); }, label: `點 ${id} 貼到線 ${a}–${b}` }); return { moved_m: r.dist, parcels: parLabels(d) }; },
   mergePoints: ({ from, to }) => { const r = Core.mergePoints(S.ds, from, to); pushStruct(r.delta, `點 ${from} 併入 ${to}`); return { parcels: parLabels(r.delta) }; },
+  // 依舊界改正（v0.31.0）：planTrimExcess 只算建議不改圖（labels 省略＝全部較差為正超過公差者）；trimExcess 逐筆或整批套用（items 一次復原）
+  planTrimExcess: ({ labels, minFace } = {}) => { if (minFace != null) $('trimMin').value = minFace; return trimPlan(labels).map(({ faces, adds, ...x }) => ({ ...x, faces: faces && faces.map(f => ({ area: +f.area.toFixed(2), neighbors: f.neighbors })), new_points: adds ? adds.free + adds.edge : undefined })); },
+  trimExcess: ({ label, to = 'unreg', faces, mother, minFace, items } = {}) => trimApply(items || [{ label, to, faces, mother, minFace }]),
+  getBaselineRings: ({ label }) => { if (!S.bl.res) blRun(); const x = [...S.bl.res.area, ...S.bl.res.missing, ...S.bl.res.partial, ...S.bl.res.unreg].find(a => a.label === String(label)); if (!x) throw new Error('接圖前比對沒有 ' + label); return { label: x.label, rings: (x.rings || []).map(r => r.map(q => ({ y: q.y, x: q.x }))) }; },
   splitByChord: ({ parcel, a, b }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitByChord(S.ds, p.idx, a, b); pushStruct(r.delta, `新增線 ${a}–${b}`); return { keep: r.keep, created: r.created }; },
   deleteEdge: ({ a, b }) => { const r = Core.deleteEdge(S.ds, a, b); pushStruct(r.delta, `刪除線 ${a}–${b}`); return { keep: r.keep, merged: r.merged }; },
   addFace: ({ ids, mother = 9001 }) => { const r = Core.addFace(S.ds, ids, mother); pushStruct(r.delta, `新增面 ${r.label}`); return { label: r.label }; },
@@ -6822,7 +7005,7 @@ const api = {
 window.CadastralAPI = api;
 // ── AI 橋接（MCP）：頁面主動連到本機 tools/mcp-bridge.mjs 的 WebSocket，收 {id,method,params}、回 {id,result|error} ──
 // 權限由使用者在「說明 → 連接 AI（MCP）」決定：唯讀／每次問我／直接修改。AI 的每個修改都進作業紀錄、可 Ctrl+Z
-const AI_READ = /^(get|list|find|check|compare|export|toLatLon|liveCheck|batchFind|seamPointPairs|seamGaps|ringIssues|unregSummary|saveProjectJson|benchRender|select|gotoFixItem|setBasemap|setStyle)/;
+const AI_READ = /^(get|list|find|check|compare|plan|export|toLatLon|liveCheck|batchFind|seamPointPairs|seamGaps|ringIssues|unregSummary|saveProjectJson|benchRender|select|gotoFixItem|setBasemap|setStyle)/;
 function aiReadOnly(m) { return AI_READ.test(m) && m !== 'checkUpdate'; }
 const AI = { ws: null, want: false, mode: 'ask', url: 'ws://127.0.0.1:8765', calls: [], timer: null };
 try { const j = JSON.parse(localStorage.getItem('cw.ai') || 'null'); if (j) { if (j.url) AI.url = j.url; if (['read', 'ask', 'write'].includes(j.mode)) AI.mode = j.mode; } } catch (e) { /* ignore */ }

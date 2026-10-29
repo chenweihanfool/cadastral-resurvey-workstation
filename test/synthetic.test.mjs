@@ -829,6 +829,43 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.ok(html.includes('只列較差為負') && !html.includes('data-cat="area"'), '補回後沒有較差為負的面積超限');
 }
 
+// ── 依舊界改正（v0.31.0）：接圖後界址被拉到接圖線、外側漏畫未登記地——沿接圖前界址切出，外側建為未登記地或併入鄰宗 ──
+{
+  const Y = 2700000, X = 200000, mk = (pts, rings, par) => Core.datasetFromD({ pts: rd(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings), par: par && rd(F_D11, par) });
+  const D11 = (m, c, reg) => ({ SECTION_O: 1, PAR_O_M: m, PAR_O_C: c, PAR_N_M: m, PAR_N_C: c, SECTION_N: 1, AREA_OLD: reg / 1e4, AREA_NEW: 0 });
+  // 作業圖：1（0–12 × 0–10，登記 100 m²，接圖後北界被拉到 y=12）；東鄰 east（0–12 × 10–20）
+  const cur = east => mk([[1, 0, 0], [2, 0, 10], [3, 12, 10], [4, 12, 0], [7, 0, 20], [8, 12, 20]],
+    [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, ...east, [2, 7, 8, 3])], [D11(1, 0, 100), D11(2, 0, 120)]);
+  // 接圖前：1 是 0–10 × 0–10
+  const ref = mk([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0]], [ring(1, 1, 0, [1, 2, 3, 4])], [D11(1, 0, 100)]);
+  const item = ds => Core.compareBaseline(ds, [ref], { identity: true, ratio: 1 }).area.find(a => a.label === '1');
+  // ① 外側建為未登記地；東鄰插入新點、面積不變
+  let ds = cur([2, 0]), x = item(ds); assert.ok(x.diff > 0 && x.rings.length === 1, '較差為正也帶接圖前界址');
+  const pl = Core.planTrimExcess(ds, Core.compareBaseline(ds, [ref], { identity: true, ratio: 1 }));
+  assert.equal(pl[0].label, '1'); assert.equal(pl[0].recommend, 'review', '切出的面貼著登記地 2：請人確認'); near(pl[0].cut, 20, 1e-6);
+  let r = Core.trimExcess(ds, x, { to: 'unreg', mother: 9012 });
+  near(ds.parcels[0].area, 100, 1e-6, '1 回到接圖前'); assert.deepEqual(r.created, ['9012-1']); near(ds.parcels.find(p => p.label === '9012-1').area, 20, 1e-6);
+  near(ds.parcels[1].area, 120, 1e-6, '東鄰面積不變'); assert.equal(ds.parcels[1].ids.length, 5, '東鄰插入線上新點'); assert.equal(Core.ringConflicts(ds).cross.length, 0);
+  Core.applyDelta(ds, r.delta, 'undo'); near(ds.parcels[0].area, 120, 1e-6, '可復原'); assert.equal(ds.parcels[1].ids.length, 4);
+  // ② 東鄰是未登記地：建議直接做
+  ds = cur([9001, 5]); assert.equal(Core.planTrimExcess(ds, Core.compareBaseline(ds, [ref], { identity: true, ratio: 1 }))[0].recommend, 'unreg');
+  // ③ 切出的面併入鄰宗（例：KC0336 72-1 切出的部分屬 88-2）
+  ds = cur([2, 0]); r = Core.trimExcess(ds, item(ds), { to: '2' });
+  assert.deepEqual(r.into, ['2']); near(ds.parcels[0].area, 100, 1e-6); near(ds.parcels[1].area, 140, 1e-6, '鄰宗 2 併入 20'); assert.equal(r.created.length, 0);
+  assert.equal(Core.ringConflicts(ds).cross.length, 0);
+  // ④ keep：不切；dry：不改圖
+  ds = cur([2, 0]); const dry = Core.trimExcess(ds, item(ds), { dry: true }); assert.equal(dry.delta, undefined); near(ds.parcels[0].area, 120, 1e-6);
+  // ⑤ 接圖前界址在目前宗地外（宗地被鄰地佔用）：停下
+  const big = mk([[1, 0, 0], [2, 0, 13], [3, 10, 13], [4, 10, 0]], [ring(1, 1, 0, [1, 2, 3, 4])], [D11(1, 0, 100)]);
+  ds = cur([2, 0]); const xb = Core.compareBaseline(ds, [big], { identity: true, ratio: 1 }).area.find(a => a.label === '1');
+  assert.throws(() => Core.trimExcess(ds, { ...xb, rings: xb.rings.length ? xb.rings : [[{ x: X, y: Y }, { x: X + 13, y: Y }, { x: X + 13, y: Y + 10 }, { x: X, y: Y + 10 }]] }), /宗地外|地外/);
+  // ⑥ 小於 minFace 的差異屬圖解誤差：不切
+  const tiny = mk([[1, 0, 0], [2, 0, 10], [3, 11.4, 10], [4, 11.4, 0]], [ring(1, 1, 0, [1, 2, 3, 4])], [D11(1, 0, 100)]);
+  ds = cur([2, 0]); const xt = Core.compareBaseline(ds, [tiny], { identity: true, ratio: 1 }).area.find(a => a.label === '1');
+  assert.equal(Core.trimExcess(ds, xt, { dry: true }).faces.length, 1, '6 m² 照預設 minFace 5 會切');
+  const t10 = Core.trimExcess(ds, xt, { dry: true, minFace: 10 }); assert.equal(t10.faces.length, 0, '小於 minFace 不切'); near(t10.area1, 120, 1e-6, '沿用目前界線');
+}
+
 // ── 分幅對位（v0.26.0）：整體偏移（TWD67 量級）＋各幅各自平移 ──
 {
   const Y = 2700000, X = 200000, cur = Core.newDataset('cur', 't'), sheets = [Core.newDataset('L', 't'), Core.newDataset('R', 't')], off = [[3, 0], [0, -2]], G = [800, -200];

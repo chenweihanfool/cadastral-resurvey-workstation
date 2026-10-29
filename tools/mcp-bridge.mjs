@@ -111,6 +111,10 @@ const TOOLS = [
   { name: 'get_parcel', description: '宗地的面積、登記面積與界址點坐標（y＝縱坐標北、x＝橫坐標東，TWD97）。', inputSchema: S({ label: LABEL }, ['label']), run: a => callPage('getParcel', a) },
   { name: 'get_check_report', description: '舊圖檢核結果：每宗的紅／黃／碎片、離舊圖線長度、影像無墨線、建議併入的鄰宗。', inputSchema: S({ limit: { type: 'integer', default: 200 } }), run: a => callPage('getCheckReport', a) },
   { name: 'fix_sliver', description: '依舊圖檢核的建議，把碎片併入建議的鄰宗。', inputSchema: S({ label: LABEL }, ['label']), run: a => callPage('fixSliver', a) },
+  { name: 'plan_old_map_trim', description: '依舊界改正的建議（不改圖）：面積較差為正、接圖後界址被拉到接圖線的宗地，沿接圖前界址可切出多少、切出的面貼著哪些鄰宗。recommend＝unreg（建未登記地）／review（貼著別的登記地，可能是鄰宗範圍，要問使用者）／skip（不做，附原因）。整批處理的起點。', inputSchema: S({ labels: { type: 'array', items: { type: 'string' }, description: '只算這些地號；省略＝全部較差為正超過公差者' }, min_face: { type: 'number', description: '切出的面小於此面積（m²）視為圖解誤差不切，預設 5' } }),
+    run: ({ labels, min_face }) => callPage('planTrimExcess', { labels, minFace: min_face }) },
+  { name: 'trim_excess', description: '依舊界改正（會改圖）：沿接圖前界址切回，切出的部分建為未登記地（to=unreg，mother 母號）、併入鄰宗（to=鄰宗地號）或不切（keep）。items 可一次套用多筆（同一步復原），套用後自動重新比對。', inputSchema: S({ label: LABEL, to: { type: 'string', description: 'unreg（預設）、keep，或鄰宗地號' }, mother: { type: 'integer', description: '未登記地母號，預設頁面設定（9001）' }, items: { type: 'array', items: { type: 'object' }, description: '[{label,to,mother}]，整批套用' } }),
+    run: a => callPage('trimExcess', a) },
   { name: 'live_check', description: '最近一次修改後的即時檢查（交錯、重疊、T 字接點）。每次修完一筆後呼叫，確認沒有產生新問題。', inputSchema: S(), run: () => callPage('liveCheck') },
   { name: 'undo', description: '復原上一個動作（等同 Ctrl+Z）。修錯時用。', inputSchema: S(), run: () => callPage('undo') },
   { name: 'save_milestone', description: '把目前的作業圖存成里程碑（版本），之後可比較或還原。開始大量修改前先存一個。', inputSchema: S({ name: { type: 'string' } }), run: a => callPage('saveMilestone', a) },
@@ -118,7 +122,7 @@ const TOOLS = [
   { name: 'call_api', description: '呼叫任一 CadastralAPI 方法，例如 mergePoints {from,to}、snapPointToEdge {id,a,b}、splitByChord {parcel,a,b}、deleteEdge {a,b}、mergeParcels、restoreShortfall {label}、batchFind／batchApply {kind}、ringIssues、setNote。方法與參數見 list_methods 與 docs/DEVELOPMENT.md「AI／MCP 現況」。', inputSchema: S({ method: { type: 'string' }, params: { type: 'object' } }, ['method']),
     run: ({ method, params }) => callPage(method, params) },
 ];
-const INSTRUCTIONS = '地籍圖重測工作站（NECEXE D 檔）。逐筆修正流程：workstation_status → save_milestone → fix_queue_list → 對每筆 fix_queue_goto、get_parcel／get_check_report 判斷、修正（fix_sliver 或 call_api）、live_check 確認、fix_queue_done 附處理方式備註。判斷不了的不要硬修，用 call_api setNote 留備註給使用者。修錯用 undo。使用者拒絕或權限唯讀時停下說明，不要繞過。坐標 y＝北、x＝東（TWD97）。';
+const INSTRUCTIONS = '地籍圖重測工作站（NECEXE D 檔）。逐筆修正流程：workstation_status → save_milestone → fix_queue_list → 對每筆 fix_queue_goto、get_parcel／get_check_report 判斷、修正（fix_sliver 或 call_api）、live_check 確認、fix_queue_done 附處理方式備註。判斷不了的不要硬修，用 call_api setNote 留備註給使用者。面積較差為正（接圖後外側漏畫未登記地）用整批：plan_old_map_trim 看建議 → recommend=unreg 的用 trim_excess items 一次套用 → review 的把切出面積與鄰宗列給使用者決定（建未登記地、併入哪一宗或不做）。修錯用 undo。使用者拒絕或權限唯讀時停下說明，不要繞過。坐標 y＝北、x＝東（TWD97）。';
 
 // ── MCP stdio（JSON-RPC 2.0，一行一則）──
 const out = m => process.stdout.write(JSON.stringify(m) + '\n');
