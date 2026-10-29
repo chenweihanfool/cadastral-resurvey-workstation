@@ -896,4 +896,30 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const nearby = Core.nearSheetLines(cur, sl, 3); assert.deepEqual(nearby.map(q => q.label).sort(), ['2', '3'], '只有緊鄰分幅線的兩宗');
   assert.equal(Core.sheetLines(cur, [[A]], { align: al }).segs.length, 0, '單幅沒有分幅線');
 }
+
+// ── v0.29.0：即時檢查、批次候選、分幅接合點、里程碑比較 ──
+{
+  const Y = 2700000, X = 200000, files = (pts, rings) => ({ pts: rd(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings) });
+  const F = files([[21, -10, 0], [22, -10, 10], [23, 0, 10], [24, 0, 0], [31, 0, -5], [32, 0.3, 5], [33, 10, 5], [34, 10, -5]], [ring(1, 1, 0, [31, 32, 33, 34]), ring(1, 2, 0, [24, 21, 22, 23])]);
+  const ds = Core.datasetFromD(F); assert.equal(Core.localConflicts(ds, [0, 1]).length, 0, '原圖沒有問題');
+  // 不經 snapPointToEdge、直接把 32 移到線上並只插進 2（v0.27 的行為）→ 24 是 T 字接點、兩邊重疊
+  const s0 = Core.datasetState(ds); ds.points.get(32).y = Y; const p2 = ds.parcels[1]; p2.ids.splice(p2.ids.indexOf(24) + 1, 0, 32); Core.buildTopology(ds);
+  const lc = Core.localConflicts(ds, [1]); assert.ok(lc.some(c => c.kind === 'tee' && c.id === 24), JSON.stringify(lc)); assert.ok(lc.some(c => c.kind === 'overlap'));
+  Core.applyDatasetState(ds, s0); assert.equal(Core.localConflicts(ds, [0, 1]).length, 0);
+  // 批次候選：離線點（32 離 24–23 0.3 m）、重複點
+  const ne = Core.nearEdgePoints(ds, 0.5); assert.ok(ne.some(c => c.id === 32 && c.a === 23 && c.b === 24 || c.id === 32 && c.a === 24 && c.b === 23), JSON.stringify(ne)); assert.equal(Core.nearEdgePoints(ds, 0.1).length, 0);
+  const ds2 = Core.datasetFromD(files([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 0, 20], [6, 10, 20], [7, 0, 10.02]], [ring(1, 1, 0, [1, 2, 3, 4]), ring(1, 2, 0, [7, 5, 6, 3])]));
+  const dup = Core.nearDupPoints(ds2, 0.05); assert.equal(dup.length, 1); assert.deepEqual([dup[0].from, dup[0].to], [7, 2]);
+  // 里程碑：存下、修改、比較
+  const ms = { state: Core.datasetState(ds2), areas: ds2.parcels.map(p => p.area) };
+  { const mm = Core.mergeParcels(ds2, [0, 1]); assert.ok(ds2.parcels[1].deleted); Core.applyDatasetState(ds2, ms.state); assert.ok(!ds2.parcels[1].deleted, '還原里程碑：deleted 清掉'); near(ds2.parcels[1].area, ms.areas[1], 1e-9); void mm; }
+  Core.mergePoints(ds2, 7, 2); const df = Core.diffState(ds2, ms); assert.deepEqual(df.removed, [7]); assert.deepEqual(df.parcels.map(q => [q.label, q.kind]), [['2', '界址串改變']]);
+}
+{
+  // 分幅線接合點：作業圖接好但分幅線上有兩組重複點（0.1 m 與 1.2 m）
+  const mkDs = (name, pts, rings) => { const d = Core.newDataset(name, 't'); for (const [id, y, x] of pts) d.points.set(id, { id, y, x, y0: y, x0: x }); rings.forEach(([l, ids]) => d.parcels.push({ key: '1|' + l + '|0', label: String(l), oldLabel: String(l), ids, mid: ids.map(() => false) })); return Core.finalize(d); };
+  const cur = mkDs('cur', [[1, 0, 0], [2, 0, 20], [3, 10, 20], [4, 10, 0], [5, 0, 20.1], [6, 0, 40], [7, 10, 40], [8, 10, 21.2]], [[1, [1, 2, 3, 4]], [2, [5, 6, 7, 8]]]);
+  const sl = { segs: [{ ax: 20, ay: 0, bx: 20, by: 10, a: 'A', b: 'B' }], pairs: [{ a: 'A', b: 'B', len: 10 }] };
+  const pr = Core.seamPointPairs(cur, sl); assert.deepEqual(pr.map(q => [q.level, Math.round(q.d * 10) / 10]), [['ok', 0.1], ['warn', 1.2]]);
+}
 console.log('SYNTHETIC OK');

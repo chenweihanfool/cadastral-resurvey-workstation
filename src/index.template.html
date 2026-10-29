@@ -28,6 +28,7 @@ main.nosb{--sw:0px}main.nosb aside{display:none}main.noflow{--fw:0px}main.noflow
 #flowTabs{margin:10px 12px 4px;display:flex}#flowTabs button{flex:1}
 #flow .stage{padding:0 12px 12px}#flow .stage h3{font-size:12px;color:var(--muted);font-weight:600;margin:10px 0 4px;letter-spacing:.04em}
 .steps{list-style:none;margin:0;padding:0;counter-reset:s}
+textarea.note{width:100%;margin-top:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit;font-size:12px;padding:4px 6px}.blist{max-height:150px;overflow:auto;margin-top:4px}.blist div{cursor:pointer;padding:1px 0}.blist div:hover{color:var(--sel)}
 .prog{margin:10px 12px 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px}.prog .ph{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}.prog .ph span{font-weight:700;color:var(--ok)}
 .pbar{height:7px;border-radius:4px;background:var(--line);overflow:hidden;margin:3px 0}.pbar i{display:block;height:100%;width:0;background:var(--ok);transition:width .3s}.pbar.fix i{background:#1c7ed6}
 .resume{margin:10px 12px 0;padding:8px 10px;border:1px solid #1c7ed6;border-radius:8px;background:color-mix(in srgb,#1c7ed6 8%,transparent)}
@@ -126,12 +127,12 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <header>
   <button class="btn" id="btnFlow" title="顯示／隱藏作業流程欄">☰ 流程</button><h1>地籍圖重測工作站</h1>
   <input type="file" id="fileIn" multiple hidden>
-  <input type="file" id="dirIn" webkitdirectory hidden><input type="file" id="projDir" webkitdirectory hidden><input type="file" id="projIn" accept=".crwp" hidden>
+  <input type="file" id="dirIn" webkitdirectory hidden><input type="file" id="projDir" webkitdirectory hidden><input type="file" id="projIn" accept=".crwp" hidden><input type="file" id="notesIn" accept=".csv" hidden>
   <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden><input type="file" id="blIn" multiple hidden><input type="file" id="ownIn" accept=".mdb,.MDB" hidden><input type="file" id="blDir" webkitdirectory hidden>
   <nav id="menubar">
     <div class="menu"><button class="mbtn">檔案</button><div class="mlist">
       <button data-act="project">開啟專案資料夾…<small>案件、影像、分幅、鄰段一次讀入</small></button><button data-act="open">開啟檔案…</button><button data-act="folder">開啟案件資料夾…</button><hr>
-      <button data-act="projopen">開啟專案檔…<small>.crwp，接著上次做</small></button><button data-act="projsave">儲存專案檔<small>Ctrl+S</small></button><button data-act="projsaveas">另存專案檔…<small>Ctrl+Shift+S</small></button><hr>
+      <button data-act="projopen">開啟專案檔…<small>.crwp，接著上次做</small></button><button data-act="projsave">儲存專案檔<small>Ctrl+S</small></button><button data-act="projsaveas">另存專案檔…<small>Ctrl+Shift+S</small></button><button data-act="ms">里程碑…<small>存版本、比較差異</small></button><button data-act="log">作業紀錄…<small>輸出給審核、交接</small></button><hr>
       <button data-act="data">資料來源與匯入…<small>鄰段、影像、控制點</small></button><button data-act="imp">匯入現況點…</button><hr>
       <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
@@ -174,6 +175,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <li><button class="btn" disabled>一鍵調整圖形</button><span class="muted">規劃中</span></li></ul></div>
     <div class="stage" id="stOut" hidden><h3>成果與報表</h3><ul class="plan">
       <li><button class="btn primary" data-act="outcase">輸出完整案件資料夾</button><span class="muted">NECEXE 可直接開啟</span></li>
+      <li><button class="btn" data-act="log">作業紀錄</button><span class="muted">CSV／列印版，給審核、交接</span></li><li><button class="btn" data-act="ms">里程碑</button><span class="muted">存版本、比較差異</span></li>
       <li><button class="btn" data-act="err">偵錯報表 .ERR</button></li>
       <li><button class="btn" data-act="own">所有權人分析</button><span class="muted">EXAM.MDB</span></li>
       <li><button class="btn" data-act="out">輸出成果（單檔、CSV）</button></li>
@@ -190,7 +192,8 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div class="row small" style="margin-bottom:6px">
         <label class="chk"><input type="radio" name="scope" value="changed" checked>有變動</label>
         <label class="chk"><input type="radio" name="scope" value="selected">已選取</label>
-        <label class="chk"><input type="radio" name="scope" value="all">全部</label>
+        <label class="chk"><input type="radio" name="scope" value="all">全部</label><label class="chk" title="對登記面積超出第 243 條法定公差的宗地"><input type="radio" name="scope" value="over">超公差</label>
+        <label class="chk" title="Δ登記、圖上標註與塗色改用地籍測量實施規則第 243 條公差 (0.25＋0.07·⁴√F)·√F（係數在「接圖前比對」面板），超出的塗紅；沒有登記面積的用右邊的警示值"><input type="checkbox" id="tolLegal" checked>法定公差</label>
         <span class="muted">警示 &gt;</span><input type="number" id="tol" value="1" step="0.1" style="width:60px"><span class="muted">m²</span>
         <select id="deltaMode" title="圖上面積較差的基準"><option value="adj">圖上：對調整前</option><option value="reg">圖上：對登記面積</option></select>
         <input type="text" id="find" placeholder="跳至地號 (例 137-1)"></div>
@@ -269,21 +272,34 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
       <div id="blList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
       <div class="small muted" style="margin-top:4px">圖上：紅＝遺漏（接圖前有、現在沒有）、橘＝只有一部分在圖內的接圖前宗地、粉紅框＝面積超限。點表格一列可放大檢視。</div></section>
     </div></dialog>
+<dialog class="fp" id="dlgLog"><div class="fphead"><b>作業紀錄</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
+  <div class="row small"><input id="logFind" type="search" placeholder="找地號或動作"><button class="btn" id="btnLogCsv">輸出 CSV</button><button class="btn" id="btnLogHtml" title="可列印、另存 PDF，附作業人員／審核簽名欄">輸出列印版（HTML）</button></div>
+  <div id="logSum" class="small muted" style="margin:4px 0"></div><div id="tblwrap" style="max-height:420px"><table class="small"><thead><tr><th>時間</th><th>動作</th><th>地號（變動 面積前→後 ㎡）</th><th>移點</th></tr></thead><tbody id="logBody"></tbody></table></div>
+  <div class="small muted" style="margin-top:4px">每個動作（含復原、重做、一鍵步驟）都會記下，存在專案檔裡。</div></section></div></dialog>
+<dialog class="fp" id="dlgMs"><div class="fphead"><b>里程碑（版本）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
+  <div class="row small"><button class="btn primary" id="btnMsSave">存目前為里程碑</button><span class="muted">執行第 6 步時自動存「步驟 6 檢核時」「步驟 6 一鍵修正前」；存在專案檔裡</span></div>
+  <div id="tblwrap" style="max-height:220px;margin-top:6px"><table class="small"><tbody id="msList"></tbody></table></div><div id="msDiff" class="small" style="margin-top:6px"></div></section></div></dialog>
 <dialog class="fp" id="dlgTopo"><div class="fphead"><b>點線面編修工具箱</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody">
 <section><h2>待修清單（看完報告逐筆修）</h2>
   <div class="row small"><select id="tqSrc"><option value="chk">舊圖檢核（紅／黃／碎片）</option><option value="neg">較差為負：遺漏、面積不足、被佔用</option><option value="area">面積超過公差（全部）</option><option value="unreg">未登記地需分割</option><option value="ring">界址串問題</option><option value="sheet">分幅線附近（沿接合線逐宗看）</option></select>
     <button class="btn" id="tqPrev" title="上一筆">◀</button><span id="tqPos" class="muted"></span><button class="btn" id="tqNext" title="下一筆">▶</button><button class="btn" id="tqDone" title="這筆修好了，從清單劃掉並跳下一筆">✓ 修好了</button></div>
   <div class="row small" style="margin-top:4px"><label class="chk" title="分幅線（步驟 2）附近的地號排在最前面：接圖出問題的多半在分幅線附近"><input type="checkbox" id="tqSheet" checked>分幅線附近優先</label><label>距離 ≤ <input id="sheetDist" type="number" value="10" min="1" step="1" style="width:4em"> m</label><label class="chk"><input type="checkbox" id="sheetShow" checked>圖上顯示分幅線</label></div>
-  <div id="tqInfo" class="small" style="margin-top:4px"></div></section>
+  <div id="tqInfo" class="small" style="margin-top:4px"></div>
+  <textarea id="tqNote" class="note" rows="2" disabled placeholder="跳到一筆待修項目後可寫備註"></textarea>
+  <div class="row small"><span class="muted">備註存在專案檔、輸出互動報告時帶進去</span><button class="btn" data-act="notesimp" title="互動報告「匯出備註 CSV」的檔案：備註與「已處理」匯回工作站">匯入報告備註…</button></div></section>
 <section><h2>工具</h2><div id="topoTools"></div>
   <div id="topoHint" class="small" style="margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px"></div>
   <div class="small muted" style="margin-top:6px">工具選好後在圖上依序點選（橘色＝已點選），湊齊就執行並留在同一工具，可連續修下一筆。Esc 結束、Enter 完成（新增面、合併面）、Backspace 退一步；每個動作都可 Ctrl+Z 復原。點線面之間的位相（共用點、共用線、鄰宗）會一起維護：點貼到線會接進線兩側的宗地，刪線＝兩宗合併，新增線＝切成兩宗。</div></section>
+<section><h2>即時檢查</h2><div class="row small"><label class="chk"><input type="checkbox" id="liveChk" checked>每次修改後檢查</label><button class="btn" id="liveNext">看下一處 ▶</button></div><div id="liveInfo" class="small" style="margin-top:4px"></div></section>
+<section><h2>批次處理（同類一次做完）</h2><div class="row small"><select id="batchKind"></select><span id="batchTolWrap">≤ <input id="batchTol" type="number" value="0.05" step="0.01" min="0.001" style="width:5em"> m</span><button class="btn" id="batchPrev">預覽</button><button class="btn primary" id="batchApply" disabled>全部套用</button></div><div id="batchInfo" class="small" style="margin-top:4px"></div></section>
+<section><h2>分幅線接合點</h2><div class="row small"><label class="chk"><input type="checkbox" id="seamShow" checked>圖上顯示配對</label></div><div id="seamInfo" class="small" style="margin-top:4px"></div>
+  <div id="tblwrap" style="max-height:180px"><table class="small"><tbody id="seamList"></tbody></table></div></section>
 </div></dialog>
 <dialog class="fp" id="dlgChk"><div class="fphead"><b>舊圖檢核（原分幅向量圖、舊圖影像）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><h2>比對來源</h2>
       <div id="chkSrc" class="small"></div>
       <div class="small muted" style="margin-top:4px">每宗地先自動小幅平移去配舊圖（舊圖紙張伸縮、掃描定位誤差），再看形狀：界址線離舊圖界線太遠（多畫、跑掉）、舊圖界線穿過宗地內部（少分、併錯）、影像上該處沒有墨線。兩側都是未登記地的分割線不檢查。</div>
       <div class="row small" style="margin-top:6px"><span class="muted">向量容差</span><input type="number" id="chkTol" value="1" step="0.1" min="0.1" style="width:56px"><span class="muted">m　影像容差</span><input type="number" id="chkInkTol" value="0.6" step="0.1" min="0.1" style="width:56px"><span class="muted">m　影像平移 ±</span><input type="number" id="chkShift" value="5" step="0.5" min="0" style="width:52px"><span class="muted">m</span></div>
-      <div class="row small" style="margin-top:6px"><button class="btn primary" id="btnChkRun">開始檢核</button><button class="btn" data-act="topo" title="開工具箱，用待修清單逐筆手工修">工具箱逐筆修 →</button><button class="btn" id="btnChkFix" disabled title="遺漏地號依接圖前界址切回；較差為負且接圖後產生者依接圖前界址從相鄰未登記地補回（登記地不動）；碎片併入建議的鄰宗。可一次復原，修完重新檢核並輸出報告">一鍵修正並出報告</button><button class="btn" id="btnChkCsv" disabled>報告 CSV</button><button class="btn" id="btnChkHtml" disabled title="每筆一張卡片附局部圖，可篩選、勾已處理、寫備註、列印成 PDF；有做接圖前比對會一起放進去">互動報告（HTML／PDF）</button><label class="chk"><input type="checkbox" id="chkMap" checked>圖上標記</label><label class="chk" title="報告只列計算面積小於登記面積的宗地（遺漏一律列）"><input type="checkbox" id="rptNeg" checked>報告只列較差為負</label></div>
+      <div class="row small" style="margin-top:6px"><button class="btn primary" id="btnChkRun">開始檢核</button><button class="btn" data-act="topo" title="開工具箱，用待修清單逐筆手工修">工具箱逐筆修 →</button><button class="btn" id="btnChkFix" disabled title="遺漏地號依接圖前界址切回；較差為負且接圖後產生者依接圖前界址從相鄰未登記地補回（登記地不動）；碎片併入建議的鄰宗。可一次復原，修完重新檢核並輸出報告">一鍵修正並出報告</button><button class="btn" id="btnChkCsv" disabled>報告 CSV</button><button class="btn" id="btnChkHtml" disabled title="每筆一張卡片附局部圖，可篩選、勾已處理、寫備註、列印成 PDF；有做接圖前比對會一起放進去">互動報告（HTML／PDF）</button><button class="btn" data-act="notesimp" title="互動報告「匯出備註 CSV」的檔案：備註與「已處理」匯回工作站">匯入報告備註…</button><label class="chk"><input type="checkbox" id="chkMap" checked>圖上標記</label><label class="chk" title="報告只列計算面積小於登記面積的宗地（遺漏一律列）"><input type="checkbox" id="rptNeg" checked>報告只列較差為負</label></div>
       <div id="chkSum" class="small" style="margin:6px 0"></div>
       <div id="chkList" style="max-height:44vh;overflow-y:auto;overflow-x:hidden"></div>
       <div class="small muted" style="margin-top:4px">圖上：紅粗線＝影像上沒有墨線、紫＝離分幅舊圖界線超過容差、藍虛線＝舊圖界線穿過宗地內部、灰框＝影像對不上（未判斷）。碎片（&lt; 30 m²）可一鍵併入建議的相鄰宗地；其餘請人工判斷後修正，按「已確認」劃掉。</div></section>
@@ -376,6 +392,8 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
 <p><b>作業流程</b>：左側「作業流程」欄（上方「☰ 流程」開關）照順序做：<b>1 讀檔</b>（「開啟專案資料夾」一次讀入案件、舊圖影像、分幅舊圖、鄰段、EXAM.MDB）→ <b>2 自動接圖</b>（目前先加入分幅線：分幅舊圖各幅的接合處，載入兩幅以上時自動加入；依分幅線自動接圖開發中）→ <b>3 鄰段接合</b> → <b>4 未登記土地合併分割</b> → <b>5 去除雜點</b> → <b>6 檢核</b>。每步按「一鍵執行」用預設值做完並顯示結果，「詳細設定…」開原本的面板調整；全部可復原。專案資料夾的慣例：鄰段放在名稱含「鄰段」的資料夾、分幅舊圖放在含「分幅」的資料夾。</p>
 <p><b>點線面編修工具箱</b>（上方「工具箱」）：看完檢核報告逐筆手工修。上半是<b>待修清單</b>（舊圖檢核、較差為負、面積超限、未登記地、界址串問題），◀ ▶ 跳到下一筆、「✓ 修好了」劃掉。下半是工具：點（線上加點、加孤立點、移動、刪點、點貼到線、點併點）、線（新增線＝切開宗地、刪除線＝兩宗合併）、面（新增面＝空地建新地號、刪除面、合併面、重繪界址串）。選工具後在圖上依序點選，湊齊就執行；Esc 結束、Enter 完成、Backspace 退一步，Ctrl+Z 復原。勾「分幅線附近優先」時，分幅線附近的地號排在清單最前面（也可選「分幅線附近」沿接合線逐宗看）。</p>
+<p><b>工具箱其他區塊</b>：<b>即時檢查</b>（每次修改後查動到的宗地有沒有交錯、重疊、T 字接點，紅圈標出）、<b>批次處理</b>（碎片併入、離線點貼到線、重複點併點、分幅線接合點併點：先預覽再全部套用，一次復原）、<b>分幅線接合點</b>（兩幅接邊點配對：綠 < 0.3 m 可一鍵併、黃 0.3～2 m 逐對判斷）。待修清單每筆可寫備註，輸出互動報告時帶進去；報告匯出的備註 CSV 可再匯回。</p>
+<p><b>作業紀錄、里程碑</b>（檔案選單）：作業紀錄記下每個動作與動到的地號、面積前後，可輸出 CSV 或列印版；里程碑把目前的圖存成一個版本，可比較差異或還原。都存在專案檔裡。右側較差表勾「法定公差」時，Δ登記與塗色用第 243 條公差，超出的塗紅。</p>
 <p><b>專案檔</b>（檔案 → 儲存專案檔，Ctrl+S）：把讀入的原始檔案（案件、鄰段、分幅舊圖、EXAM.MDB，可選含影像）與目前進度（點位、界址串、各步驟結果、檢核報告與「修好了」、待修清單、分幅線、設定）存成一個 <code>.crwp</code> 檔；下次「開啟專案檔」或把它拖進畫面就接著做（復原記錄不存）。程式也會自動暫存在瀏覽器，重開時流程欄上方會出現「接著做」。流程欄上方的進度條：綠＝圖資準備 6 步、藍＝檢核後逐筆修劃掉的比例。</p>
 <p><b>舊圖檢核</b>（步驟 6，「處理→舊圖檢核」）：每宗地先小幅平移去配舊圖，再比形狀——界址線離分幅舊圖界線太遠（紫）、舊圖界線穿過宗地內部（藍虛線）、舊圖影像上該處沒有墨線（紅）。影像對不上的方格（灰框）不判斷。碎片（&lt; 30 m²）可一鍵併入建議的相鄰宗地；其餘請人工判斷後修正，按「已確認」劃掉。</p>
 <p><b>版面</b>：上方是<b>功能列表</b>（檔案／編輯／檢視／處理／說明）與常用工具列；細項設定都在選單開出的<b>浮動面板</b>裡（開著也能操作圖面，✕ 關閉）。右側欄只留兩塊：選取資訊與面積較差表，可收折，也可在「檢視」隱藏。</p>
