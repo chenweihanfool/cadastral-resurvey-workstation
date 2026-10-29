@@ -3,6 +3,16 @@
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.30.0', date: '2026-10-29', type: 'minor',
+    title: '連接 AI（MCP）：讓 Claude 等 AI 逐筆修待修清單',
+    changes: [
+      '新增「說明 → 連接 AI（MCP）」：按「連線」接上本機的 MCP 橋接程式（tools/mcp-bridge.mjs，Release 附檔），Claude Desktop／Claude Code 就能操作這個頁面：讀待修清單、跳到那一筆（畫面跟著放大）、修正、標「修好了」並寫處理方式備註',
+      'AI 權限由你決定：唯讀（只能看、跳到某筆）／每次問我（每個修改先跳出確認，預設）／直接修改；視窗列出 AI 最近的呼叫與結果。AI 的修改一樣進作業紀錄、可 Ctrl+Z 復原',
+      'MCP 橋接程式：單一檔案、不需安裝套件（需 Node.js 20 以上），只聽 127.0.0.1、只接受本機開的頁面；可讀本機專案資料夾交給工作站載入',
+      'AI／MCP：listFixQueue／gotoFixItem／markFixed（source 同工具箱待修清單：chk／neg／area／unreg／ring／sheet）、listMethods（列出方法與是否會改圖）',
+    ],
+  },
+  {
     version: 'v0.29.1', date: '2026-10-29', type: 'patch',
     title: '舊圖影像檢核只認黑線：紅線（後來分割時謄上去的）上的界址線不檢核',
     changes: [

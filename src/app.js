@@ -1106,13 +1106,13 @@ const actDis = (n, v) => document.querySelectorAll(`[data-act="${n}"]`).forEach(
 function openPanel(id) {
   document.querySelectorAll('dialog.fp[open]').forEach(d => { if (d.id !== id) d.close(); });
   const d = $(id); if (!d.open) d.show();
-  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); else if (id === 'dlgBl') blPanel(); else if (id === 'dlgOwn') ownPanel(); else if (id === 'dlgChk') chkPanel(); else if (id === 'dlgTopo') { topoPanel(); seamPanel(); batchPanel(); livePanel(); } else if (id === 'dlgLog') logPanel(); else if (id === 'dlgMs') msPanel(); refresh();
+  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); else if (id === 'dlgBl') blPanel(); else if (id === 'dlgOwn') ownPanel(); else if (id === 'dlgChk') chkPanel(); else if (id === 'dlgTopo') { topoPanel(); seamPanel(); batchPanel(); livePanel(); } else if (id === 'dlgLog') logPanel(); else if (id === 'dlgMs') msPanel(); else if (id === 'dlgAi') aiPanel(); refresh();
 }
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
   undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
-  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'), chk: () => openPanel('dlgChk'), topo: () => openPanel('dlgTopo'), flow: () => toggleFlow(), project: () => $('projDir').click(), projsave: () => saveProject(), log: () => openPanel('dlgLog'), ms: () => openPanel('dlgMs'), notesimp: () => $('notesIn').click(), projsaveas: () => saveProject(true), projopen: () => pickProject(),
+  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'), chk: () => openPanel('dlgChk'), topo: () => openPanel('dlgTopo'), flow: () => toggleFlow(), project: () => $('projDir').click(), projsave: () => saveProject(), log: () => openPanel('dlgLog'), ms: () => openPanel('dlgMs'), notesimp: () => $('notesIn').click(), projsaveas: () => saveProject(true), projopen: () => pickProject(), ai: () => openPanel('dlgAi'),
   help: () => $('help').showModal(),
 };
 document.addEventListener('click', e => {
@@ -2348,6 +2348,7 @@ function tqPanel() {
   $('tqPrev').disabled = $('tqNext').disabled = !items.length; $('tqDone').disabled = !it; notePanel();
 }
 const tqLive = () => tqSort(tqItems().filter(x => !S.tq.done.has(x.key) && !(x.key.startsWith('chk|') && S.chk.ok.has(x.label))));
+function tqSetSrc(src) { if (src == null || src === $('tqSrc').value) return; if (![...$('tqSrc').options].some(o => o.value === src)) throw new Error('source 需為 ' + [...$('tqSrc').options].map(o => o.value).join('／')); $('tqSrc').value = src; S.tq.i = -1; tqPanel(); }
 function tqGo(step) {
   const items = tqLive(); S.tq.items = items; if (!items.length) { S.tq.i = -1; S.tq.focus = null; tqPanel(); return; }   // 每次重算：剛按「修好了」的那筆已經不在清單裡（v0.27.0 用舊清單，畫面跳到剛修好的那宗、對話框卻顯示下一筆）
   S.tq.i = ((S.tq.i < 0 && step < 0 ? 0 : S.tq.i) + step + items.length) % items.length; const it = items[S.tq.i];
@@ -2824,14 +2825,45 @@ const api = {
   getStyle: () => cloneStyle(S.style), setStyle: (patch = {}) => { for (const k of Object.keys(patch)) if (S.style[k]) Object.assign(S.style[k], patch[k]); saveStyle(); draw(); return cloneStyle(S.style); },
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
   exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
+  // 待修清單（給 AI 逐筆修）：source 同工具箱下拉 chk／neg／area／unreg／ring／sheet；省略＝目前選的
+  listFixQueue: ({ source, limit = 100 } = {}) => { tqSetSrc(source); const l = tqLive(); return { source: $('tqSrc').value, total: l.length, items: l.slice(0, limit).map(x => ({ label: x.label, text: x.text, note: S.notes[x.label] || '' })) }; },
+  gotoFixItem: ({ source, label }) => { tqSetSrc(source); const l = tqLive(), i = l.findIndex(x => x.label === String(label)); if (i < 0) throw new Error('待修清單沒有 ' + label); S.tq.i = i; tqGo(0); return { ...l[i], rings: undefined, key: undefined, position: `${i + 1} / ${l.length}` }; },
+  markFixed: ({ source, label, note }) => { tqSetSrc(source); const it = tqLive().find(x => x.label === String(label)); if (!it) throw new Error('待修清單沒有 ' + label); if (note) S.notes[it.label] = S.notes[it.label] ? S.notes[it.label] + '／' + note : note;
+    if (it.key.startsWith('chk|')) S.chk.ok.add(it.label); else S.tq.done.add(it.key); projDirty(); tqPanel(); refresh(); return { label: it.label, remaining: tqLive().length }; },
+  listMethods: () => Object.keys(api).map(m => ({ method: m, modifies: !aiReadOnly(m) })),
 };
 window.CadastralAPI = api;
-const bridge = new URLSearchParams(location.search).get('bridge');
-if (bridge) {   // 例：?bridge=ws://127.0.0.1:8765 ；收 {id,method,params}，回 {id,result|error}
-  const ws = new WebSocket(bridge);
-  ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; }
-    Promise.resolve().then(() => api[m.method](m.params)).then(result => ws.send(JSON.stringify({ id: m.id, result })), err => ws.send(JSON.stringify({ id: m.id, error: String(err) }))); };
-  ws.onopen = () => msg('AI 橋接已連線');
+// ── AI 橋接（MCP）：頁面主動連到本機 tools/mcp-bridge.mjs 的 WebSocket，收 {id,method,params}、回 {id,result|error} ──
+// 權限由使用者在「說明 → 連接 AI（MCP）」決定：唯讀／每次問我／直接修改。AI 的每個修改都進作業紀錄、可 Ctrl+Z
+const AI_READ = /^(get|list|find|check|compare|export|toLatLon|liveCheck|batchFind|seamPointPairs|seamGaps|ringIssues|unregSummary|saveProjectJson|benchRender|select|gotoFixItem|setBasemap|setStyle)/;
+function aiReadOnly(m) { return AI_READ.test(m) && m !== 'checkUpdate'; }
+const AI = { ws: null, want: false, mode: 'ask', url: 'ws://127.0.0.1:8765', calls: [], timer: null };
+try { const j = JSON.parse(localStorage.getItem('cw.ai') || 'null'); if (j) { if (j.url) AI.url = j.url; if (['read', 'ask', 'write'].includes(j.mode)) AI.mode = j.mode; } } catch (e) { /* ignore */ }
+const aiSave = () => { try { localStorage.setItem('cw.ai', JSON.stringify({ url: AI.url, mode: AI.mode })); } catch (e) { /* ignore */ } };
+function aiPanel() {
+  const st = AI.ws && AI.ws.readyState === 1 ? '<b style="color:#2f9e44">已連線</b>' : AI.want ? '<span style="color:#f59f00">連線中…（請先在本機啟動 MCP 橋接程式）</span>' : '<span class="muted">未連線</span>';
+  $('aiStatus').innerHTML = st; $('aiConn').textContent = AI.want ? '中斷' : '連線'; $('aiUrl').value = AI.url; $('aiMode').value = AI.mode;
+  $('aiCalls').innerHTML = AI.calls.slice().reverse().map(c => `<tr><td>${c.t}</td><td>${esc(c.method)}</td><td>${c.modifies ? '改圖' : '讀取'}</td><td>${c.err ? `<span style="color:#e03131" title="${esc(c.err)}">${esc(c.err.length > 30 ? c.err.slice(0, 30) + '…' : c.err)}</span>` : c.ok ? '完成' : '…'}</td></tr>`).join('') || '<tr><td class="muted">還沒有 AI 呼叫</td></tr>';
 }
+function aiConnect() {
+  clearTimeout(AI.timer); if (!AI.want) return; let ws; try { ws = new WebSocket(AI.url); } catch (e) { msg('AI 橋接位址不正確：' + e.message); AI.want = false; aiPanel(); return; }
+  AI.ws = ws;
+  ws.onopen = () => { msg('AI 橋接已連線'); ws.send(JSON.stringify({ hello: 'cadastral-resurvey-workstation', version: APP_VERSION, mode: AI.mode })); aiPanel(); };
+  ws.onclose = () => { if (AI.ws === ws) AI.ws = null; if (AI.want) AI.timer = setTimeout(aiConnect, 3000); aiPanel(); };
+  ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; } if (m.id == null || !m.method) return;
+    const modifies = !aiReadOnly(m.method), c = { t: new Date().toTimeString().slice(0, 8), method: m.method, modifies }; AI.calls.push(c); if (AI.calls.length > 50) AI.calls.shift();
+    const reply = o => { if (ws.readyState === 1) ws.send(JSON.stringify({ id: m.id, ...o })); if ($('dlgAi').open) aiPanel(); };
+    Promise.resolve().then(() => {
+      if (typeof api[m.method] !== 'function') throw new Error('沒有這個方法：' + m.method + '（用 listMethods 看清單）');
+      if (modifies && AI.mode === 'read') throw new Error('使用者設定為唯讀：AI 不能修改圖資（' + m.method + '）。請使用者在「說明 → 連接 AI」改成「每次問我」或「直接修改」');
+      if (modifies && AI.mode === 'ask' && !confirm(`AI 要執行：${m.method}\n${JSON.stringify(m.params || {}).slice(0, 400)}\n\n允許嗎？（之後可 Ctrl+Z 復原）`)) throw new Error('使用者拒絕了這個修改（' + m.method + '）');
+      return api[m.method](m.params);
+    }).then(result => { c.ok = true; reply({ result: result === undefined ? null : result }); }, err => { c.err = String(err && err.message || err); reply({ error: c.err }); });
+    if ($('dlgAi').open) aiPanel(); };
+}
+$('aiConn').onclick = () => { AI.url = $('aiUrl').value.trim() || AI.url; aiSave(); if (AI.want) { AI.want = false; clearTimeout(AI.timer); if (AI.ws) AI.ws.close(); } else { AI.want = true; aiConnect(); } aiPanel(); };
+$('aiMode').onchange = () => { AI.mode = $('aiMode').value; aiSave(); if (AI.ws && AI.ws.readyState === 1) AI.ws.send(JSON.stringify({ hello: 'mode', mode: AI.mode })); aiPanel(); };
+const bridge = new URLSearchParams(location.search).get('bridge');
+if (bridge) { AI.url = bridge; AI.want = true; aiConnect(); }   // 例：?bridge=ws://127.0.0.1:8765（網址指定時沿用上次的權限，預設每次問我）
 resize(); panel();
 })();

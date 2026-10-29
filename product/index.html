@@ -145,7 +145,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <div class="menu"><button class="mbtn">處理</button><div class="mlist">
       <button data-act="seam">鄰段接合…</button><button data-act="ref">現況點參考線…</button><hr><button data-act="chk">舊圖檢核…<small>分幅向量、影像墨線</small></button><button data-act="bl">接圖前比對…<small>土地有無遺漏、面積超限</small></button><button data-act="own">所有權人分析…<small>EXAM.MDB；無所有權人的土地</small></button></div></div>
     <div class="menu"><button class="mbtn">說明</button><div class="mlist">
-      <button data-act="help">操作說明</button><button data-act="ver">版本歷程與更新</button></div></div>
+      <button data-act="help">操作說明</button><button data-act="ai">連接 AI（MCP）…<small>讓 AI 逐筆修待修清單</small></button><button data-act="ver">版本歷程與更新</button></div></div>
   </nav>
   <span class="sep"></span>
   <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="addpt" title="在界址線上加界址點 (A)">加點</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button><button data-tool="img" title="平移疊合的影像（JPG／JGW）對位 (I)">移影像</button></div>
@@ -276,6 +276,12 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="row small"><input id="logFind" type="search" placeholder="找地號或動作"><button class="btn" id="btnLogCsv">輸出 CSV</button><button class="btn" id="btnLogHtml" title="可列印、另存 PDF，附作業人員／審核簽名欄">輸出列印版（HTML）</button></div>
   <div id="logSum" class="small muted" style="margin:4px 0"></div><div id="tblwrap" style="max-height:420px"><table class="small"><thead><tr><th>時間</th><th>動作</th><th>地號（變動 面積前→後 ㎡）</th><th>移點</th></tr></thead><tbody id="logBody"></tbody></table></div>
   <div class="small muted" style="margin-top:4px">每個動作（含復原、重做、一鍵步驟）都會記下，存在專案檔裡。</div></section></div></dialog>
+<dialog class="fp" id="dlgAi"><div class="fphead"><b>連接 AI（MCP）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
+  <div class="small">讓 Claude Desktop／Claude Code 等 AI 經 MCP 操作這個頁面：讀待修清單、跳到那一筆、修正、標「修好了」。步驟：① 在本機執行 <code>node mcp-bridge.mjs</code>（設定方式見 Release 附檔或 <code>tools/mcp-bridge.mjs</code> 開頭說明）② 按「連線」③ 在 AI 裡說「逐筆修舊圖檢核的待修清單」。</div>
+  <div class="row small" style="margin-top:6px"><input id="aiUrl" style="width:16em" spellcheck="false"><button class="btn primary" id="aiConn">連線</button><span id="aiStatus"></span></div>
+  <div class="row small" style="margin-top:6px"><label>AI 權限 <select id="aiMode"><option value="read">唯讀：只能看、跳到某筆，不能改圖</option><option value="ask">每次問我：每個修改先跳出確認</option><option value="write">直接修改：不再詢問</option></select></label></div>
+  <div class="small muted" style="margin-top:4px">AI 的每個修改都會記進作業紀錄，可 Ctrl+Z 復原；建議先存里程碑再讓 AI 動手。案件檔案只在你的電腦與 AI 之間傳遞。</div>
+  <div id="tblwrap" style="max-height:220px;margin-top:6px"><table class="small"><thead><tr><th>時間</th><th>方法</th><th>類型</th><th>結果</th></tr></thead><tbody id="aiCalls"></tbody></table></div></section></div></dialog>
 <dialog class="fp" id="dlgMs"><div class="fphead"><b>里程碑（版本）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
   <div class="row small"><button class="btn primary" id="btnMsSave">存目前為里程碑</button><span class="muted">執行第 6 步時自動存「步驟 6 檢核時」「步驟 6 一鍵修正前」；存在專案檔裡</span></div>
   <div id="tblwrap" style="max-height:220px;margin-top:6px"><table class="small"><tbody id="msList"></tbody></table></div><div id="msDiff" class="small" style="margin-top:6px"></div></section></div></dialog>
@@ -416,7 +422,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <p><b>平移／縮放</b>：滾輪縮放；中鍵或右鍵拖曳平移；或切到「平移」工具。</p>
 <p><b>快捷鍵</b>：<kbd>Ctrl+Z</kbd> 復原、<kbd>Ctrl+Y</kbd> 重做、<kbd>Ctrl+F</kbd> 跳至地號／點號、<kbd>Esc</kbd> 取消選取、<kbd>V</kbd>/<kbd>H</kbd> 工具、<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切換點/線/面。</p>
 <p><b>輸出</b>：「輸出 D14」只改動被移動點的坐標，其餘位元組與原檔完全相同；覆蓋進案件資料夾前請先備份。D11 的面積欄位不改，請在 NECEXE 內用「重算面積」更新。「輸出 JSON」含移動點與面積變化，方便 AI／其他程式讀取。</p>
-<p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（listSteps / loadProject / runStep / checkOldMap / getCheckReport / getState / select / move / undo / exportSession…），網址加 <code>?bridge=ws://127.0.0.1:埠號</code> 可接 WebSocket 橋接（預留給 MCP）。</p>
+<p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（listSteps / loadProject / runStep / checkOldMap / getCheckReport / getState / select / move / undo / exportSession…），「說明 → 連接 AI（MCP）」連到本機的 <code>tools/mcp-bridge.mjs</code>，Claude Desktop／Claude Code 即可經 MCP 操作（逐筆修待修清單：listFixQueue / gotoFixItem / markFixed）；網址加 <code>?bridge=ws://127.0.0.1:8765</code> 會自動連線。</p>
 <form method="dialog"><button class="btn primary">關閉</button></form></dialog>
 <dialog id="verDlg" class="verdlg">
   <div class="vhead">
@@ -3459,6 +3465,16 @@ if (typeof module !== 'undefined') module.exports = Core;
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.30.0', date: '2026-10-29', type: 'minor',
+    title: '連接 AI（MCP）：讓 Claude 等 AI 逐筆修待修清單',
+    changes: [
+      '新增「說明 → 連接 AI（MCP）」：按「連線」接上本機的 MCP 橋接程式（tools/mcp-bridge.mjs，Release 附檔），Claude Desktop／Claude Code 就能操作這個頁面：讀待修清單、跳到那一筆（畫面跟著放大）、修正、標「修好了」並寫處理方式備註',
+      'AI 權限由你決定：唯讀（只能看、跳到某筆）／每次問我（每個修改先跳出確認，預設）／直接修改；視窗列出 AI 最近的呼叫與結果。AI 的修改一樣進作業紀錄、可 Ctrl+Z 復原',
+      'MCP 橋接程式：單一檔案、不需安裝套件（需 Node.js 20 以上），只聽 127.0.0.1、只接受本機開的頁面；可讀本機專案資料夾交給工作站載入',
+      'AI／MCP：listFixQueue／gotoFixItem／markFixed（source 同工具箱待修清單：chk／neg／area／unreg／ring／sheet）、listMethods（列出方法與是否會改圖）',
+    ],
+  },
+  {
     version: 'v0.29.1', date: '2026-10-29', type: 'patch',
     title: '舊圖影像檢核只認黑線：紅線（後來分割時謄上去的）上的界址線不檢核',
     changes: [
@@ -5077,13 +5093,13 @@ const actDis = (n, v) => document.querySelectorAll(`[data-act="${n}"]`).forEach(
 function openPanel(id) {
   document.querySelectorAll('dialog.fp[open]').forEach(d => { if (d.id !== id) d.close(); });
   const d = $(id); if (!d.open) d.show();
-  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); else if (id === 'dlgBl') blPanel(); else if (id === 'dlgOwn') ownPanel(); else if (id === 'dlgChk') chkPanel(); else if (id === 'dlgTopo') { topoPanel(); seamPanel(); batchPanel(); livePanel(); } else if (id === 'dlgLog') logPanel(); else if (id === 'dlgMs') msPanel(); refresh();
+  if (id === 'dlgClean') cleanPreview(); else if (id === 'dlgStyle') renderStyleRows(); else if (id === 'dlgRing') ringPanel(); else if (id === 'dlgUnreg') unregPanel(); else if (id === 'dlgBl') blPanel(); else if (id === 'dlgOwn') ownPanel(); else if (id === 'dlgChk') chkPanel(); else if (id === 'dlgTopo') { topoPanel(); seamPanel(); batchPanel(); livePanel(); } else if (id === 'dlgLog') logPanel(); else if (id === 'dlgMs') msPanel(); else if (id === 'dlgAi') aiPanel(); refresh();
 }
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
   undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
-  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'), chk: () => openPanel('dlgChk'), topo: () => openPanel('dlgTopo'), flow: () => toggleFlow(), project: () => $('projDir').click(), projsave: () => saveProject(), log: () => openPanel('dlgLog'), ms: () => openPanel('dlgMs'), notesimp: () => $('notesIn').click(), projsaveas: () => saveProject(true), projopen: () => pickProject(),
+  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'), chk: () => openPanel('dlgChk'), topo: () => openPanel('dlgTopo'), flow: () => toggleFlow(), project: () => $('projDir').click(), projsave: () => saveProject(), log: () => openPanel('dlgLog'), ms: () => openPanel('dlgMs'), notesimp: () => $('notesIn').click(), projsaveas: () => saveProject(true), projopen: () => pickProject(), ai: () => openPanel('dlgAi'),
   help: () => $('help').showModal(),
 };
 document.addEventListener('click', e => {
@@ -6319,6 +6335,7 @@ function tqPanel() {
   $('tqPrev').disabled = $('tqNext').disabled = !items.length; $('tqDone').disabled = !it; notePanel();
 }
 const tqLive = () => tqSort(tqItems().filter(x => !S.tq.done.has(x.key) && !(x.key.startsWith('chk|') && S.chk.ok.has(x.label))));
+function tqSetSrc(src) { if (src == null || src === $('tqSrc').value) return; if (![...$('tqSrc').options].some(o => o.value === src)) throw new Error('source 需為 ' + [...$('tqSrc').options].map(o => o.value).join('／')); $('tqSrc').value = src; S.tq.i = -1; tqPanel(); }
 function tqGo(step) {
   const items = tqLive(); S.tq.items = items; if (!items.length) { S.tq.i = -1; S.tq.focus = null; tqPanel(); return; }   // 每次重算：剛按「修好了」的那筆已經不在清單裡（v0.27.0 用舊清單，畫面跳到剛修好的那宗、對話框卻顯示下一筆）
   S.tq.i = ((S.tq.i < 0 && step < 0 ? 0 : S.tq.i) + step + items.length) % items.length; const it = items[S.tq.i];
@@ -6795,15 +6812,46 @@ const api = {
   getStyle: () => cloneStyle(S.style), setStyle: (patch = {}) => { for (const k of Object.keys(patch)) if (S.style[k]) Object.assign(S.style[k], patch[k]); saveStyle(); draw(); return cloneStyle(S.style); },
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
   exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
+  // 待修清單（給 AI 逐筆修）：source 同工具箱下拉 chk／neg／area／unreg／ring／sheet；省略＝目前選的
+  listFixQueue: ({ source, limit = 100 } = {}) => { tqSetSrc(source); const l = tqLive(); return { source: $('tqSrc').value, total: l.length, items: l.slice(0, limit).map(x => ({ label: x.label, text: x.text, note: S.notes[x.label] || '' })) }; },
+  gotoFixItem: ({ source, label }) => { tqSetSrc(source); const l = tqLive(), i = l.findIndex(x => x.label === String(label)); if (i < 0) throw new Error('待修清單沒有 ' + label); S.tq.i = i; tqGo(0); return { ...l[i], rings: undefined, key: undefined, position: `${i + 1} / ${l.length}` }; },
+  markFixed: ({ source, label, note }) => { tqSetSrc(source); const it = tqLive().find(x => x.label === String(label)); if (!it) throw new Error('待修清單沒有 ' + label); if (note) S.notes[it.label] = S.notes[it.label] ? S.notes[it.label] + '／' + note : note;
+    if (it.key.startsWith('chk|')) S.chk.ok.add(it.label); else S.tq.done.add(it.key); projDirty(); tqPanel(); refresh(); return { label: it.label, remaining: tqLive().length }; },
+  listMethods: () => Object.keys(api).map(m => ({ method: m, modifies: !aiReadOnly(m) })),
 };
 window.CadastralAPI = api;
-const bridge = new URLSearchParams(location.search).get('bridge');
-if (bridge) {   // 例：?bridge=ws://127.0.0.1:8765 ；收 {id,method,params}，回 {id,result|error}
-  const ws = new WebSocket(bridge);
-  ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; }
-    Promise.resolve().then(() => api[m.method](m.params)).then(result => ws.send(JSON.stringify({ id: m.id, result })), err => ws.send(JSON.stringify({ id: m.id, error: String(err) }))); };
-  ws.onopen = () => msg('AI 橋接已連線');
+// ── AI 橋接（MCP）：頁面主動連到本機 tools/mcp-bridge.mjs 的 WebSocket，收 {id,method,params}、回 {id,result|error} ──
+// 權限由使用者在「說明 → 連接 AI（MCP）」決定：唯讀／每次問我／直接修改。AI 的每個修改都進作業紀錄、可 Ctrl+Z
+const AI_READ = /^(get|list|find|check|compare|export|toLatLon|liveCheck|batchFind|seamPointPairs|seamGaps|ringIssues|unregSummary|saveProjectJson|benchRender|select|gotoFixItem|setBasemap|setStyle)/;
+function aiReadOnly(m) { return AI_READ.test(m) && m !== 'checkUpdate'; }
+const AI = { ws: null, want: false, mode: 'ask', url: 'ws://127.0.0.1:8765', calls: [], timer: null };
+try { const j = JSON.parse(localStorage.getItem('cw.ai') || 'null'); if (j) { if (j.url) AI.url = j.url; if (['read', 'ask', 'write'].includes(j.mode)) AI.mode = j.mode; } } catch (e) { /* ignore */ }
+const aiSave = () => { try { localStorage.setItem('cw.ai', JSON.stringify({ url: AI.url, mode: AI.mode })); } catch (e) { /* ignore */ } };
+function aiPanel() {
+  const st = AI.ws && AI.ws.readyState === 1 ? '<b style="color:#2f9e44">已連線</b>' : AI.want ? '<span style="color:#f59f00">連線中…（請先在本機啟動 MCP 橋接程式）</span>' : '<span class="muted">未連線</span>';
+  $('aiStatus').innerHTML = st; $('aiConn').textContent = AI.want ? '中斷' : '連線'; $('aiUrl').value = AI.url; $('aiMode').value = AI.mode;
+  $('aiCalls').innerHTML = AI.calls.slice().reverse().map(c => `<tr><td>${c.t}</td><td>${esc(c.method)}</td><td>${c.modifies ? '改圖' : '讀取'}</td><td>${c.err ? `<span style="color:#e03131" title="${esc(c.err)}">${esc(c.err.length > 30 ? c.err.slice(0, 30) + '…' : c.err)}</span>` : c.ok ? '完成' : '…'}</td></tr>`).join('') || '<tr><td class="muted">還沒有 AI 呼叫</td></tr>';
 }
+function aiConnect() {
+  clearTimeout(AI.timer); if (!AI.want) return; let ws; try { ws = new WebSocket(AI.url); } catch (e) { msg('AI 橋接位址不正確：' + e.message); AI.want = false; aiPanel(); return; }
+  AI.ws = ws;
+  ws.onopen = () => { msg('AI 橋接已連線'); ws.send(JSON.stringify({ hello: 'cadastral-resurvey-workstation', version: APP_VERSION, mode: AI.mode })); aiPanel(); };
+  ws.onclose = () => { if (AI.ws === ws) AI.ws = null; if (AI.want) AI.timer = setTimeout(aiConnect, 3000); aiPanel(); };
+  ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; } if (m.id == null || !m.method) return;
+    const modifies = !aiReadOnly(m.method), c = { t: new Date().toTimeString().slice(0, 8), method: m.method, modifies }; AI.calls.push(c); if (AI.calls.length > 50) AI.calls.shift();
+    const reply = o => { if (ws.readyState === 1) ws.send(JSON.stringify({ id: m.id, ...o })); if ($('dlgAi').open) aiPanel(); };
+    Promise.resolve().then(() => {
+      if (typeof api[m.method] !== 'function') throw new Error('沒有這個方法：' + m.method + '（用 listMethods 看清單）');
+      if (modifies && AI.mode === 'read') throw new Error('使用者設定為唯讀：AI 不能修改圖資（' + m.method + '）。請使用者在「說明 → 連接 AI」改成「每次問我」或「直接修改」');
+      if (modifies && AI.mode === 'ask' && !confirm(`AI 要執行：${m.method}\n${JSON.stringify(m.params || {}).slice(0, 400)}\n\n允許嗎？（之後可 Ctrl+Z 復原）`)) throw new Error('使用者拒絕了這個修改（' + m.method + '）');
+      return api[m.method](m.params);
+    }).then(result => { c.ok = true; reply({ result: result === undefined ? null : result }); }, err => { c.err = String(err && err.message || err); reply({ error: c.err }); });
+    if ($('dlgAi').open) aiPanel(); };
+}
+$('aiConn').onclick = () => { AI.url = $('aiUrl').value.trim() || AI.url; aiSave(); if (AI.want) { AI.want = false; clearTimeout(AI.timer); if (AI.ws) AI.ws.close(); } else { AI.want = true; aiConnect(); } aiPanel(); };
+$('aiMode').onchange = () => { AI.mode = $('aiMode').value; aiSave(); if (AI.ws && AI.ws.readyState === 1) AI.ws.send(JSON.stringify({ hello: 'mode', mode: AI.mode })); aiPanel(); };
+const bridge = new URLSearchParams(location.search).get('bridge');
+if (bridge) { AI.url = bridge; AI.want = true; aiConnect(); }   // 例：?bridge=ws://127.0.0.1:8765（網址指定時沿用上次的權限，預設每次問我）
 resize(); panel();
 })();
 
