@@ -28,6 +28,9 @@ main.nosb{--sw:0px}main.nosb aside{display:none}main.noflow{--fw:0px}main.noflow
 #flowTabs{margin:10px 12px 4px;display:flex}#flowTabs button{flex:1}
 #flow .stage{padding:0 12px 12px}#flow .stage h3{font-size:12px;color:var(--muted);font-weight:600;margin:10px 0 4px;letter-spacing:.04em}
 .steps{list-style:none;margin:0;padding:0;counter-reset:s}
+.prog{margin:10px 12px 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px}.prog .ph{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}.prog .ph span{font-weight:700;color:var(--ok)}
+.pbar{height:7px;border-radius:4px;background:var(--line);overflow:hidden;margin:3px 0}.pbar i{display:block;height:100%;width:0;background:var(--ok);transition:width .3s}.pbar.fix i{background:#1c7ed6}
+.resume{margin:10px 12px 0;padding:8px 10px;border:1px solid #1c7ed6;border-radius:8px;background:color-mix(in srgb,#1c7ed6 8%,transparent)}
 .step{position:relative;padding:10px 0 10px 34px;border-bottom:1px solid var(--line)}
 .step .sh{display:flex;align-items:center;gap:6px}.step .sh b{font-size:14px}
 .step .sn{position:absolute;left:0;top:9px;width:24px;height:24px;border-radius:50%;background:var(--bg);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
@@ -123,11 +126,12 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <header>
   <button class="btn" id="btnFlow" title="顯示／隱藏作業流程欄">☰ 流程</button><h1>地籍圖重測工作站</h1>
   <input type="file" id="fileIn" multiple hidden>
-  <input type="file" id="dirIn" webkitdirectory hidden><input type="file" id="projDir" webkitdirectory hidden>
+  <input type="file" id="dirIn" webkitdirectory hidden><input type="file" id="projDir" webkitdirectory hidden><input type="file" id="projIn" accept=".crwp" hidden>
   <input type="file" id="imgIn" multiple accept=".jpg,.jpeg,.png,.jgw,.jpgw,.pgw,.wld" hidden><input type="file" id="nbIn" multiple hidden><input type="file" id="nbDir" webkitdirectory hidden><input type="file" id="blIn" multiple hidden><input type="file" id="ownIn" accept=".mdb,.MDB" hidden><input type="file" id="blDir" webkitdirectory hidden>
   <nav id="menubar">
     <div class="menu"><button class="mbtn">檔案</button><div class="mlist">
       <button data-act="project">開啟專案資料夾…<small>案件、影像、分幅、鄰段一次讀入</small></button><button data-act="open">開啟檔案…</button><button data-act="folder">開啟案件資料夾…</button><hr>
+      <button data-act="projopen">開啟專案檔…<small>.crwp，接著上次做</small></button><button data-act="projsave">儲存專案檔<small>Ctrl+S</small></button><button data-act="projsaveas">另存專案檔…<small>Ctrl+Shift+S</small></button><hr>
       <button data-act="data">資料來源與匯入…<small>鄰段、影像、控制點</small></button><button data-act="imp">匯入現況點…</button><hr>
       <button data-act="outcase">輸出完整案件資料夾…<small>NECEXE 可直接開啟</small></button><button data-act="out">輸出成果…<small>單檔、CSV、報表</small></button><button data-act="err">一鍵產出偵錯報表 .ERR</button><button data-act="print">列印成果圖…<small>Ctrl+P</small></button></div></div>
     <div class="menu"><button class="mbtn">編輯</button><div class="mlist">
@@ -154,6 +158,10 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 </header>
 <main>
   <nav id="flow" aria-label="作業流程">
+    <div id="resume" class="resume small" hidden></div>
+    <div id="prog" class="prog" hidden><div class="ph"><b id="progName"></b><span id="progPct"></span></div>
+      <div class="pbar" title="圖資準備（步驟 1～6）"><i id="progPrep"></i></div><div class="pbar fix" title="檢核後逐筆修：劃掉的筆數"><i id="progFix"></i></div>
+      <div id="progText" class="small"></div><div class="row small" style="margin-top:4px"><button class="btn" data-act="projsave" title="原始檔案與目前進度存成一個 .crwp 檔（Ctrl+S）">儲存專案檔</button><button class="btn" data-act="projopen">開啟專案檔</button><span id="progSave" class="muted"></span></div></div>
     <div class="seg" id="flowTabs"><button data-stage="stPrep" class="on">圖資準備</button><button data-stage="stAdj">重測調整</button><button data-stage="stOut">成果</button></div>
     <div class="stage" id="stPrep"><ol class="steps" id="steps"></ol>
       <div class="row" style="margin-top:10px"><button class="btn" id="wfRunAll" title="依序執行步驟 3～6；任何一步失敗就停下">依序執行 3～6</button><span class="small muted">每一步都可復原（Ctrl+Z）</span></div>
@@ -263,8 +271,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     </div></dialog>
 <dialog class="fp" id="dlgTopo"><div class="fphead"><b>點線面編修工具箱</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody">
 <section><h2>待修清單（看完報告逐筆修）</h2>
-  <div class="row small"><select id="tqSrc"><option value="chk">舊圖檢核（紅／黃／碎片）</option><option value="neg">較差為負：遺漏、面積不足、被佔用</option><option value="area">面積超過公差（全部）</option><option value="unreg">未登記地需分割</option><option value="ring">界址串問題</option></select>
+  <div class="row small"><select id="tqSrc"><option value="chk">舊圖檢核（紅／黃／碎片）</option><option value="neg">較差為負：遺漏、面積不足、被佔用</option><option value="area">面積超過公差（全部）</option><option value="unreg">未登記地需分割</option><option value="ring">界址串問題</option><option value="sheet">分幅線附近（沿接合線逐宗看）</option></select>
     <button class="btn" id="tqPrev" title="上一筆">◀</button><span id="tqPos" class="muted"></span><button class="btn" id="tqNext" title="下一筆">▶</button><button class="btn" id="tqDone" title="這筆修好了，從清單劃掉並跳下一筆">✓ 修好了</button></div>
+  <div class="row small" style="margin-top:4px"><label class="chk" title="分幅線（步驟 2）附近的地號排在最前面：接圖出問題的多半在分幅線附近"><input type="checkbox" id="tqSheet" checked>分幅線附近優先</label><label>距離 ≤ <input id="sheetDist" type="number" value="10" min="1" step="1" style="width:4em"> m</label><label class="chk"><input type="checkbox" id="sheetShow" checked>圖上顯示分幅線</label></div>
   <div id="tqInfo" class="small" style="margin-top:4px"></div></section>
 <section><h2>工具</h2><div id="topoTools"></div>
   <div id="topoHint" class="small" style="margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px"></div>
@@ -365,8 +374,9 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <dialog class="fp" id="dlgStyle"><div class="fphead"><b>圖層與樣式</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section><div id="styleRows"></div>
   <div class="row small" style="margin-top:8px"><button class="btn" id="btnStyleReset">全部還原預設</button><span class="muted">設定會記在這台電腦的瀏覽器；列印成果圖同樣套用。</span></div></section></div></dialog>
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
-<p><b>作業流程</b>：左側「作業流程」欄（上方「☰ 流程」開關）照順序做：<b>1 讀檔</b>（「開啟專案資料夾」一次讀入案件、舊圖影像、分幅舊圖、鄰段、EXAM.MDB）→ <b>2 自動接圖</b>（開發中）→ <b>3 鄰段接合</b> → <b>4 未登記土地合併分割</b> → <b>5 去除雜點</b> → <b>6 檢核</b>。每步按「一鍵執行」用預設值做完並顯示結果，「詳細設定…」開原本的面板調整；全部可復原。專案資料夾的慣例：鄰段放在名稱含「鄰段」的資料夾、分幅舊圖放在含「分幅」的資料夾。</p>
-<p><b>點線面編修工具箱</b>（上方「工具箱」）：看完檢核報告逐筆手工修。上半是<b>待修清單</b>（舊圖檢核、較差為負、面積超限、未登記地、界址串問題），◀ ▶ 跳到下一筆、「✓ 修好了」劃掉。下半是工具：點（線上加點、加孤立點、移動、刪點、點貼到線、點併點）、線（新增線＝切開宗地、刪除線＝兩宗合併）、面（新增面＝空地建新地號、刪除面、合併面、重繪界址串）。選工具後在圖上依序點選，湊齊就執行；Esc 結束、Enter 完成、Backspace 退一步，Ctrl+Z 復原。</p>
+<p><b>作業流程</b>：左側「作業流程」欄（上方「☰ 流程」開關）照順序做：<b>1 讀檔</b>（「開啟專案資料夾」一次讀入案件、舊圖影像、分幅舊圖、鄰段、EXAM.MDB）→ <b>2 自動接圖</b>（目前先加入分幅線：分幅舊圖各幅的接合處，載入兩幅以上時自動加入；依分幅線自動接圖開發中）→ <b>3 鄰段接合</b> → <b>4 未登記土地合併分割</b> → <b>5 去除雜點</b> → <b>6 檢核</b>。每步按「一鍵執行」用預設值做完並顯示結果，「詳細設定…」開原本的面板調整；全部可復原。專案資料夾的慣例：鄰段放在名稱含「鄰段」的資料夾、分幅舊圖放在含「分幅」的資料夾。</p>
+<p><b>點線面編修工具箱</b>（上方「工具箱」）：看完檢核報告逐筆手工修。上半是<b>待修清單</b>（舊圖檢核、較差為負、面積超限、未登記地、界址串問題），◀ ▶ 跳到下一筆、「✓ 修好了」劃掉。下半是工具：點（線上加點、加孤立點、移動、刪點、點貼到線、點併點）、線（新增線＝切開宗地、刪除線＝兩宗合併）、面（新增面＝空地建新地號、刪除面、合併面、重繪界址串）。選工具後在圖上依序點選，湊齊就執行；Esc 結束、Enter 完成、Backspace 退一步，Ctrl+Z 復原。勾「分幅線附近優先」時，分幅線附近的地號排在清單最前面（也可選「分幅線附近」沿接合線逐宗看）。</p>
+<p><b>專案檔</b>（檔案 → 儲存專案檔，Ctrl+S）：把讀入的原始檔案（案件、鄰段、分幅舊圖、EXAM.MDB，可選含影像）與目前進度（點位、界址串、各步驟結果、檢核報告與「修好了」、待修清單、分幅線、設定）存成一個 <code>.crwp</code> 檔；下次「開啟專案檔」或把它拖進畫面就接著做（復原記錄不存）。程式也會自動暫存在瀏覽器，重開時流程欄上方會出現「接著做」。流程欄上方的進度條：綠＝圖資準備 6 步、藍＝檢核後逐筆修劃掉的比例。</p>
 <p><b>舊圖檢核</b>（步驟 6，「處理→舊圖檢核」）：每宗地先小幅平移去配舊圖，再比形狀——界址線離分幅舊圖界線太遠（紫）、舊圖界線穿過宗地內部（藍虛線）、舊圖影像上該處沒有墨線（紅）。影像對不上的方格（灰框）不判斷。碎片（&lt; 30 m²）可一鍵併入建議的相鄰宗地；其餘請人工判斷後修正，按「已確認」劃掉。</p>
 <p><b>版面</b>：上方是<b>功能列表</b>（檔案／編輯／檢視／處理／說明）與常用工具列；細項設定都在選單開出的<b>浮動面板</b>裡（開著也能操作圖面，✕ 關閉）。右側欄只留兩塊：選取資訊與面積較差表，可收折，也可在「檢視」隱藏。</p>
 <p><b>界址點編修</b>：「編輯→界址點編修」或工具列「加點」(<kbd>A</kbd>)。<b>新增</b>：在界址線上點一下，新點落在線上（垂足），所有以該線為界的宗地都一併插入、面積不變；Shift＋點空白處＝孤立點；也可輸入座標新增。<b>修改</b>：拖曳、方向鍵或輸入座標。<b>刪除</b>：選取點按 <kbd>Del</kbd>，會從所有含該點的宗地移除，環不能少於 3 點，圓弧的點不能刪。全部可復原。新增／刪除後請輸出 D14 與 D13（D13 輸出尚未用 NECEXE 驗證）。</p>
@@ -1237,7 +1247,7 @@ const Core = (() => {
           if (seen.has(n)) continue; seen.add(n);
           const s = segs[n], dx = s.bx - s.ax, dy = s.by - s.ay, l2 = dx * dx + dy * dy;
           const t = l2 ? Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / l2)) : 0, fx = s.ax + t * dx, fy = s.ay + t * dy, d = Math.hypot(x - fx, y - fy);
-          if (d <= r && (!best || d < best.dist)) best = { dist: d, fx, fy };
+          if (d <= r && (!best || d < best.dist)) best = { dist: d, fx, fy, n };
         }
         return best;
       },
@@ -1960,6 +1970,7 @@ const Core = (() => {
           if (best == null) continue;
           for (const r of ds.parcels) {   // 所有使用 u–v 這條邊的宗地都插入
             if (r.deleted) continue; const m = r.ids.length;
+            if (r.ids.includes(best)) continue;   // 已經用到這一點：再插會自我接觸
             for (let j = 0; j < m; j++) { const a = r.ids[j], b = r.ids[(j + 1) % m]; if ((a === u && b === v) || (a === v && b === u)) { touchParcel(d, r); r.ids.splice(j + 1, 0, best); if (r.mid) r.mid.splice(j + 1, 0, false); break; } }
           }
           count++; changed = true;
@@ -2052,19 +2063,29 @@ const Core = (() => {
       touchParcel(d, p); p.ids = ids; p.mid = ids.map(() => false);
     }
     const q = ds.points.get(from); ds.points.delete(from); d.removed.push(q);
-    return { delta: closeDelta(ds, d), removed: from, into: to };
+    buildTopology(ds); const healed = healAround(ds, d, [to]);
+    return { delta: closeDelta(ds, d), removed: from, into: to, healed };
   }
-  // 點貼到線：把點 id 移到界址線 a–b 的垂足，並接進所有以 a–b 為界的宗地（T 字接點補齊）。坐標移動不在 delta 內，回傳 from/to 由呼叫端一併復原
+  // 位相重建（v0.28.0）：點移動或併點後，用到這些點的宗地與它們的鄰宗重新比對——某宗的界址點落在另一宗的邊上（T 字接點）就插進那條邊，
+  // 兩宗沿線共用同一串界址點。沒補的話 NECEXE 的 .ERR 會報交錯／重疊（點貼到線後，原本用這一點的宗地，其相鄰邊與被貼的線部分共線）。回傳插入次數
+  function healAround(ds, d, ids) {
+    const near = new Set(); for (const id of ids) for (const pi of ds.pointParcels.get(id) || []) near.add(pi);
+    for (const pi of [...near]) for (const id of ds.parcels[pi].ids) for (const qi of ds.pointParcels.get(id) || []) near.add(qi);
+    const idxs = [...near].filter(i => !ds.parcels[i].deleted && !ringHasArc(ds.parcels[i])); return idxs.length ? healJunctions(ds, d, idxs) : 0;
+  }
+  // 點貼到線：把點 id 移到界址線 a–b 的垂足，並接進所有以 a–b 為界的宗地；再對用到這一點的宗地與鄰宗重建位相（healAround）。坐標移動不在 delta 內，回傳 from/to 由呼叫端一併復原
   function snapPointToEdge(ds, id, a, b) {
     if (id === a || id === b) throw new Error('點就是這條線的端點'); const e = ds.edges.get(segKey(a, b)); if (!e) throw new Error(`找不到界址線 ${a}–${b}`); if (e.arcPart) throw new Error('圓弧上的線段暫不支援');
     const P = ds.points.get(id), A = ds.points.get(a), B = ds.points.get(b), dx = B.x - A.x, dy = B.y - A.y, l2 = dx * dx + dy * dy, t = ((P.x - A.x) * dx + (P.y - A.y) * dy) / l2;
     if (!(t > 1e-6 && t < 1 - 1e-6)) throw new Error('垂足不在線段上（點在線段兩端之外），請改用點併點');
     const from = { y: P.y, x: P.x }, to = { y: A.y + t * dy, x: A.x + t * dx }, d = newDelta();
     for (const pi of ds.pointParcels.get(id) || []) touchParcel(d, ds.parcels[pi]);   // 點移動，原本用到它的宗地面積也要重算
+    const hits = []; for (const p of ds.parcels) { if (p.deleted) continue; const k = p.ids.length;   // 先找齊再改，任何一宗不行就整個不動
+      for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) { if (p.ids.includes(id)) throw new Error(`${p.label} 已經用到點 ${id}，貼上去會自我接觸`); hits.push([p, i]); break; } } }
     P.y = to.y; P.x = to.x;
-    for (const p of ds.parcels) { if (p.deleted) continue; const k = p.ids.length;
-      for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) { if (p.ids.includes(id)) throw new Error(`${p.label} 已經用到點 ${id}，貼上去會自我接觸`); touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); break; } } }
-    return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y) };
+    for (const [p, i] of hits) { touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); }
+    buildTopology(ds); const healed = healAround(ds, d, [id, a, b]);
+    return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y), healed };
   }
   // 新增線：在宗地 pi 內連接兩個既有界址點，切成兩宗（切下的一側編新子號，同母號接續；較大的一側保留原地號）
   function splitByChord(ds, pi, a, b) {
@@ -3228,6 +3249,62 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     return out.join('\r\n') + '\r\n';
   }
 
+  // ── 分幅線（v0.28.0）：分幅舊圖各幅的外緣邊，與同一組另一幅的外緣相距 ≤ gap m 的段＝圖幅接合處（接圖最容易出錯，通常分幅數化與原圖差異不大）。
+  // 坐標用 baselineAlign 轉到作業圖。兩幅的外緣各有一條，只留編號小的那幅。回傳 {segs:[{ax,ay,bx,by,a,b,gap}], pairs:[{a,b,len}], length}
+  function sheetLines(cur, refs, opt = {}) {
+    const gap = opt.gap ?? 6, sets = refs.map(r => (Array.isArray(r) ? r : [r])).filter(r => r.length), multi = sets.filter(r => r.length > 1);
+    if (!multi.length) return { segs: [], pairs: [], length: 0 };
+    const al = opt.align || baselineAlign(cur, sets, { merge: opt.merge !== false }), borders = [];
+    for (const set of multi) for (const ds of set) {
+      const f = al.forDs(ds), segs = [];
+      for (const e of ds.edges.values()) { if (e.parcels.length !== 1) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); if (!a || !b) continue; const A = f(a.x, a.y), B = f(b.x, b.y); segs.push({ ax: A.x, ay: A.y, bx: B.x, by: B.y }); }
+      borders.push({ name: ds.name, set, segs, idx: segIndex(segs, 25) });
+    }
+    const segs = [], pairs = new Map();
+    borders.forEach((A, i) => { for (const s of A.segs) {
+      const L = Math.hypot(s.bx - s.ax, s.by - s.ay); if (L < 1e-6) continue;
+      const hitOf = (x, y) => { let h = null; borders.forEach((B, j) => { if (j === i || B.set !== A.set) return; const m = B.idx.nearest(x, y, gap); if (m && (!h || m.dist < h.d)) h = { j, d: m.dist }; }); return h; };
+      const h = hitOf((s.ax + s.bx) / 2, (s.ay + s.by) / 2); if (!h || h.j < i || !hitOf(s.ax, s.ay) || !hitOf(s.bx, s.by)) continue;   // 中點與兩端都要靠著別幅（段外圍與接合線交角處的邊只有一端靠著）
+      const B = borders[h.j], k = A.name + '｜' + B.name; segs.push({ ...s, a: A.name, b: B.name, gap: h.d });
+      const pr = pairs.get(k) || pairs.set(k, { a: A.name, b: B.name, len: 0 }).get(k); pr.len += L;
+    } });
+    return { segs, pairs: [...pairs.values()].sort((u, v) => v.len - u.len), length: segs.reduce((t, s) => t + Math.hypot(s.bx - s.ax, s.by - s.ay), 0) };
+  }
+  // 分幅線附近的宗地：界址線離分幅線 ≤ dist m（或被分幅線穿過）。依分幅線排序（同一對圖幅放在一起，沿線由一端到另一端），逐筆修時沿著接合線走。
+  // 回傳 [{idx, label, dist, pair, t}]
+  function nearSheetLines(cur, sl, dist = 10) {
+    const segs = sl.segs || sl, P = cur.points; if (!segs.length) return [];
+    const idx = segIndex(segs, Math.max(5, dist)), step = Math.max(0.5, dist / 2), out = [];
+    const axis = new Map(); for (const s of segs) { const k = s.a + '｜' + s.b; let b = axis.get(k); if (!b) axis.set(k, b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity });
+      b.x0 = Math.min(b.x0, s.ax, s.bx); b.x1 = Math.max(b.x1, s.ax, s.bx); b.y0 = Math.min(b.y0, s.ay, s.by); b.y1 = Math.max(b.y1, s.ay, s.by); }
+    for (const p of cur.parcels) {
+      if (p.deleted || p.ids.length < 3) continue; let best = null; const n = p.ids.length;
+      for (let i = 0; i < n; i++) { const A = P.get(p.ids[i]), B = P.get(p.ids[(i + 1) % n]); if (!A || !B) continue; const k = Math.max(1, Math.ceil(Math.hypot(B.x - A.x, B.y - A.y) / step));
+        for (let j = 0; j <= k; j++) { const x = A.x + (B.x - A.x) * j / k, y = A.y + (B.y - A.y) * j / k, h = idx.nearest(x, y, dist); if (h && (!best || h.dist < best.dist)) best = h; } }
+      if (!best) continue; const s = segs[best.n], key = s.a + '｜' + s.b, b = axis.get(key), t = b.x1 - b.x0 >= b.y1 - b.y0 ? best.fx - b.x0 : b.y1 - best.fy;
+      out.push({ idx: p.idx, label: p.label, dist: best.dist, pair: key, t });
+    }
+    const pairLen = new Map((sl.pairs || []).map(q => [q.a + '｜' + q.b, q.len]));
+    return out.sort((u, v) => (u.pair === v.pair ? u.t - v.t : (pairLen.get(v.pair) || 0) - (pairLen.get(u.pair) || 0) || u.pair.localeCompare(v.pair)));
+  }
+
+  // ── 專案檔（v0.28.0）：作業圖目前的點位與界址串。原始檔案另存在專案檔裡，開啟時先照原樣讀入（D 檔原始位元組、面積基準、還原全部的原貌都不變），再套用這份狀態 ──
+  function datasetState(ds) {
+    const n0 = ds.orig ? ds.orig.rings.length : ds.parcels.length;
+    return { n0, keys: ds.parcels.slice(0, n0).map(p => p.key), points: [...ds.points.values()].map(q => ({ ...q })),
+      parcels: ds.parcels.map(p => { const o = {}; for (const [k, v] of Object.entries(p)) if (k !== 'idx' && k !== 'area' && typeof v !== 'function') o[k] = v; return o; }) };
+  }
+  function applyDatasetState(ds, st) {
+    if (!st || !Array.isArray(st.parcels) || !Array.isArray(st.points)) throw new Error('專案檔沒有作業圖狀態');
+    const n0 = ds.orig ? ds.orig.rings.length : ds.parcels.length;
+    if (st.n0 !== n0 || (st.keys && st.keys.some((k, i) => ds.parcels[i].key !== k))) throw new Error(`專案檔記錄的原始圖資（${st.n0} 宗）與讀入的檔案（${n0} 宗）不同，不能套用`);
+    ds.points = new Map(st.points.map(q => [q.id, { ...q }]));
+    st.parcels.forEach((o, i) => { if (i < n0) { const a0 = ds.parcels[i].areaOrig; Object.assign(ds.parcels[i], o, { areaOrig: a0 }); } else ds.parcels[i] = { ...o }; });
+    ds.parcels.length = st.parcels.length;
+    buildTopology(ds); buildArcs(ds); recalc(ds, new Set(ds.parcels.map((_, i) => i)));
+    return ds;
+  }
+
   function exportSession(ds, extra = {}, sv = null) {
     return {
       format: 'cadastral-workbench/session@1',
@@ -3251,7 +3328,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall,
     baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
-    parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner };
+    parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner, sheetLines, nearSheetLines, datasetState, applyDatasetState, healAround };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
 
@@ -3261,6 +3338,21 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.28.0', date: '2026-10-29', type: 'minor',
+    title: '專案檔（存起來下次接著做）與進度條；步驟 2 加入分幅線、待修清單優先排分幅線附近；修正點貼到線位相、合併面後變淡、修好了跳錯地號',
+    changes: [
+      '專案檔（檔案 → 儲存專案檔，Ctrl+S；另存 Ctrl+Shift+S）：讀入的原始檔案（案件、鄰段、分幅舊圖、EXAM.MDB，可選含影像）與目前進度（點位、界址串、各步驟結果、第 6 步檢核報告與「修好了」、待修清單、分幅線、各面板設定）存成一個 .crwp 檔。「開啟專案檔」或把它拖進畫面就接著做；專案資料夾裡有 .crwp 時會先問要不要接著做。復原記錄不存',
+      '自動暫存：每次修改約 3 秒後暫存在瀏覽器（IndexedDB），重開程式時流程欄上方出現「上次的案件…接著做」',
+      '進度條（流程欄上方）：綠＝圖資準備 6 步、藍＝檢核後逐筆修劃掉的比例，另列分幅線附近已看過幾宗與儲存狀態',
+      '步驟 2「自動接圖」：先加入分幅線——分幅舊圖各幅外緣與另一幅外緣相距 ≤ 6 m 的段就是接合處，圖上以粉紅虛線顯示；載入兩幅以上的分幅舊圖時自動加入。依分幅線自動接圖仍在開發',
+      '工具箱待修清單：「分幅線附近優先」（預設勾選）把距分幅線 ≤ 10 m 的地號排在最前面、沿接合線依序；新增來源「分幅線附近」逐宗看，附上舊圖檢核與較差結果',
+      '修正：點貼到線後，原本用這一點的宗地若與被貼的線部分共線（例如相鄰邊順著那條線），沒有把線上的界址點接進來（T 字接點），匯出後 NECEXE .ERR 報重疊／交錯。現在貼完會對用到這一點的宗地與鄰宗重建位相；點併點同樣處理；一宗已經用到這一點又以那條線為界時整個擋下，不再改了一半',
+      '修正：工具箱「合併面」（以及點選宗地的工具）執行後整張圖變淡——繪圖時出錯，透明度留在 25%',
+      '修正：工具箱按「✓ 修好了」後，畫面跳到剛修好的那宗，對話框卻顯示下一筆',
+      'AI／MCP：getProgress、addSheetLines、listSheetParcels、saveProjectJson、openProjectJson；核心 Core.sheetLines、nearSheetLines、datasetState、applyDatasetState、healAround',
+    ],
+  },
   {
     version: 'v0.27.1', date: '2026-10-28', type: 'patch',
     title: '空隙建為新地號不再與鄰地重疊；未登記地預設每筆 ≤ 30 點、長寬比 ≤ 6，去除雜點預設 30‰、0.5 m',
@@ -3822,7 +3914,7 @@ function boxSelect(x0, y0, x1, y1, add) {
 
 // ── 編輯（含復原）：undo 項目為 {before,after}（點位）或 {undoFn,redoFn}（其他）────
 const snapshot = ids => [...ids].map(id => { const p = S.ds.points.get(id); return [id, p.y, p.x]; });
-function pushUndo(e) { S.seamStale = true; S.undo.push(e); if (S.undo.length > 500) S.undo.shift(); S.redo.length = 0; refresh(); }
+function pushUndo(e) { S.seamStale = true; S.undo.push(e); if (S.undo.length > 500) S.undo.shift(); S.redo.length = 0; projDirty(); refresh(); }
 function commit(before, after, label) {
   if (before.every((b, i) => b[1] === after[i][1] && b[2] === after[i][2])) return;
   pushUndo({ before, after, label });
@@ -3843,8 +3935,8 @@ function rotateSelection(deg) {
   return transformSelection({ angle: deg * Math.PI / 180, pivot: pivotOf(ids) }, '旋轉');
 }
 function applyEntries(entries) { if (!S.ds) return; Core.setPoints(S.ds, entries); }
-function undo() { S.seamStale = true; const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); refresh(); }
-function redo() { S.seamStale = true; const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); refresh(); }
+function undo() { S.seamStale = true; const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); projDirty(); refresh(); }
+function redo() { S.seamStale = true; const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); projDirty(); refresh(); }
 function resetAll() { if (!S.ds) return; Core.resetAll(S.ds); S.undo.length = 0; S.redo.length = 0; refresh(); }
 
 // ── 界址點編修（新增／修改／刪除）：核心在 Core.insertPoint／removePoints／cleanupPoints，這裡負責復原、選取與介面 ──
@@ -4200,7 +4292,7 @@ function strokeArcs(d, color, w, dash) {
   ctx.stroke(); ctx.setLineDash([]);
 }
 function render() {
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.clearRect(0, 0, W, H);   // 上一幀若中途出錯沒 restore，透明度不可殘留
   drawBasemap(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); drawImages(false);
   const ds = S.ds, sc = S.view.s;
   const ST = S.style, cEdge = sc_('edge', 'color', '--edge'), cRef = sc_('ref', 'color', '--ref'), cSel = sc_('sel', 'color', '--sel'), cHov = css('--hover'), cChg = ST.fill.color ? ST.fill.color + '38' : css('--changed'), cBad = css('--bad'), cSv = sc_('survey', 'color', '--survey');
@@ -4255,6 +4347,7 @@ function render() {
     }
     if ($('dlgBl').open && S.bl.res && $('chkBlMap').checked && !S.printing) drawBaseline(ds);
     if ($('dlgChk').open && S.chk.res && $('chkMap').checked && !S.printing) drawCheck();
+    if (S.sheet && S.sheet.show && $('sheetShow').checked && !S.printing) drawSheet();
     if (S.topo && !S.printing) drawTopo();
     if ($('dlgOwn').open && S.owner && S.owner.res && $('chkOwnMap').checked) drawOwners(ds);
     if ($('dlgUnreg').open && S.unreg && !S.printing) {   // 未登記地：黃＝未登記、橘＝需要分割（超過點數或太細長）、紅＝空隙
@@ -4400,6 +4493,7 @@ function lineList() {
   }).join('');
 }
 let ownKeyState = '';
+let tqKey = '';
 function panel() {
   const ds = S.ds;
   const st = S.st = ds ? Core.structSummary(ds) : { added: 0, removed: 0, rings: 0 }, structEd = st.added + st.removed + st.rings > 0, edited = !!ds && (structEd || Core.movedPoints(ds).length > 0);
@@ -4411,7 +4505,7 @@ function panel() {
   ptPanel(); if ($('dlgUnreg').open) { const k = S.undo.length + ':' + S.redo.length; if (k !== unKey) { unKey = k; unregPanel(); } } if ($('dlgRing').open) { const k = S.undo.length + ':' + S.redo.length; if (k !== ringKey) { ringKey = k; ringPanel(); } } if ($('dlgClean').open) { const k = S.undo.length + ':' + S.redo.length + ':' + (S.ds && S.ds.points.size); if (k !== cleanKey) { cleanKey = k; cleanSoon(); } }
   $('btnExpJson').disabled = !ds && !S.survey.points.size;
   $('drop').style.display = (ds || S.survey.points.size || S.nb.length || S.img.length) ? 'none' : 'flex';
-  lineList(); nbPanel(); outPanel(); imgPanel(); wfPanel(); if ($('dlgChk').open) chkPanel();
+  lineList(); nbPanel(); outPanel(); imgPanel(); wfPanel(); progPanel(); if ($('dlgChk').open) chkPanel(); if ($('dlgTopo').open) { const k = S.undo.length + ':' + S.redo.length + ':' + S.chk.ok.size; if (k !== tqKey) { tqKey = k; tqPanel(); } }
   const srcs = [...new Set([...S.controls.values()].map(p => p.src))];
   $('ctlInfo').textContent = S.controls.size ? `已知點 ${S.controls.size} 個（${srcs.join('、')}）` : '尚未匯入控制點 — 匯入 MAC 前需先匯入 CTL／CT2（或載入含 D20 的案件）';
   $('btnCtlClear').disabled = !S.controls.size;
@@ -4838,7 +4932,7 @@ function toggleSidebar() { document.querySelector('main').classList.toggle('nosb
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
   undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
-  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'), chk: () => openPanel('dlgChk'), topo: () => openPanel('dlgTopo'), flow: () => toggleFlow(), project: () => $('projDir').click(),
+  fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'), chk: () => openPanel('dlgChk'), topo: () => openPanel('dlgTopo'), flow: () => toggleFlow(), project: () => $('projDir').click(), projsave: () => saveProject(), projsaveas: () => saveProject(true), projopen: () => pickProject(),
   help: () => $('help').showModal(),
 };
 document.addEventListener('click', e => {
@@ -4982,6 +5076,7 @@ const readBuf = f => f.arrayBuffer().then(b => new Uint8Array(b));
 const readText = f => readBuf(f).then(u => { try { return new TextDecoder('utf-8', { fatal: true }).decode(u); } catch { return new TextDecoder('big5').decode(u); } });
 async function loadFiles(files) {
   const by = {}, dup = [], texts = [], macs = [], ctlFiles = [], imgs = [], mdbs = [];
+  const pj = files.find(f => extOf(f.name) === PROJ_EXT); if (pj) { await openProjectFile(pj); return true; }   // 專案檔
   for (const f of files) {
     const x = extOf(f.name);
     if (/^(txt|csv|xyz|pts|dat|asc)$/.test(x)) { texts.push(f); continue; }
@@ -5023,7 +5118,7 @@ async function loadFiles(files) {
     if (ctlMsg) return true;
     msg('缺少必要檔案：需要 D14+D13，或 COA+BNP，或 D2C+D2B；控制點用 CTL/CT2/D20；現況點請用「匯入現況點」'); return false;
   }
-  S.caseFiles = caseFolderFiles(files, by.d14 || by.coa || by.d2c);
+  S.caseFiles = caseFolderFiles(files, by.d14 || by.coa || by.d2c); srcMain(files);
   S.bl.res = null; S.bl.focus = null; S.seam = null; S.clean = null; S.ringMark = null; S.redraw = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
   S.owner = null; let ownMsg = ''; if (mdbs.length) { const r = await loadOwners(mdbs.find(f => /exam/i.test(f.name)) || mdbs[0], true); ownMsg = r ? `；登記資料 ${r}` : ''; }
   fit(); refresh();
@@ -5066,7 +5161,7 @@ function ensureBitmap(im) {
 function releaseBitmap(im) { if (im.bmp) { im.bmp.close && im.bmp.close(); im.bmp = null; } }
 function setImgVisible(im, v) { im.visible = v; if (v) ensureBitmap(im); else releaseBitmap(im); }
 async function loadImages(files) {
-  const groups = new Map();
+  srcRec().img.push(...files); S.srcDirty = true; const groups = new Map();
   for (const f of files) {
     const m = /^(.*)\.([^.]+)$/.exec(f.name); if (!m) continue; const x = m[2].toLowerCase(); const isImg = IMG_RE.test(x); if (!isImg && !WLD_RE.test(x)) continue;
     const key = nbDirOf(f) + m[1].toLowerCase(); let g = groups.get(key); if (!g) groups.set(key, g = { name: m[1] });
@@ -5217,7 +5312,7 @@ async function loadBaseline(files) {
   if (!ds.length) { msg('沒有可用的接圖前圖資（需要 D14＋D13（＋D11）或 COA＋BNP（＋PAR））' + (skipped.length ? '：' + skipped.join('、') : '')); return { added: 0, skipped }; }
   const dirs = [...new Set(files.map(f => nbDirOf(f)).filter(Boolean))], top = dirs.length ? (dirs.length > 1 ? dirs.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, a.lastIndexOf('/', i - 1) + 1); }) : dirs[0]).replace(/\/$/, '').split('/').pop() : '';   // 各幅共同的上層資料夾名稱（例如「單幅」）
   const set = { name: ds.length > 1 ? `${top || ds[0].name}（${ds.length} 幅）` : ds[0].name, ds };
-  S.bl.sets.push(set); S.bl.res = null; blPanel(); refresh();
+  S.bl.sets.push(set); S.bl.res = null; srcRec().bl.push({ files: files.filter(f => SRC_RE.test(f.name)), set }); S.srcDirty = true; sheetAuto(); blPanel(); refresh();
   msg(`已加入接圖前圖資「${set.name}」：${ds.reduce((t, d) => t + d.parcels.length, 0)} 宗` + (skipped.length ? `；略過 ${skipped.join('、')}` : ''));
   return { added: ds.length, name: set.name, skipped };
 }
@@ -5304,7 +5399,7 @@ $('dlgBl').addEventListener('close', () => { S.bl.focus = null; draw(); });
 async function loadOwners(file, quiet = false) {
   try {
     const ot = Core.ownerTables(Core.parseMdb(await readBuf(file)));
-    S.owner = { name: file.name, ot, res: null }; ownRun();
+    S.owner = { name: file.name, ot, res: null }; ownRun(); srcRec().own = file; S.srcDirty = true;
     const t = `${file.name}：土地標示 ${ot.landRows} 筆、權利人 ${ot.ownRows} 筆` + (S.owner.res ? `；非 9000 號沒有所有權人 ${S.owner.res.noOwner.length} 筆` : '');
     if (!quiet) msg('已讀入登記資料 ' + t); ownPanel(); if ($('dlgBl').open) blPanel(); refresh(); return t;
   } catch (e) { msg(`無法讀取 ${file.name}：${e.message}`); return ''; }
@@ -5363,7 +5458,7 @@ const seamOpts = (o = {}) => { const v = (id, k) => { const x = parseFloat($(id)
   return { tol: o.tol ?? v('seamTol', 'tol'), search: o.search ?? v('seamSearch', 'search'), snap: o.snap ?? v('seamSnap', 'snap') }; };
 // 以「同資料夾＋同主檔名」分組，一次可加入多個地段（例如選取含多個案件資料夾的上層資料夾）
 async function loadNeighbors(files) {
-  const groups = new Map();
+  srcRec().nb.push(...files.filter(f => SRC_RE.test(f.name))); S.srcDirty = true; const groups = new Map();
   for (const f of files) {
     const m = /^(.*)\.([^.]+)$/.exec(f.name); if (!m) continue; const x = m[2].toLowerCase(); if (!/^(d11|d12|d13|d14|coa|bnp|par)$/.test(x)) continue;
     const key = nbDirOf(f) + m[1].toLowerCase(); let g = groups.get(key); if (!g) groups.set(key, g = { name: m[1], f: {} });
@@ -5743,7 +5838,8 @@ if (autoUpdOn() && /^(https?|file):$/.test(location.protocol)) setTimeout(() => 
 const NB_DIR = /鄰段|neighbou?r/i, BL_DIR = /分幅|接圖前|單幅|整幅|舊圖數值|sheet/i, OLDMAP_SKIP = /航照|正射|ortho|aerial|photo|衛星/i;
 const isOldMapImg = im => (im.oldmap != null ? im.oldmap : !OLDMAP_SKIP.test(im.name));
 async function loadProject(files) {
-  const pathOf = f => f.webkitRelativePath || f._path || f.name, dirs = new Map();
+  const pj = files.find(f => extOf(f.name) === PROJ_EXT); if (pj && confirm(`資料夾裡有專案檔 ${pj.name}：要開啟它、接著上次的進度做嗎？\n（選「取消」＝重新讀入資料夾，從頭做）`)) { await openProjectFile(pj); return { project: pj.name }; }
+  files = files.filter(f => extOf(f.name) !== PROJ_EXT); const pathOf = f => f.webkitRelativePath || f._path || f.name, dirs = new Map();
   for (const f of files) { const d = nbDirOf(f); let g = dirs.get(d); if (!g) dirs.set(d, g = { dir: d, files: [], ext: new Set() }); g.files.push(f); const m = /\.([^.]+)$/.exec(f.name); if (m) g.ext.add(m[1].toLowerCase()); }
   const isData = g => (g.ext.has('d14') && g.ext.has('d13')) || (g.ext.has('coa') && g.ext.has('bnp'));
   const data = [...dirs.values()].filter(isData), nbs = data.filter(g => NB_DIR.test(g.dir)), bls = data.filter(g => !NB_DIR.test(g.dir) && BL_DIR.test(g.dir)), rest = data.filter(g => !nbs.includes(g) && !bls.includes(g));
@@ -5807,7 +5903,7 @@ async function runCheck(o = {}) {
     for (const r of S.chk.res.rows) r.fix = sliverFix(r);
     S.chk.focus = null; S.chk.ok.clear();
   } finally { S.chk.running = false; $('btnChkRun').disabled = false; }
-  chkPanel(); refresh();
+  chkPanel(); projDirty(); refresh();
   const c = chkCounts(); msg(`檢核完成：紅 ${c.red}、黃 ${c.yellow}、碎片 ${c.sliver}` + (inkErr ? `；影像無法讀取：${inkErr}` : '') + `（${(S.chk.res.ms / 1000).toFixed(1)} 秒）`);
   return S.chk.res;
 }
@@ -5895,7 +5991,7 @@ $('chkMap').onchange = draw;
 $('chkSrc').addEventListener('change', e => { const n = e.target.dataset.chkimg; if (n == null) return; const im = S.img.find(q => q.name === n); if (im) im.oldmap = e.target.checked; });
 $('chkList').addEventListener('click', e => {
   const fx = e.target.closest('[data-chkfix]'); if (fx) { try { applySliverFix(S.chk.res.rows[+fx.dataset.chkfix]); } catch (err) { msg(err.message); } return; }
-  const ok = e.target.closest('[data-chkok]'); if (ok) { const x = S.chk.res.rows[+ok.dataset.chkok]; S.chk.ok.has(x.label) ? S.chk.ok.delete(x.label) : S.chk.ok.add(x.label); chkPanel(); draw(); return; }
+  const ok = e.target.closest('[data-chkok]'); if (ok) { const x = S.chk.res.rows[+ok.dataset.chkok]; S.chk.ok.has(x.label) ? S.chk.ok.delete(x.label) : S.chk.ok.add(x.label); chkPanel(); projDirty(); refresh(); return; }
   const tr = e.target.closest('tr[data-chk]'); if (tr) chkFocus(+tr.dataset.chk);
 });
 $('dlgChk').addEventListener('close', () => { S.chk.focus = null; draw(); });
@@ -5906,8 +6002,11 @@ const sheetPieces = () => (S.ds ? S.ds.parcels.filter(p => { if (p.deleted) retu
 const STEPS = [
   { n: 1, title: '讀檔', desc: '專案資料夾（案件 D 檔、舊圖影像、分幅舊圖、鄰段、EXAM.MDB）',
     status: () => S.ds ? { st: 'done', text: `作業圖 ${S.ds.parcels.filter(p => !p.deleted).length} 宗；影像 ${S.img.length}（舊圖 ${chkImages().length}）；分幅舊圖 ${S.bl.sets.length} 組；鄰段 ${S.nb.length}${S.owner ? '；登記資料 ✓' : ''}` } : { st: 'todo', text: '尚未載入' } },
-  { n: 2, title: '自動接圖', desc: '把分幅數化圖接成整段',
-    status: () => !S.ds ? { st: 'todo', text: '' } : sheetPieces() ? { st: 'warn', text: `偵測到 ${sheetPieces()} 塊分幅塊（子號 ≥ 1000）：這張圖還沒接圖。自動接圖尚未提供，請先用 NECEXE 接圖後再載入` } : { st: 'na', text: '載入的圖沒有分幅塊，視為已接圖（自動接圖功能開發中）' } },
+  { n: 2, title: '自動接圖', desc: '先加入分幅線（分幅舊圖各幅的接合處），待修清單優先排分幅線附近的地號；依分幅線自動接圖開發中', run: async () => sheetRun(),
+    status: () => { if (!S.ds) return { st: 'todo', text: '' }; const w = S.wf[2], pc = sheetPieces(), sh = S.sheet ? sheetText() : '';
+      if (pc) return { st: 'warn', text: `偵測到 ${pc} 塊分幅塊（子號 ≥ 1000）：這張圖還沒接圖。自動接圖尚未提供，請先用 NECEXE 接圖後再載入` + (sh ? '\n' + sh : '') };
+      if (S.sheet) return { st: 'done', text: sh }; if (w && !w.ok) return { st: 'err', text: w.text };
+      return { st: 'na', text: S.bl.sets.some(s => s.ds.length > 1) ? '已接圖；按「一鍵執行」加入分幅線' : '已接圖（沒有分幅塊）。要加入分幅線，請在步驟 1 載入兩幅以上的分幅舊圖' }; } },
   { n: 3, title: '鄰段接合', desc: '數值區鄰段：界址點完全照抄；圖解區鄰段：平移比形狀，只防重疊', adv: 'seam', needNb: true,
     run: async () => { runSeam(); const r = joinSeam(); return `移動 ${r.moves.length ? new Set(r.moves.map(m => m.id)).size : 0} 點、補點 ${r.added.length}、刪點 ${r.removed.length}；仍重疊 ${r.after.overlap}、脫開 ${r.after.gap} 點`; } },
   { n: 4, title: '未登記土地合併分割', desc: '與鄰段的空隙建新地號 → 相連的未登記地合併 → 依點數與長寬比分割', adv: 'unreg',
@@ -5947,7 +6046,7 @@ async function runStep(n, o = {}) {
   S.wfBusy = true; wfPanel();
   try { const text = await s.run(o); S.wf[n] = { ok: true, text }; }
   catch (e) { S.wf[n] = { ok: false, text: e.message }; throw e; }
-  finally { S.wfBusy = false; refresh(); }
+  finally { S.wfBusy = false; projDirty(); refresh(); }
   return S.wf[n];
 }
 async function runSteps(from = 3, to = 6) {
@@ -6038,7 +6137,7 @@ function drawTopo() {
   for (const p of T.picks) {
     if (p.t === 'pt') { const q = S.ds.points.get(p.id); if (q) { ctx.beginPath(); ctx.arc(toSx(q.x), toSy(q.y), 8, 0, 7); ctx.stroke(); } }
     else if (p.t === 'edge') { const a = S.ds.points.get(p.a), b = S.ds.points.get(p.b); ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); ctx.stroke(); ctx.lineWidth = 3; }
-    else if (p.t === 'par') { ctx.globalAlpha = 0.25; tracePoly(S.ds, S.ds.parcels[p.idx].ids); ctx.fill(); ctx.globalAlpha = 1; }
+    else if (p.t === 'par') { ctx.globalAlpha = 0.25; ctx.beginPath(); S.ds.parcels[p.idx].ids.forEach((id, i) => { const q = S.ds.points.get(id); i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)); }); ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1; }   // tracePoly 是 render() 內的區域函式，這裡不能用（v0.27.0 在此丟例外，save() 沒 restore，整張圖留在 25% 透明＝「合併面後顏色變淡」）
   }
   if (T.tool === 'addFace' && T.picks.length > 1) { ctx.setLineDash([6, 4]); ctx.beginPath(); T.picks.forEach((p, i) => { const q = S.ds.points.get(p.id); i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)); }); ctx.stroke(); }
   ctx.restore();
@@ -6056,26 +6155,173 @@ function tqItems() {
     case 'area': return S.bl.res ? S.bl.res.flagged.map(x => ({ key: 'area|' + x.label, label: x.label, rings: x.rings, text: `較差 ${x.diff >= 0 ? '+' : ''}${x.diff.toFixed(1)} m²（${x.ratio.toFixed(1)} 倍公差，${x.cause}）` })) : [];
     case 'unreg': return Core.unregSummary(ds, unN(), unRatio(), unMin()).parcels.filter(p => p.over).map(p => ({ key: 'un|' + p.label, label: p.label, text: `未登記地 ${p.pts} 點、長寬比 ${isFinite(p.ratio) ? p.ratio.toFixed(1) : '—'}、${p.area.toFixed(0)} m²` }));
     case 'ring': return Core.ringIssues(ds).map(o => ({ key: 'ring|' + ds.parcels[o.p].label + '|' + o.kind, label: ds.parcels[o.p].label, text: Core.ringIssueLine(ds, o) }));
+    case 'sheet': { if (!S.sheet) return []; const chk = new Map((S.chk.res ? S.chk.res.rows : []).filter(r => !S.chk.ok.has(r.label)).map(r => [r.label, r])), area = new Map((S.bl.res ? S.bl.res.flagged : []).map(x => [x.label, x]));
+      return sheetNear().map(q => { const c = chk.get(q.label), a = area.get(q.label);
+        return { key: 'sheet|' + q.label, label: q.label, text: `距分幅線 ${q.dist.toFixed(1)} m（${q.pair}）` + [c ? `舊圖檢核${c.level === 'red' ? '紅' : c.level === 'yellow' ? '黃' : '碎片'}` : '', a ? `較差 ${a.diff >= 0 ? '+' : ''}${a.diff.toFixed(1)} m²` : ''].filter(Boolean).map(t => '；' + t).join('') }; }); }
   }
   return [];
 }
 function tqPanel() {
-  const items = tqItems().filter(x => !S.tq.done.has(x.key)); S.tq.items = items; if (S.tq.i >= items.length) S.tq.i = items.length - 1;
+  const items = tqLive(); S.tq.items = items; if (S.tq.i >= items.length) S.tq.i = items.length - 1;
   $('tqPos').textContent = items.length ? `${S.tq.i + 1 > 0 ? S.tq.i + 1 : '—'} / ${items.length}` : '沒有待修項目';
-  const it = items[S.tq.i]; $('tqInfo').innerHTML = it ? `<b>${esc(it.label)}</b>　${esc(it.text)}` : ($('tqSrc').value === 'chk' && !S.chk.res ? '請先做第 6 步檢核' : ($('tqSrc').value !== 'unreg' && $('tqSrc').value !== 'ring' && !S.bl.res ? '請先做接圖前比對' : ''));
+  const it = items[S.tq.i]; $('tqInfo').innerHTML = it ? `<b>${esc(it.label)}</b>　${esc(it.text)}` : ($('tqSrc').value === 'chk' && !S.chk.res ? '請先做第 6 步檢核' : $('tqSrc').value === 'sheet' ? (S.sheet ? '' : '請先做第 2 步加入分幅線') : ($('tqSrc').value !== 'unreg' && $('tqSrc').value !== 'ring' && !S.bl.res ? '請先做接圖前比對' : ''));
   $('tqPrev').disabled = $('tqNext').disabled = !items.length; $('tqDone').disabled = !it;
 }
+const tqLive = () => tqSort(tqItems().filter(x => !S.tq.done.has(x.key) && !(x.key.startsWith('chk|') && S.chk.ok.has(x.label))));
 function tqGo(step) {
-  const items = S.tq.items || tqItems(); if (!items.length) return; S.tq.i = ((S.tq.i < 0 && step < 0 ? 0 : S.tq.i) + step + items.length) % items.length; const it = items[S.tq.i];
+  const items = tqLive(); S.tq.items = items; if (!items.length) { S.tq.i = -1; S.tq.focus = null; tqPanel(); return; }   // 每次重算：剛按「修好了」的那筆已經不在清單裡（v0.27.0 用舊清單，畫面跳到剛修好的那宗、對話框卻顯示下一筆）
+  S.tq.i = ((S.tq.i < 0 && step < 0 ? 0 : S.tq.i) + step + items.length) % items.length; const it = items[S.tq.i];
   const p = S.ds.parcels.find(q => !q.deleted && q.label === it.label); clearSel();
   if (p) { S.sel.par.add(p.idx); zoomTo([p.idx]); }
   else if (it.rings && it.rings.length) { let b = null; for (const r of it.rings) for (const q of r) b = b ? { x0: Math.min(b.x0, q.x), x1: Math.max(b.x1, q.x), y0: Math.min(b.y0, q.y), y1: Math.max(b.y1, q.y) } : { x0: q.x, x1: q.x, y0: q.y, y1: q.y }; const m = Math.max(10, (b.x1 - b.x0 + b.y1 - b.y0) * 0.3); fit({ x0: b.x0 - m, x1: b.x1 + m, y0: b.y0 - m, y1: b.y1 + m }); }
   S.tq.focus = it; tqPanel(); refresh(); msg(`${it.label}：${it.text}`);
 }
-function tqMarkDone() { const it = (S.tq.items || [])[S.tq.i]; if (!it) return; if (it.key.startsWith('chk|')) S.chk.ok.add(it.label); else S.tq.done.add(it.key); S.tq.i--; tqGo(1); }
+function tqMarkDone() { const it = (S.tq.items || [])[S.tq.i]; if (!it) return; if (it.key.startsWith('chk|')) S.chk.ok.add(it.label); else S.tq.done.add(it.key); S.tq.i--; tqGo(1); projDirty(); }
 $('topoTools').addEventListener('click', e => { const b = e.target.closest('[data-topo]'); if (!b) return; S.topo && S.topo.tool === b.dataset.topo ? topoCancel() : topoStart(b.dataset.topo); });
 $('tqPrev').onclick = () => tqGo(-1); $('tqNext').onclick = () => tqGo(1); $('tqDone').onclick = tqMarkDone; $('tqSrc').onchange = () => { S.tq.i = -1; tqPanel(); };
 $('dlgTopo').addEventListener('close', () => { if (S.topo) topoCancel(); });
+
+// ── 分幅線（v0.28.0）：分幅舊圖各幅的接合處。步驟 2 一鍵加入（載入兩幅以上的分幅舊圖時自動加入）；待修清單優先排分幅線附近的地號 ──
+S.sheet = null;   // { segs, pairs, length, show, near（附近宗地，依線排序）, nearKey }
+const sheetDist = () => { const v = parseFloat($('sheetDist').value); return Number.isFinite(v) && v > 0 ? v : 10; };
+function sheetNear() {
+  if (!S.sheet || !S.ds) return []; const k = S.undo.length + ':' + S.redo.length + ':' + sheetDist();
+  if (S.sheet.nearKey !== k) { S.sheet.near = Core.nearSheetLines(S.ds, S.sheet, sheetDist()); S.sheet.nearKey = k; }
+  return S.sheet.near;
+}
+const sheetText = () => `分幅線 ${S.sheet.pairs.length} 處接合、共 ${S.sheet.length.toFixed(0)} m；附近（≤ ${sheetDist()} m）${sheetNear().length} 宗，待修清單優先排這些`;
+function sheetRun() {
+  if (!S.ds) throw new Error('請先載入作業圖'); const sets = S.bl.sets.map(s => s.ds);
+  if (!sets.some(d => d.length > 1)) throw new Error('需要兩幅以上的分幅舊圖才能加入分幅線（步驟 1「分幅舊圖」選放各幅的資料夾）');
+  const sl = Core.sheetLines(S.ds, sets); if (!sl.segs.length) throw new Error('分幅舊圖各幅之間找不到接合處（各幅外緣相距都超過 6 m）');
+  S.sheet = { ...sl, show: true, near: null, nearKey: null }; projDirty(); refresh(); return sheetText();
+}
+function sheetAuto() { if (!S.ds || !S.bl.sets.some(s => s.ds.length > 1)) return; try { S.wf[2] = { ok: true, text: sheetRun() }; } catch (e) { /* 找不到接合處：不自動加入，步驟 2 可手動執行看原因 */ } }
+function drawSheet() {
+  ctx.save(); ctx.strokeStyle = 'rgba(214,51,108,.75)'; ctx.lineWidth = 4; ctx.setLineDash([10, 6]); ctx.lineCap = 'round'; ctx.beginPath();
+  for (const s of S.sheet.segs) { ctx.moveTo(toSx(s.ax), toSy(s.ay)); ctx.lineTo(toSx(s.bx), toSy(s.by)); } ctx.stroke(); ctx.restore();
+}
+// 待修清單：分幅線附近的排前面（依沿線順序），其餘照原順序
+function tqSort(items) {
+  if (!S.sheet || !$('tqSheet').checked || $('tqSrc').value === 'sheet') return items;
+  const rank = new Map(sheetNear().map((q, i) => [q.label, i])), near = items.filter(x => rank.has(x.label)).sort((a, b) => rank.get(a.label) - rank.get(b.label));
+  return near.map(x => ({ ...x, text: '〔分幅線附近〕' + x.text })).concat(items.filter(x => !rank.has(x.label)));
+}
+
+// ── 專案檔（v0.28.0）：把讀入的原始檔案（主要測區、鄰段、分幅舊圖、登記資料，可選含影像）與目前的作業狀態
+// （點位、界址串、各步驟結果、檢核報告與「修好了」、待修清單進度、分幅線、設定）存成一個 .crwp 檔，下次開啟接著做。
+// 另在瀏覽器自動暫存（IndexedDB），重開程式時可「接著做」。復原記錄不存（開啟後從目前狀態開始）。
+const PROJ_EXT = 'crwp', PROJ_FMT = 'cadastral-resurvey-workstation/project@1', SRC_RE = /\.(d11|d12|d13|d14|d20|d21|d2b|d2c|d2d|coa|bnp|par|mdb|ctl|ct2|cen|l02)$/i;
+S.src = null; S.srcDirty = false; S.proj = { handle: null, saved: null, auto: null, dirty: false };
+const srcRec = () => S.src || (S.src = { main: [], nb: [], bl: [], img: [], own: null });
+function srcMain(files) { const o = srcRec(); o.main = files.filter(f => !IMG_RE.test(extOf(f.name)) && !WLD_RE.test(extOf(f.name))); o.own = null; S.srcDirty = true; S.proj.handle = null; S.proj.saved = null; S.proj.images = null; }
+const pathOf = f => f.webkitRelativePath || f._path || f.name, baseOf = f => f.name.replace(/\.[^.]+$/, '').toLowerCase();
+// 目前仍在使用的來源檔（移除的鄰段、分幅舊圖、影像不存）
+function srcLive(images) {
+  const o = srcRec(), nb = new Set(S.nb.map(n => n.name.toLowerCase())), im = new Set(S.img.map(q => q.name.toLowerCase())), uniq = l => [...new Map(l.map(f => [pathOf(f), f])).values()];
+  return { main: uniq(o.main), nb: uniq(o.nb.filter(f => nb.has(baseOf(f)))), bl: o.bl.filter(b => S.bl.sets.includes(b.set)).map(b => ({ name: b.set.name, auto: !!b.set.auto, files: uniq(b.files) })),
+    img: images ? uniq(o.img.filter(f => im.has(baseOf(f)))) : [], own: o.own && !o.main.includes(o.own) ? o.own : null };
+}
+const SET_SKIP = /^(findTop|tqSrc)$/;
+function projState() {
+  const settings = {}; document.querySelectorAll('dialog.fp input[id], dialog.fp select[id], #tol, #deltaMode').forEach(el => { if (el.type === 'file' || SET_SKIP.test(el.id)) return; settings[el.id] = el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value; });
+  const fixed = S.chk.res ? S.chk.res.rows.filter(r => S.chk.ok.has(r.label)).length : 0;
+  return { ds: Core.datasetState(S.ds), view: { ...S.view }, wf: S.wf, bl: S.bl.res, chk: S.chk.res ? { res: { ...S.chk.res, bl: null }, ok: [...S.chk.ok] } : null,
+    tq: { src: $('tqSrc').value, i: S.tq.i, done: [...S.tq.done] }, sheet: S.sheet ? { segs: S.sheet.segs, pairs: S.sheet.pairs, length: S.sheet.length, show: S.sheet.show } : null,
+    nb: S.nb.map(n => ({ name: n.name, mode: n.mode, visible: n.visible })), settings, progress: projProgress(), summary: { case: caseBase(), fixed, rows: S.chk.res ? S.chk.res.rows.length : 0 } };
+}
+function projApply(st) {
+  Core.applyDatasetState(S.ds, st.ds); S.undo.length = S.redo.length = 0; clearSel(); S.hover = null;
+  for (const [id, v] of Object.entries(st.settings || {})) { const el = $(id); if (!el) continue; if (el.type === 'checkbox' || el.type === 'radio') el.checked = !!v; else el.value = v; }
+  S.wf = st.wf || {}; S.bl.res = st.bl || null; S.chk.res = st.chk ? { ...st.chk.res, bl: S.bl.res } : null; S.chk.ok = new Set(st.chk ? st.chk.ok : []); S.chk.focus = null;
+  if (st.tq) { $('tqSrc').value = st.tq.src || 'chk'; S.tq.i = st.tq.i ?? -1; S.tq.done = new Set(st.tq.done || []); }
+  S.sheet = st.sheet ? { ...st.sheet, near: null, nearKey: null } : null;
+  for (const n of st.nb || []) { const x = S.nb.find(q => q.name === n.name); if (x) { x.mode = n.mode; x.visible = n.visible; } }
+  if (st.view) S.view = { ...S.view, ...st.view }; if (S.owner) ownRun();
+}
+const toB64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+async function projFile(images) {
+  if (!S.ds || !S.src) throw new Error('請先載入案件');
+  const src = srcLive(images), enc = async f => ({ path: pathOf(f), base64: toB64(await readBuf(f)) }), all = l => Promise.all(l.map(enc));
+  return { format: PROJ_FMT, app: APP_VERSION, saved: new Date().toISOString(), name: caseBase(), images: S.img.map(q => q.name), images_included: !!images,
+    note: '地籍圖重測工作站專案檔：source＝讀入的原始檔案（base64）；state＝作業狀態（ds.points／ds.parcels 為目前的界址點與界址串，y＝縱坐標（北）、x＝橫坐標（東），TWD97）',
+    source: { main: await all(src.main), nb: await all(src.nb), bl: await Promise.all(src.bl.map(async b => ({ name: b.name, auto: b.auto, files: await all(b.files) }))), img: await all(src.img), own: src.own ? await enc(src.own) : null }, state: projState() };
+}
+async function saveProject(as = false) {
+  if (!S.ds) return msg('請先載入案件');
+  if (S.proj.images == null || as) S.proj.images = !!S.img.length && confirm(`專案檔要包含舊圖影像嗎？（${S.img.length} 張，檔案會很大）\n選「取消」＝不含影像，開啟後再按「舊圖影像」載入`); const big = S.proj.images;   // 同一案件只問一次（另存時再問）
+  try {
+    msg('專案檔準備中…'); const text = JSON.stringify(await projFile(big)), name = caseBase() + '.' + PROJ_EXT;
+    if (window.showSaveFilePicker) {
+      try { if (as || !S.proj.handle) S.proj.handle = await showSaveFilePicker({ suggestedName: name, types: [{ description: '地籍圖重測工作站專案', accept: { 'application/json': ['.' + PROJ_EXT] } }] });
+        const w = await S.proj.handle.createWritable(); await w.write(text); await w.close(); }
+      catch (e) { if (e.name === 'AbortError') return msg('已取消儲存'); S.proj.handle = null; download(name, text, 'application/json'); }
+    } else download(name, text, 'application/json');
+    S.proj.saved = new Date(); S.proj.dirty = false; msg(`已儲存專案檔 ${S.proj.handle ? S.proj.handle.name : name}（${(text.length / 1048576).toFixed(1)} MB${big ? '，含影像' : ''}）：下次「開啟專案檔」或把它拖進畫面就能接著做`); refresh();
+  } catch (e) { msg('儲存專案檔失敗：' + e.message); }
+}
+const srcFile = e => (e.blob ? Object.assign(new File([e.blob], e.path.split('/').pop()), { _path: e.path }) : toFile({ name: e.path, path: e.path, base64: e.base64 }));
+async function openProjectData(j) {
+  if (!j || j.format !== PROJ_FMT) throw new Error('不是本程式的專案檔');
+  S.nb.length = 0; S.bl.sets.length = 0; S.bl.res = null; S.img.length = 0; S.imgActive = -1; S.src = null; S.wf = {}; S.chk.res = null; S.chk.ok = new Set(); S.sheet = null; S.owner = null;
+  const F = l => (l || []).map(srcFile), s = j.source;
+  if (!await loadFiles(F(s.main))) throw new Error('專案檔裡的主要測區無法讀入');
+  if (s.own) await loadOwners(srcFile(s.own), true);
+  if (s.nb && s.nb.length) await loadNeighbors(F(s.nb));
+  for (const b of s.bl || []) { const r = await loadBaseline(F(b.files)); const set = S.bl.sets[S.bl.sets.length - 1]; if (r && r.added && set) { set.name = b.name; set.auto = b.auto; } }
+  if (s.img && s.img.length) { await loadImages(F(s.img)); if (!S.img.some(im => im.visible)) { const im = S.img.find(q => q.located && isOldMapImg(q)); if (im) { im.opacity = 0.8; setImgVisible(im, true); } } }
+  projApply(j.state); S.srcDirty = true; S.proj.dirty = false;
+  const lost = (j.images || []).filter(n => !S.img.some(q => q.name === n)), pg = projProgress();
+  msg(`已開啟專案 ${j.name}（${new Date(j.saved).toLocaleString()} 儲存）：圖資準備 ${pg.prep}/6 步` + (pg.rows ? `、逐筆修 ${pg.fixed}/${pg.rows}` : '') + (lost.length ? `；影像 ${lost.length} 張未存在專案檔，請按「舊圖影像」重新載入` : ''));
+  refresh(); return { name: j.name, saved: j.saved, progress: pg, missing_images: lost };
+}
+async function openProjectFile(f) { try { const r = await openProjectData(JSON.parse(await readText(f))); if (f.createWritable) S.proj.handle = f; S.proj.saved = new Date(); return r; } catch (e) { msg('無法開啟專案檔：' + e.message); return null; } }
+async function pickProject() {
+  if (window.showOpenFilePicker) { try { const [h] = await showOpenFilePicker({ types: [{ description: '地籍圖重測工作站專案', accept: { 'application/json': ['.' + PROJ_EXT] } }] }); const r = await openProjectFile(await h.getFile()); if (r) S.proj.handle = h; } catch (e) { if (e.name !== 'AbortError') msg(e.message); } }
+  else $('projIn').click();
+}
+// 瀏覽器自動暫存：原始檔（Blob，只在讀入新檔後寫一次）與狀態（每次修改後約 3 秒）分開存
+const idb = (() => { let db = null; const open = () => db || (db = new Promise((res, rej) => { const r = indexedDB.open('cadastral-resurvey-workstation', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }));
+  const tx = (mode, fn) => open().then(d => new Promise((res, rej) => { const t = d.transaction('kv', mode), q = fn(t.objectStore('kv')); t.oncomplete = () => res(q.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); }));
+  return { get: k => tx('readonly', st => st.get(k)), set: (k, v) => tx('readwrite', st => st.put(v, k)), del: k => tx('readwrite', st => st.delete(k)) }; })();
+function projDirty() { if (!S.ds) return; S.proj.dirty = true; clearTimeout(projDirty.t); projDirty.t = setTimeout(autoSave, 3000); }
+async function autoSave() {
+  if (!S.ds || !S.src || !window.indexedDB) return;
+  try {
+    if (S.srcDirty) { const src = srcLive(true), size = src.img.reduce((t, f) => t + f.size, 0), blob = f => ({ path: pathOf(f), blob: f }), l = x => x.map(blob);
+      await idb.set('src', { main: l(src.main), nb: l(src.nb), bl: src.bl.map(b => ({ name: b.name, auto: b.auto, files: l(b.files) })), img: size < 400 * 1048576 ? l(src.img) : [], own: src.own ? blob(src.own) : null }); S.srcDirty = false; }
+    const st = projState(); await idb.set('state', st); await idb.set('meta', { name: caseBase(), saved: new Date().toISOString(), app: APP_VERSION, images: S.img.map(q => q.name), progress: st.progress });
+    S.proj.auto = new Date(); progPanel();
+  } catch (e) { S.proj.auto = null; S.proj.autoErr = e.message; progPanel(); }
+}
+async function resumeAuto() {
+  const [meta, src, state] = await Promise.all([idb.get('meta'), idb.get('src'), idb.get('state')]); if (!meta || !src || !state) throw new Error('沒有暫存的案件');
+  $('resume').hidden = true; return openProjectData({ format: PROJ_FMT, name: meta.name, saved: meta.saved, images: meta.images, source: src, state });
+}
+async function resumeOffer() {
+  if (!window.indexedDB) return; let m = null; try { m = await idb.get('meta'); } catch (e) { return; } if (!m || S.ds) return;
+  const pg = m.progress || {}; $('resume').hidden = false;
+  $('resume').innerHTML = `上次的案件 <b>${esc(m.name)}</b>（${new Date(m.saved).toLocaleString()}）：圖資準備 ${pg.prep ?? '—'}/6 步` + (pg.rows ? `、逐筆修 ${pg.fixed}/${pg.rows}` : '') + `<div class="row small" style="margin-top:4px"><button class="btn primary" id="btnResume">接著做</button><button class="btn" id="btnResumeNo" title="清除瀏覽器暫存（不影響已儲存的專案檔）">清除暫存</button></div>`;
+  $('btnResume').onclick = () => resumeAuto().catch(e => msg('無法接續：' + e.message)); $('btnResumeNo').onclick = () => { if (confirm('清除瀏覽器裡暫存的上次案件？已儲存的專案檔不受影響')) { idb.del('meta'); idb.del('src'); idb.del('state'); $('resume').hidden = true; } };
+}
+// 專案進度：圖資準備 6 步＋檢核後逐筆修（劃掉的筆數）＋分幅線附近（已看過的宗數）
+function projProgress() {
+  const prep = S.ds ? STEPS.filter(s => { const st = stepStatus(s).st; return st === 'done' || st === 'na'; }).length : 0;
+  const rows = S.chk.res ? S.chk.res.rows.length : 0, fixed = S.chk.res ? S.chk.res.rows.filter(r => S.chk.ok.has(r.label)).length : 0;
+  const near = S.sheet ? sheetNear() : [], chkLeft = new Set(S.chk.res ? S.chk.res.rows.filter(r => !S.chk.ok.has(r.label)).map(r => r.label) : []), seen = near.filter(q => S.tq.done.has('sheet|' + q.label) || (S.chk.res && !chkLeft.has(q.label) && S.chk.ok.has(q.label))).length;
+  return { prep, rows, fixed, near: near.length, seen, pct: Math.round(100 * (rows ? (prep / 6) * 0.5 + (fixed / rows) * 0.5 : (prep / 6) * 0.5)) };
+}
+function progPanel() {
+  const el = $('prog'); if (!el) return; if (!S.ds) { el.hidden = true; return; } el.hidden = false; const g = projProgress();
+  $('progName').textContent = caseBase(); $('progPct').textContent = g.pct + '%';
+  $('progPrep').style.width = (g.prep / 6 * 100) + '%'; $('progFix').style.width = (g.rows ? g.fixed / g.rows * 100 : 0) + '%';
+  $('progText').textContent = `圖資準備 ${g.prep}/6 步　逐筆修 ${g.rows ? `${g.fixed}/${g.rows}` : '（第 6 步檢核後）'}` + (g.near ? `　分幅線附近 ${g.seen}/${g.near}` : '');
+  $('progSave').textContent = S.proj.saved ? `專案檔 ${S.proj.saved.toLocaleTimeString()} 儲存${S.proj.dirty ? '（之後有修改）' : ''}` : S.proj.auto ? `已自動暫存 ${S.proj.auto.toLocaleTimeString()}（尚未存成專案檔）` : S.proj.autoErr ? `自動暫存無法使用：${S.proj.autoErr}` : '尚未儲存';
+}
+$('projIn').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) openProjectFile(f); };
+addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveProject(e.shiftKey); } });
+$('sheetShow').onchange = draw; $('tqSheet').onchange = () => { S.tq.i = -1; tqPanel(); }; $('sheetDist').onchange = () => { tqPanel(); refresh(); };
+resumeOffer();
 
 // ── AI / MCP 預留介面 ─────────────────────────────────────────────────────
 const findPar = q => S.ds.parcels.find(p => p.label === String(q) || p.oldLabel === String(q));
@@ -6133,6 +6379,11 @@ const api = {
   clearBaseline: () => { S.bl = { sets: [], res: null, focus: null }; refresh(); return { sets: 0 }; },
   compareBaseline: (o = {}) => { const r = blRun(o); return api.getBaselineReport(); },
   // ── 作業流程（MCP）：listSteps → loadProject → runStep（3～6）或 runSteps；舊圖檢核 checkOldMap → getCheckReport → fixSliver／confirmCheck ──
+  getProgress: () => projProgress(),
+  addSheetLines: () => ({ text: sheetRun(), pairs: S.sheet.pairs, length_m: S.sheet.length }),
+  listSheetParcels: ({ dist } = {}) => { if (!S.sheet) throw new Error('尚未加入分幅線（步驟 2）'); if (dist) $('sheetDist').value = dist; return sheetNear().map(q => ({ label: q.label, dist_m: q.dist, sheets: q.pair })); },
+  saveProjectJson: async ({ images = false } = {}) => projFile(images),   // 回傳專案檔內容（物件）；存檔請用介面的「儲存專案檔」
+  openProjectJson: async ({ project }) => openProjectData(typeof project === 'string' ? JSON.parse(project) : project),
   listSteps: () => STEPS.map(s => { const r = stepStatus(s); return { step: s.n, title: s.title, description: s.desc, runnable: !!s.run, status: r.st, result: r.text || '' }; }),
   loadProject: async ({ files = [] } = {}) => loadProject(files.map(toFile)),   // files：[{ path:'KC0336/KC0336.D14', base64 }]，依路徑分類主要測區／鄰段／分幅／影像
   runStep: ({ step }) => runStep(step),

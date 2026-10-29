@@ -862,4 +862,38 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const f = Core.addFace(ds2, [2, 5, 6, 3], 9001); near(ds2.parcels[f.idx ?? ds2.parcels.length - 1].area, 100, 1e-6); assert.ok(/^9001/.test(f.label));
   assert.throws(() => Core.addFace(ds2, [1, 2, 3, 4], 9001), /已經是宗地/);
 }
+
+// ── v0.28.0：點貼到線後重建位相；專案狀態存回；分幅線 ──
+{
+  const Y = 2700000, X = 200000, files = (pts, rings) => ({ pts: rd(F_D14, pts.map(([n, y, x]) => pt(n, Y + y, X + x))), bnd: rd(F_D13, rings) });
+  // 2 在下（上緣 24(0,0)–23(10,0)）；1 在上，下緣 31(-5,0)→32(5,0.3)：32 貼到 24–23 後，1 的下緣與 2 的上緣共線重疊，24 落在 1 的邊上（T 字點）
+  const F = files([[21, -10, 0], [22, -10, 10], [23, 0, 10], [24, 0, 0], [31, 0, -5], [32, 0.3, 5], [33, 10, 5], [34, 10, -5]], [ring(1, 1, 0, [31, 32, 33, 34]), ring(1, 2, 0, [24, 21, 22, 23])]);
+  const ds = Core.datasetFromD(F);
+  const sp = Core.snapPointToEdge(ds, 32, 24, 23); near(sp.dist, 0.3, 1e-6); assert.equal(sp.healed, 1, '24 插進 1 的 31–32');
+  assert.ok(ds.parcels[0].ids.includes(24) && ds.parcels[1].ids.includes(32));
+  const cf = Core.ringConflicts(ds); assert.equal(cf.overlap.length + cf.cross.length, 0, '沒有重疊或交錯');
+  near(ds.parcels[1].area, 100, 1e-6); near(ds.parcels[0].area, 100, 1e-6);
+  Core.applyDelta(ds, sp.delta, 'undo'); assert.ok(!ds.parcels[0].ids.includes(24)); Core.applyDelta(ds, sp.delta, 'redo');
+  // 自我接觸：一宗已經用到這一點又以這條線為界 → 擋下，不改任何東西
+  const ds3 = Core.datasetFromD(files([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 5, 5.3]], [ring(1, 1, 0, [1, 2, 5, 3, 4])]));
+  const before = JSON.stringify(ds3.parcels[0].ids); assert.throws(() => Core.snapPointToEdge(ds3, 5, 1, 2), /自我接觸/); assert.equal(JSON.stringify(ds3.parcels[0].ids), before); near(ds3.points.get(5).x, X + 5.3, 1e-9);
+  // 專案狀態：編修後存成 JSON，重新讀原檔再套用 → 點、環、刪除、新建都回來，面積基準不變
+  Core.mergeParcels(ds, [0, 1]); Core.addFreePoint(ds, Y + 50, X + 50);
+  const st = JSON.parse(JSON.stringify(Core.datasetState(ds))), back = Core.applyDatasetState(Core.datasetFromD(F), st);
+  assert.deepEqual(back.parcels.map(p => [p.label, p.deleted || false, p.ids.join(',')]), ds.parcels.map(p => [p.label, p.deleted || false, p.ids.join(',')]));
+  assert.equal(back.points.size, ds.points.size); back.parcels.forEach((p, i) => { near(p.area, ds.parcels[i].area, 1e-6); near(p.areaOrig, ds.parcels[i].areaOrig, 1e-9); });
+  assert.equal(Core.structSummary(back).added, Core.structSummary(ds).added);
+  assert.throws(() => Core.applyDatasetState(Core.datasetFromD(files([[1, 0, 0], [2, 0, 10], [3, 10, 10]], [ring(1, 7, 0, [1, 2, 3])])), st), /不同/);
+}
+{
+  // 分幅線：兩幅左右相接（左幅 x 0–20、右幅 x 21–40，中間 1 m 縫），作業圖已接好（x=20 一條線）
+  const mkDs = (name, pts, rings) => { const d = Core.newDataset(name, 't'); for (const [id, y, x] of pts) d.points.set(id, { id, y, x, y0: y, x0: x }); rings.forEach(([l, ids]) => d.parcels.push({ key: '1|' + l + '|0', label: String(l), oldLabel: String(l), ids, mid: ids.map(() => false) })); return Core.finalize(d); };
+  const cur = mkDs('cur', [[1, 0, 0], [2, 0, 10], [3, 0, 20], [4, 0, 30], [5, 0, 40], [6, 10, 0], [7, 10, 10], [8, 10, 20], [9, 10, 30], [10, 10, 40]], [[1, [1, 2, 7, 6]], [2, [2, 3, 8, 7]], [3, [3, 4, 9, 8]], [4, [4, 5, 10, 9]]]);
+  const A = mkDs('第1幅', [[1, 0, 0], [2, 0, 10], [3, 0, 20], [6, 10, 0], [7, 10, 10], [8, 10, 20]], [[1, [1, 2, 7, 6]], [2, [2, 3, 8, 7]]]);
+  const B = mkDs('第2幅', [[3, 0, 21], [4, 0, 30], [5, 0, 40], [8, 10, 21], [9, 10, 30], [10, 10, 40]], [[3, [3, 4, 9, 8]], [4, [4, 5, 10, 9]]]);
+  const al = { forDs: () => (x, y) => ({ x, y }) }, sl = Core.sheetLines(cur, [[A, B]], { align: al });
+  assert.equal(sl.pairs.length, 1); near(sl.length, 10, 1e-6, '分幅線長'); assert.ok(sl.segs.every(s => Math.abs(s.ax - 20) < 1e-9 && Math.abs(s.bx - 20) < 1e-9), '只留左幅那條');
+  const nearby = Core.nearSheetLines(cur, sl, 3); assert.deepEqual(nearby.map(q => q.label).sort(), ['2', '3'], '只有緊鄰分幅線的兩宗');
+  assert.equal(Core.sheetLines(cur, [[A]], { align: al }).segs.length, 0, '單幅沒有分幅線');
+}
 console.log('SYNTHETIC OK');

@@ -801,7 +801,7 @@ const Core = (() => {
           if (seen.has(n)) continue; seen.add(n);
           const s = segs[n], dx = s.bx - s.ax, dy = s.by - s.ay, l2 = dx * dx + dy * dy;
           const t = l2 ? Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / l2)) : 0, fx = s.ax + t * dx, fy = s.ay + t * dy, d = Math.hypot(x - fx, y - fy);
-          if (d <= r && (!best || d < best.dist)) best = { dist: d, fx, fy };
+          if (d <= r && (!best || d < best.dist)) best = { dist: d, fx, fy, n };
         }
         return best;
       },
@@ -1524,6 +1524,7 @@ const Core = (() => {
           if (best == null) continue;
           for (const r of ds.parcels) {   // 所有使用 u–v 這條邊的宗地都插入
             if (r.deleted) continue; const m = r.ids.length;
+            if (r.ids.includes(best)) continue;   // 已經用到這一點：再插會自我接觸
             for (let j = 0; j < m; j++) { const a = r.ids[j], b = r.ids[(j + 1) % m]; if ((a === u && b === v) || (a === v && b === u)) { touchParcel(d, r); r.ids.splice(j + 1, 0, best); if (r.mid) r.mid.splice(j + 1, 0, false); break; } }
           }
           count++; changed = true;
@@ -1616,19 +1617,29 @@ const Core = (() => {
       touchParcel(d, p); p.ids = ids; p.mid = ids.map(() => false);
     }
     const q = ds.points.get(from); ds.points.delete(from); d.removed.push(q);
-    return { delta: closeDelta(ds, d), removed: from, into: to };
+    buildTopology(ds); const healed = healAround(ds, d, [to]);
+    return { delta: closeDelta(ds, d), removed: from, into: to, healed };
   }
-  // 點貼到線：把點 id 移到界址線 a–b 的垂足，並接進所有以 a–b 為界的宗地（T 字接點補齊）。坐標移動不在 delta 內，回傳 from/to 由呼叫端一併復原
+  // 位相重建（v0.28.0）：點移動或併點後，用到這些點的宗地與它們的鄰宗重新比對——某宗的界址點落在另一宗的邊上（T 字接點）就插進那條邊，
+  // 兩宗沿線共用同一串界址點。沒補的話 NECEXE 的 .ERR 會報交錯／重疊（點貼到線後，原本用這一點的宗地，其相鄰邊與被貼的線部分共線）。回傳插入次數
+  function healAround(ds, d, ids) {
+    const near = new Set(); for (const id of ids) for (const pi of ds.pointParcels.get(id) || []) near.add(pi);
+    for (const pi of [...near]) for (const id of ds.parcels[pi].ids) for (const qi of ds.pointParcels.get(id) || []) near.add(qi);
+    const idxs = [...near].filter(i => !ds.parcels[i].deleted && !ringHasArc(ds.parcels[i])); return idxs.length ? healJunctions(ds, d, idxs) : 0;
+  }
+  // 點貼到線：把點 id 移到界址線 a–b 的垂足，並接進所有以 a–b 為界的宗地；再對用到這一點的宗地與鄰宗重建位相（healAround）。坐標移動不在 delta 內，回傳 from/to 由呼叫端一併復原
   function snapPointToEdge(ds, id, a, b) {
     if (id === a || id === b) throw new Error('點就是這條線的端點'); const e = ds.edges.get(segKey(a, b)); if (!e) throw new Error(`找不到界址線 ${a}–${b}`); if (e.arcPart) throw new Error('圓弧上的線段暫不支援');
     const P = ds.points.get(id), A = ds.points.get(a), B = ds.points.get(b), dx = B.x - A.x, dy = B.y - A.y, l2 = dx * dx + dy * dy, t = ((P.x - A.x) * dx + (P.y - A.y) * dy) / l2;
     if (!(t > 1e-6 && t < 1 - 1e-6)) throw new Error('垂足不在線段上（點在線段兩端之外），請改用點併點');
     const from = { y: P.y, x: P.x }, to = { y: A.y + t * dy, x: A.x + t * dx }, d = newDelta();
     for (const pi of ds.pointParcels.get(id) || []) touchParcel(d, ds.parcels[pi]);   // 點移動，原本用到它的宗地面積也要重算
+    const hits = []; for (const p of ds.parcels) { if (p.deleted) continue; const k = p.ids.length;   // 先找齊再改，任何一宗不行就整個不動
+      for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) { if (p.ids.includes(id)) throw new Error(`${p.label} 已經用到點 ${id}，貼上去會自我接觸`); hits.push([p, i]); break; } } }
     P.y = to.y; P.x = to.x;
-    for (const p of ds.parcels) { if (p.deleted) continue; const k = p.ids.length;
-      for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) { if (p.ids.includes(id)) throw new Error(`${p.label} 已經用到點 ${id}，貼上去會自我接觸`); touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); break; } } }
-    return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y) };
+    for (const [p, i] of hits) { touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); }
+    buildTopology(ds); const healed = healAround(ds, d, [id, a, b]);
+    return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y), healed };
   }
   // 新增線：在宗地 pi 內連接兩個既有界址點，切成兩宗（切下的一側編新子號，同母號接續；較大的一側保留原地號）
   function splitByChord(ds, pi, a, b) {
@@ -2792,6 +2803,62 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     return out.join('\r\n') + '\r\n';
   }
 
+  // ── 分幅線（v0.28.0）：分幅舊圖各幅的外緣邊，與同一組另一幅的外緣相距 ≤ gap m 的段＝圖幅接合處（接圖最容易出錯，通常分幅數化與原圖差異不大）。
+  // 坐標用 baselineAlign 轉到作業圖。兩幅的外緣各有一條，只留編號小的那幅。回傳 {segs:[{ax,ay,bx,by,a,b,gap}], pairs:[{a,b,len}], length}
+  function sheetLines(cur, refs, opt = {}) {
+    const gap = opt.gap ?? 6, sets = refs.map(r => (Array.isArray(r) ? r : [r])).filter(r => r.length), multi = sets.filter(r => r.length > 1);
+    if (!multi.length) return { segs: [], pairs: [], length: 0 };
+    const al = opt.align || baselineAlign(cur, sets, { merge: opt.merge !== false }), borders = [];
+    for (const set of multi) for (const ds of set) {
+      const f = al.forDs(ds), segs = [];
+      for (const e of ds.edges.values()) { if (e.parcels.length !== 1) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); if (!a || !b) continue; const A = f(a.x, a.y), B = f(b.x, b.y); segs.push({ ax: A.x, ay: A.y, bx: B.x, by: B.y }); }
+      borders.push({ name: ds.name, set, segs, idx: segIndex(segs, 25) });
+    }
+    const segs = [], pairs = new Map();
+    borders.forEach((A, i) => { for (const s of A.segs) {
+      const L = Math.hypot(s.bx - s.ax, s.by - s.ay); if (L < 1e-6) continue;
+      const hitOf = (x, y) => { let h = null; borders.forEach((B, j) => { if (j === i || B.set !== A.set) return; const m = B.idx.nearest(x, y, gap); if (m && (!h || m.dist < h.d)) h = { j, d: m.dist }; }); return h; };
+      const h = hitOf((s.ax + s.bx) / 2, (s.ay + s.by) / 2); if (!h || h.j < i || !hitOf(s.ax, s.ay) || !hitOf(s.bx, s.by)) continue;   // 中點與兩端都要靠著別幅（段外圍與接合線交角處的邊只有一端靠著）
+      const B = borders[h.j], k = A.name + '｜' + B.name; segs.push({ ...s, a: A.name, b: B.name, gap: h.d });
+      const pr = pairs.get(k) || pairs.set(k, { a: A.name, b: B.name, len: 0 }).get(k); pr.len += L;
+    } });
+    return { segs, pairs: [...pairs.values()].sort((u, v) => v.len - u.len), length: segs.reduce((t, s) => t + Math.hypot(s.bx - s.ax, s.by - s.ay), 0) };
+  }
+  // 分幅線附近的宗地：界址線離分幅線 ≤ dist m（或被分幅線穿過）。依分幅線排序（同一對圖幅放在一起，沿線由一端到另一端），逐筆修時沿著接合線走。
+  // 回傳 [{idx, label, dist, pair, t}]
+  function nearSheetLines(cur, sl, dist = 10) {
+    const segs = sl.segs || sl, P = cur.points; if (!segs.length) return [];
+    const idx = segIndex(segs, Math.max(5, dist)), step = Math.max(0.5, dist / 2), out = [];
+    const axis = new Map(); for (const s of segs) { const k = s.a + '｜' + s.b; let b = axis.get(k); if (!b) axis.set(k, b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity });
+      b.x0 = Math.min(b.x0, s.ax, s.bx); b.x1 = Math.max(b.x1, s.ax, s.bx); b.y0 = Math.min(b.y0, s.ay, s.by); b.y1 = Math.max(b.y1, s.ay, s.by); }
+    for (const p of cur.parcels) {
+      if (p.deleted || p.ids.length < 3) continue; let best = null; const n = p.ids.length;
+      for (let i = 0; i < n; i++) { const A = P.get(p.ids[i]), B = P.get(p.ids[(i + 1) % n]); if (!A || !B) continue; const k = Math.max(1, Math.ceil(Math.hypot(B.x - A.x, B.y - A.y) / step));
+        for (let j = 0; j <= k; j++) { const x = A.x + (B.x - A.x) * j / k, y = A.y + (B.y - A.y) * j / k, h = idx.nearest(x, y, dist); if (h && (!best || h.dist < best.dist)) best = h; } }
+      if (!best) continue; const s = segs[best.n], key = s.a + '｜' + s.b, b = axis.get(key), t = b.x1 - b.x0 >= b.y1 - b.y0 ? best.fx - b.x0 : b.y1 - best.fy;
+      out.push({ idx: p.idx, label: p.label, dist: best.dist, pair: key, t });
+    }
+    const pairLen = new Map((sl.pairs || []).map(q => [q.a + '｜' + q.b, q.len]));
+    return out.sort((u, v) => (u.pair === v.pair ? u.t - v.t : (pairLen.get(v.pair) || 0) - (pairLen.get(u.pair) || 0) || u.pair.localeCompare(v.pair)));
+  }
+
+  // ── 專案檔（v0.28.0）：作業圖目前的點位與界址串。原始檔案另存在專案檔裡，開啟時先照原樣讀入（D 檔原始位元組、面積基準、還原全部的原貌都不變），再套用這份狀態 ──
+  function datasetState(ds) {
+    const n0 = ds.orig ? ds.orig.rings.length : ds.parcels.length;
+    return { n0, keys: ds.parcels.slice(0, n0).map(p => p.key), points: [...ds.points.values()].map(q => ({ ...q })),
+      parcels: ds.parcels.map(p => { const o = {}; for (const [k, v] of Object.entries(p)) if (k !== 'idx' && k !== 'area' && typeof v !== 'function') o[k] = v; return o; }) };
+  }
+  function applyDatasetState(ds, st) {
+    if (!st || !Array.isArray(st.parcels) || !Array.isArray(st.points)) throw new Error('專案檔沒有作業圖狀態');
+    const n0 = ds.orig ? ds.orig.rings.length : ds.parcels.length;
+    if (st.n0 !== n0 || (st.keys && st.keys.some((k, i) => ds.parcels[i].key !== k))) throw new Error(`專案檔記錄的原始圖資（${st.n0} 宗）與讀入的檔案（${n0} 宗）不同，不能套用`);
+    ds.points = new Map(st.points.map(q => [q.id, { ...q }]));
+    st.parcels.forEach((o, i) => { if (i < n0) { const a0 = ds.parcels[i].areaOrig; Object.assign(ds.parcels[i], o, { areaOrig: a0 }); } else ds.parcels[i] = { ...o }; });
+    ds.parcels.length = st.parcels.length;
+    buildTopology(ds); buildArcs(ds); recalc(ds, new Set(ds.parcels.map((_, i) => i)));
+    return ds;
+  }
+
   function exportSession(ds, extra = {}, sv = null) {
     return {
       format: 'cadastral-workbench/session@1',
@@ -2815,6 +2882,6 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall,
     baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
-    parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner };
+    parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner, sheetLines, nearSheetLines, datasetState, applyDatasetState, healAround };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
