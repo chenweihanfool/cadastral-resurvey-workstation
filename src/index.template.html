@@ -145,7 +145,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
     <div class="menu"><button class="mbtn">處理</button><div class="mlist">
       <button data-act="seam">鄰段接合…</button><button data-act="ref">現況點參考線…</button><hr><button data-act="chk">舊圖檢核…<small>分幅向量、影像墨線</small></button><button data-act="bl">接圖前比對…<small>土地有無遺漏、面積超限</small></button><button data-act="own">所有權人分析…<small>EXAM.MDB；無所有權人的土地</small></button></div></div>
     <div class="menu"><button class="mbtn">說明</button><div class="mlist">
-      <button data-act="help">操作說明</button><button data-act="ver">版本歷程與更新</button></div></div>
+      <button data-act="help">操作說明</button><button data-act="ai">連接 AI（MCP）…<small>讓 AI 逐筆修待修清單</small></button><button data-act="ver">版本歷程與更新</button></div></div>
   </nav>
   <span class="sep"></span>
   <div class="seg" id="tools"><button data-tool="select" class="on" title="選取/移動 (V)">選取</button><button data-tool="addpt" title="在界址線上加界址點 (A)">加點</button><button data-tool="pan" title="平移畫面 (H)">平移</button><button data-tool="layer" title="整張重測圖平移／旋轉，對照舊圖 (M)">移圖</button><button data-tool="line" title="手動把現況點連成參考線 (L)">連線</button><button data-tool="img" title="平移疊合的影像（JPG／JGW）對位 (I)">移影像</button></div>
@@ -276,6 +276,12 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="row small"><input id="logFind" type="search" placeholder="找地號或動作"><button class="btn" id="btnLogCsv">輸出 CSV</button><button class="btn" id="btnLogHtml" title="可列印、另存 PDF，附作業人員／審核簽名欄">輸出列印版（HTML）</button></div>
   <div id="logSum" class="small muted" style="margin:4px 0"></div><div id="tblwrap" style="max-height:420px"><table class="small"><thead><tr><th>時間</th><th>動作</th><th>地號（變動 面積前→後 ㎡）</th><th>移點</th></tr></thead><tbody id="logBody"></tbody></table></div>
   <div class="small muted" style="margin-top:4px">每個動作（含復原、重做、一鍵步驟）都會記下，存在專案檔裡。</div></section></div></dialog>
+<dialog class="fp" id="dlgAi"><div class="fphead"><b>連接 AI（MCP）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
+  <div class="small">讓 Claude Desktop／Claude Code 等 AI 經 MCP 操作這個頁面：讀待修清單、跳到那一筆、修正、標「修好了」。步驟：① 在本機執行 <code>node mcp-bridge.mjs</code>（設定方式見 Release 附檔或 <code>tools/mcp-bridge.mjs</code> 開頭說明）② 按「連線」③ 在 AI 裡說「逐筆修舊圖檢核的待修清單」。</div>
+  <div class="row small" style="margin-top:6px"><input id="aiUrl" style="width:16em" spellcheck="false"><button class="btn primary" id="aiConn">連線</button><span id="aiStatus"></span></div>
+  <div class="row small" style="margin-top:6px"><label>AI 權限 <select id="aiMode"><option value="read">唯讀：只能看、跳到某筆，不能改圖</option><option value="ask">每次問我：每個修改先跳出確認</option><option value="write">直接修改：不再詢問</option></select></label></div>
+  <div class="small muted" style="margin-top:4px">AI 的每個修改都會記進作業紀錄，可 Ctrl+Z 復原；建議先存里程碑再讓 AI 動手。案件檔案只在你的電腦與 AI 之間傳遞。</div>
+  <div id="tblwrap" style="max-height:220px;margin-top:6px"><table class="small"><thead><tr><th>時間</th><th>方法</th><th>類型</th><th>結果</th></tr></thead><tbody id="aiCalls"></tbody></table></div></section></div></dialog>
 <dialog class="fp" id="dlgMs"><div class="fphead"><b>里程碑（版本）</b><button class="btn fpclose" data-close title="關閉">✕</button></div><div class="fpbody"><section>
   <div class="row small"><button class="btn primary" id="btnMsSave">存目前為里程碑</button><span class="muted">執行第 6 步時自動存「步驟 6 檢核時」「步驟 6 一鍵修正前」；存在專案檔裡</span></div>
   <div id="tblwrap" style="max-height:220px;margin-top:6px"><table class="small"><tbody id="msList"></tbody></table></div><div id="msDiff" class="small" style="margin-top:6px"></div></section></div></dialog>
@@ -416,7 +422,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <p><b>平移／縮放</b>：滾輪縮放；中鍵或右鍵拖曳平移；或切到「平移」工具。</p>
 <p><b>快捷鍵</b>：<kbd>Ctrl+Z</kbd> 復原、<kbd>Ctrl+Y</kbd> 重做、<kbd>Ctrl+F</kbd> 跳至地號／點號、<kbd>Esc</kbd> 取消選取、<kbd>V</kbd>/<kbd>H</kbd> 工具、<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切換點/線/面。</p>
 <p><b>輸出</b>：「輸出 D14」只改動被移動點的坐標，其餘位元組與原檔完全相同；覆蓋進案件資料夾前請先備份。D11 的面積欄位不改，請在 NECEXE 內用「重算面積」更新。「輸出 JSON」含移動點與面積變化，方便 AI／其他程式讀取。</p>
-<p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（listSteps / loadProject / runStep / checkOldMap / getCheckReport / getState / select / move / undo / exportSession…），網址加 <code>?bridge=ws://127.0.0.1:埠號</code> 可接 WebSocket 橋接（預留給 MCP）。</p>
+<p class="muted small">AI 介面：頁面提供 <code>window.CadastralAPI</code>（listSteps / loadProject / runStep / checkOldMap / getCheckReport / getState / select / move / undo / exportSession…），「說明 → 連接 AI（MCP）」連到本機的 <code>tools/mcp-bridge.mjs</code>，Claude Desktop／Claude Code 即可經 MCP 操作（逐筆修待修清單：listFixQueue / gotoFixItem / markFixed）；網址加 <code>?bridge=ws://127.0.0.1:8765</code> 會自動連線。</p>
 <form method="dialog"><button class="btn primary">關閉</button></form></dialog>
 <dialog id="verDlg" class="verdlg">
   <div class="vhead">

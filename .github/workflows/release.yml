@@ -20,6 +20,7 @@ jobs:
       - name: 測試與建置
         run: |
           node test/synthetic.test.mjs
+          node test/bridge.test.mjs
           node build.mjs
           git diff --exit-code -- product/index.html
       - name: 建立 Release（版本號新增時）
@@ -33,6 +34,7 @@ jobs:
           mkdir -p dist
           cp product/index.html dist/cadastral-resurvey-workstation.html
           cp product/index.html "dist/cadastral-resurvey-workstation-$VER.html"
+          cp tools/mcp-bridge.mjs dist/mcp-bridge.mjs
           node scripts/release-notes.mjs "$VER" > dist/notes.md
           gh release create "$VER" --target "$GITHUB_SHA" --title "地籍圖重測工作站 $VER" --notes-file dist/notes.md \
-            "dist/cadastral-resurvey-workstation.html" "dist/cadastral-resurvey-workstation-$VER.html"
+            "dist/cadastral-resurvey-workstation.html" "dist/cadastral-resurvey-workstation-$VER.html" dist/mcp-bridge.mjs
