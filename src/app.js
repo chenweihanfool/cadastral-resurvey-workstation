@@ -2049,7 +2049,7 @@ async function autoBaseline(g) {   // 案件資料夾內的 COA＋BNP（數化�
 
 // ── 檢核：原分幅向量圖（Core.shapeCheck）與舊圖影像（Core.inkPlan／inkBlock／inkResult）──────────
 S.chk = { res: null, focus: null, ok: new Set(), running: false };
-const chkOpts = () => { const v = (id, d) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x > 0 ? x : d; }; return { tol: v('chkTol', 1), inkTol: v('chkInkTol', 0.6), shift: v('chkShift', 5) }; };
+const chkOpts = () => { const v = (id, d) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x > 0 ? x : d; }; return { tol: v('chkTol', 1), inkTol: v('chkInkTol', 0.6), shift: v('chkShift', 5), redInk: $('chkRed').value }; };
 const chkImages = () => S.img.filter(im => im.located && isOldMapImg(im));
 function imgRegion(im, bmp, cv2, x0, y0, x1, y1) {
   const wf = im.wf, det = wf.a * wf.e - wf.b * wf.d, P = (x, y) => { const X = x - wf.c, Y = y - wf.f; return [(wf.e * X - wf.b * Y) / det, (-wf.d * X + wf.a * Y) / det]; };
@@ -2067,7 +2067,7 @@ async function runCheck(o = {}) {
   try {
     if (S.bl.sets.length) { msg('分幅舊圖向量比對中…'); await new Promise(r => setTimeout(r, 0)); blRun(); shape = Core.shapeCheck(S.ds, S.bl.sets.map(s => s.ds), { tol: op.tol }); }
     if (imgs.length) {
-      const plan = Core.inkPlan(S.ds, { tol: op.inkTol, shift: op.shift }), cv2 = document.createElement('canvas'), bmps = new Map(), tick = yielder('影像墨線檢核', plan.blocks.length);
+      const plan = Core.inkPlan(S.ds, { tol: op.inkTol, shift: op.shift, redInk: op.redInk }), cv2 = document.createElement('canvas'), bmps = new Map(), tick = yielder('影像墨線檢核', plan.blocks.length);
       try {
         for (const [k, b] of plan.blocks.entries()) {
           await tick(k); const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
@@ -2145,7 +2145,7 @@ function chkPanel() {
 }
 function chkFocus(i) {
   const x = S.chk.res.rows[i]; S.chk.focus = x; clearSel(); S.sel.par.add(x.idx); zoomTo([x.idx]); refresh();
-  const parts = []; if (x.vec) parts.push(`離舊圖線 ${x.vec.offLen.toFixed(1)} m、內部舊圖線 ${x.vec.innerLen.toFixed(1)} m（局部平移 ${Math.hypot(x.vec.shift.dx, x.vec.shift.dy).toFixed(2)} m）`); if (x.img) parts.push(`影像無墨線 ${x.img.offLen.toFixed(1)} / ${x.img.checked.toFixed(1)} m`);
+  const parts = []; if (x.vec) parts.push(`離舊圖線 ${x.vec.offLen.toFixed(1)} m、內部舊圖線 ${x.vec.innerLen.toFixed(1)} m（局部平移 ${Math.hypot(x.vec.shift.dx, x.vec.shift.dy).toFixed(2)} m）`); if (x.img) parts.push(`影像無墨線 ${x.img.offLen.toFixed(1)} / ${x.img.checked.toFixed(1)} m` + (x.img.redLen ? `（落在紅線上 ${x.img.redLen.toFixed(1)} m，不檢核）` : ''));
   msg(`${x.label}（${x.area.toFixed(1)} m²）：` + parts.join('；') + (x.fix ? `；建議併入 ${x.fix.label}` : ''));
 }
 function drawCheck() {
@@ -2328,7 +2328,7 @@ function tqItems() {
   const ds = S.ds; if (!ds) return [];
   const byLabel = l => ds.parcels.find(p => !p.deleted && p.label === l);
   switch ($('tqSrc').value) {
-    case 'chk': return S.chk.res ? S.chk.res.rows.filter(r => !S.chk.ok.has(r.label)).map(r => ({ key: 'chk|' + r.label, label: r.label, text: `${r.level === 'red' ? '紅' : r.level === 'yellow' ? '黃' : '碎片'}：` + [r.vec ? `離舊圖線 ${r.vec.offLen.toFixed(0)} m、舊圖線穿過內部 ${r.vec.innerLen.toFixed(0)} m` : '', r.img ? `影像無墨線 ${r.img.offLen.toFixed(0)}/${r.img.checked.toFixed(0)} m` : '', r.fix ? `建議併入 ${r.fix.label}` : ''].filter(Boolean).join('；') })) : [];
+    case 'chk': return S.chk.res ? S.chk.res.rows.filter(r => !S.chk.ok.has(r.label)).map(r => ({ key: 'chk|' + r.label, label: r.label, text: `${r.level === 'red' ? '紅' : r.level === 'yellow' ? '黃' : '碎片'}：` + [r.vec ? `離舊圖線 ${r.vec.offLen.toFixed(0)} m、舊圖線穿過內部 ${r.vec.innerLen.toFixed(0)} m` : '', r.img ? `影像無墨線 ${r.img.offLen.toFixed(0)}/${r.img.checked.toFixed(0)} m` + (r.img.redLen ? `（紅線 ${r.img.redLen.toFixed(0)} m 不檢核）` : '') : '', r.fix ? `建議併入 ${r.fix.label}` : ''].filter(Boolean).join('；') })) : [];
     case 'neg': return S.bl.res ? S.bl.res.missing.map(m => ({ key: 'miss|' + m.label, label: m.label, rings: m.rings, text: `遺漏：接圖前 ${m.area.toFixed(0)} m²，現屬 ${m.cover.map(h => h.label).join('、')}` }))
       .concat(S.bl.res.flagged.filter(x => x.diff < 0).map(x => ({ key: 'neg|' + x.label, label: x.label, rings: x.rings, text: `較差 ${x.diff.toFixed(1)} m²（${x.ratio.toFixed(1)} 倍公差，${x.cause}）` })))
       .concat(S.bl.res.occupied.map(o => ({ key: 'occ|' + o.label, label: o.label, rings: o.rings, text: `被未登記地佔用 ${o.occ.toFixed(1)} m²：${o.cover.map(h => h.label).join('、')}` }))) : [];

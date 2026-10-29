@@ -2637,22 +2637,23 @@ const Core = (() => {
       counts: { red: list.filter(r => r.level === 'red').length, yellow: list.filter(r => r.level === 'yellow').length, slivers: slivers.length } };
   }
 
-  // 影像墨線檢核：掃描舊圖上，作業圖的界址線底下應該有墨線（黑線或紅線）。
+  // 影像墨線檢核：掃描舊圖上，作業圖的界址線底下應該有墨線。v0.29.1 起只認黑線：舊圖的黑線是原始界址（黑線上打叉＝已合併），
+  // 紅線是後來分割時謄上去的——作業圖上落在紅線（而不是黑線）上的界址線不檢核（不算有、也不算沒有，另計紅線長度）。opt.redInk='ink' 回到舊版（紅線也當墨線）。
   // 影像很大（整段可達上億像素），所以分塊：以 block m 方格為單位，每塊讀一個視窗（方格外擴 block/2＋搜尋範圍）的像素，
-  // 1. 墨線遮罩：亮度比周圍（半徑 bg m 的平均）暗 dark 以上，或紅色（R−G）比周圍高 red 以上；
+  // 1. 墨線遮罩：紅＝紅色（R−G）比周圍（半徑 bg m 的平均）高 red 以上；黑＝亮度比周圍暗 dark 以上、且不偏紅（R−G 比周圍高不到 red/2，紅線邊緣不算黑）；
   // 2. 距離場：每個像素到最近墨線的距離（倒角距離，像素）；
   // 3. 塊內平移：在 ±shift m 內找讓視窗內界址線最貼墨線的平移（舊圖紙張伸縮、掃描定位誤差；相鄰圖幅各自偏移，所以方格要小）；
   // 4. 方格內的界址線逐點看平移後離墨線是否 ≤ tol m，支持比例 < 0.5 的線段列為「影像上沒有墨線」。
   //    整個視窗平移後仍有一半以上的取樣找不到墨線（minFit）＝這一帶影像對不上（對位偏太多、空白、不是同一張圖），不判斷，另列「對位不良」。
-  const INK_DEFAULT = { block: 50, shift: 5, shiftStep: 0.25, cap: 2, tol: 0.6, bg: 3, dark: 14, red: 22, step: 0.4, minLen: 5, ratio: 0.3, minSup: 0.5, minFit: 0.5 };   // 影像比向量雜（文字、汙點、後來的分割線），門檻較寬：無墨線 ≥ 30% 且 ≥ 5 m 才列
+  const INK_DEFAULT = { redInk: 'skip', block: 50, shift: 5, shiftStep: 0.25, cap: 2, tol: 0.6, bg: 3, dark: 14, red: 22, step: 0.4, minLen: 5, ratio: 0.3, minSup: 0.5, minFit: 0.5 };   // 影像比向量雜（文字、汙點、後來的分割線），門檻較寬：無墨線 ≥ 30% 且 ≥ 5 m 才列
   function inkMask(rgba, w, h, opt = {}) {
     const o = { ...INK_DEFAULT, ...opt }, N = w * h, L = new Float32Array(N), RG = new Float32Array(N), rad = Math.max(2, Math.round(o.bgPx || 12));
     for (let i = 0; i < N; i++) { const r = rgba[4 * i], g = rgba[4 * i + 1], b = rgba[4 * i + 2]; L[i] = 0.299 * r + 0.587 * g + 0.114 * b; RG[i] = r - g; }
     const blur = src => { const W1 = w + 1, I = new Float64Array(W1 * (h + 1)); for (let y = 0; y < h; y++) { let s = 0; for (let x = 0; x < w; x++) { s += src[y * w + x]; I[(y + 1) * W1 + x + 1] = I[y * W1 + x + 1] + s; } }
       const out = new Float32Array(N); for (let y = 0; y < h; y++) { const y0 = Math.max(0, y - rad), y1 = Math.min(h, y + rad + 1); for (let x = 0; x < w; x++) { const x0 = Math.max(0, x - rad), x1 = Math.min(w, x + rad + 1); out[y * w + x] = (I[y1 * W1 + x1] - I[y0 * W1 + x1] - I[y1 * W1 + x0] + I[y0 * W1 + x0]) / ((y1 - y0) * (x1 - x0)); } } return out; };
     const bL = blur(L), bR = blur(RG), m = new Uint8Array(N);
-    for (let i = 0; i < N; i++) if (rgba[4 * i + 3] > 0 && (bL[i] - L[i] > o.dark || RG[i] - bR[i] > o.red)) m[i] = 1;
-    return m;
+    for (let i = 0; i < N; i++) { if (!(rgba[4 * i + 3] > 0)) continue; const red = RG[i] - bR[i]; if (red > o.red) m[i] = 2; else if (bL[i] - L[i] > o.dark && red < o.red / 2) m[i] = 1; }
+    return m;   // 1＝黑線、2＝紅線
   }
   // 倒角距離（兩趟，斜向 √2），單位像素
   function distanceField(mask, w, h) {
@@ -2675,8 +2676,10 @@ const Core = (() => {
   function inkBlock(plan, b, region) {
     const o = plan.opt; if (!region) { b.none = true; return b; }
     const { rgba, w, h, wf } = region, px = Math.hypot(wf.a, wf.d), det = wf.a * wf.e - wf.b * wf.d;
-    const D = distanceField(inkMask(rgba, w, h, { ...o, bgPx: o.bg / px }), w, h);
-    const dist = (x, y) => { const X = x - wf.c, Y = y - wf.f, u = Math.round((wf.e * X - wf.b * Y) / det), v = Math.round((-wf.d * X + wf.a * Y) / det); return u < 0 || v < 0 || u >= w || v >= h ? null : D[v * w + u] * px; };
+    const M = inkMask(rgba, w, h, { ...o, bgPx: o.bg / px }), skipRed = o.redInk !== 'ink';
+    const D = distanceField(M, w, h), DK = skipRed ? distanceField(M.map(v => (v === 1 ? 1 : 0)), w, h) : D;   // D＝任何墨線（對位用）、DK＝黑線（判定用）
+    const at = (x, y) => { const X = x - wf.c, Y = y - wf.f, u = Math.round((wf.e * X - wf.b * Y) / det), v = Math.round((-wf.d * X + wf.a * Y) / det); return u < 0 || v < 0 || u >= w || v >= h ? -1 : v * w + u; };
+    const dist = (x, y) => { const i = at(x, y); return i < 0 ? null : D[i] * px; };
     let n0 = 0; const cost = (dx, dy) => { let c = 0, n = 0; for (const s of b.win) for (const q of s.smp) { const d = dist(q.x + dx, q.y + dy); if (d == null) continue; c += Math.min(d, o.cap); n++; } n0 = n; return n ? c / n : o.cap; };
     let best = { dx: 0, dy: 0, c: cost(0, 0) };
     if (n0) {   // 先 1 m 間距粗搜，再在最佳點 ±1 m 內以 shiftStep 細搜
@@ -2687,18 +2690,20 @@ const Core = (() => {
     let ok = 0, all = 0; for (const s of b.win) for (const q of s.smp) { const d = dist(q.x + best.dx, q.y + best.dy); if (d == null) continue; all++; if (d <= o.tol) ok++; }
     b.fit = all ? ok / all : 0; b.poor = b.fit < o.minFit;
     if (b.poor) { for (const s of b.segs) { s.flags = s.smp.map(() => null); s.sup = null; s.shift = b.shift; } return b; }
-    for (const s of b.segs) { s.flags = s.smp.map(q => { const d = dist(q.x + best.dx, q.y + best.dy); return d == null ? null : d > o.tol; }); const known = s.flags.filter(f => f != null); s.sup = known.length ? known.filter(f => !f).length / known.length : null; s.shift = b.shift; }
+    // 每個取樣：離黑線 ≤ tol＝有墨線；否則離紅線 ≤ tol＝紅線（不檢核）；都不是＝沒有墨線
+    for (const s of b.segs) { let red = 0; s.flags = s.smp.map(q => { const i = at(q.x + best.dx, q.y + best.dy); if (i < 0) return null; if (DK[i] * px <= o.tol) return false; if (skipRed && D[i] * px <= o.tol) { red++; return null; } return true; });
+      const known = s.flags.filter(f => f != null); s.red = red && red >= s.smp.length / 2; s.sup = known.length && !s.red ? known.filter(f => !f).length / known.length : null; s.shift = b.shift; }
     return b;
   }
   // 彙整各宗：無墨線長度（支持比例 < minSup 的線段）、判定等級
   function inkResult(cur, plan) {
-    const o = plan.opt, res = new Map(), get = i => { let r = res.get(i); if (!r) { const p = cur.parcels[i]; res.set(i, r = { idx: i, label: p.label, area: p.area, checked: 0, offLen: 0, offSegs: [], offEdges: [], unknown: 0 }); } return r; };
-    for (const s of plan.segs) for (const i of s.ps) { const r = get(i); if (s.sup == null) { r.unknown += s.len; continue; } r.checked += s.len; if (s.sup < o.minSup) { r.offLen += s.len; r.offSegs.push([{ x: s.A.x, y: s.A.y }, { x: s.B.x, y: s.B.y }]); r.offEdges.push(s.key); } }
+    const o = plan.opt, res = new Map(), get = i => { let r = res.get(i); if (!r) { const p = cur.parcels[i]; res.set(i, r = { idx: i, label: p.label, area: p.area, checked: 0, offLen: 0, offSegs: [], offEdges: [], unknown: 0, redLen: 0 }); } return r; };
+    for (const s of plan.segs) for (const i of s.ps) { const r = get(i); if (s.red) { r.redLen += s.len; continue; } if (s.sup == null) { r.unknown += s.len; continue; } r.checked += s.len; if (s.sup < o.minSup) { r.offLen += s.len; r.offSegs.push([{ x: s.A.x, y: s.A.y }, { x: s.B.x, y: s.B.y }]); r.offEdges.push(s.key); } }
     const list = [];
     for (const r of res.values()) { const lim = Math.max(o.minLen, o.ratio * r.checked); r.score = r.checked ? r.offLen / lim : 0; r.level = r.score >= 2 ? 'red' : r.score >= 1 ? 'yellow' : ''; r.sliver = r.area < (o.sliver ?? SHAPE_DEFAULT.sliver); if (r.level || (r.sliver && r.offLen > 0)) list.push(r); }
     list.sort((u, v) => v.score - u.score);
     const blocks = plan.blocks.filter(b => !b.none && !b.poor), shifts = blocks.map(b => Math.hypot(b.shift.dx, b.shift.dy)), poor = plan.blocks.filter(b => b.poor);
-    return { opt: o, blocks: plan.blocks.length, covered: blocks.length, poor: poor.length, poorBoxes: poor.map(b => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, fit: b.fit })), shiftMedian: median(shifts), checkedLen: plan.segs.filter(s => s.sup != null).reduce((t, s) => t + s.len, 0), offLen: plan.segs.filter(s => s.sup != null && s.sup < o.minSup).reduce((t, s) => t + s.len, 0),
+    return { opt: o, blocks: plan.blocks.length, covered: blocks.length, poor: poor.length, poorBoxes: poor.map(b => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, fit: b.fit })), shiftMedian: median(shifts), checkedLen: plan.segs.filter(s => s.sup != null).reduce((t, s) => t + s.len, 0), redLen: plan.segs.filter(s => s.red).reduce((t, s) => t + s.len, 0), offLen: plan.segs.filter(s => s.sup != null && s.sup < o.minSup).reduce((t, s) => t + s.len, 0),
       flagged: list, counts: { red: list.filter(r => r.level === 'red').length, yellow: list.filter(r => r.level === 'yellow').length, slivers: list.filter(r => r.sliver).length } };
   }
   // 同步版（Node 測試或已在記憶體的影像）：getRegion(x0, y0, x1, y1) → { rgba, w, h, wf } 或 null
