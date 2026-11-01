@@ -2437,7 +2437,7 @@ async function afRunNow(box, o) {
   S.af = { box: b, entry, res, ops: res.ops, im, focus: null, img0: { c: im.wf.c, f: im.wf.f } }; im.wf.c -= res.shift.dx; im.wf.f -= res.shift.dy; clearSel(); pushUndo(entry); afGhost(); afPanel(); msg(afSummary() + '：微調後按「接受」');
   return afReport();
 }
-function afSummary() { const c = k => S.af.ops.filter(o => o.on && !o.failed && o.kind === k), mv = c('move');   // 做不成的項目沒有動到圖，不算 return `移點 ${mv.length}` + (mv.length ? `（最大 ${Math.max(...mv.map(o => o.dist)).toFixed(2)} m）` : '') + `、線加點 ${c('refine').reduce((t, o) => t + o.pts.length, 0)}、切面 ${c('cut').length}` + (c('merge').length ? `、併面 ${c('merge').length}` : ''); }
+function afSummary() { const c = k => S.af.ops.filter(o => o.on && !o.failed && o.kind === k), mv = c('move'); return `移點 ${mv.length}` + (mv.length ? `（最大 ${Math.max(...mv.map(o => o.dist)).toFixed(2)} m）` : '') + `、線加點 ${c('refine').reduce((t, o) => t + o.pts.length, 0)}、切面 ${c('cut').length}` + (c('merge').length ? `、併面 ${c('merge').length}` : ''); }
 function afReport() { const a = S.af; if (!a) return null; return { box: a.box, shift: a.res.shift, ops: a.ops.map((o, i) => { const { from, to, A, B, pts, ids, ...r } = o; return { index: i, ...r, new_points: pts ? pts.length : undefined }; }), skipped: a.res.skipped, no_ink: a.res.noInk }; }
 function afReplay(force = false) {   // 依目前勾選的項目，從框選前重做
   const a = S.af, k = S.undo.lastIndexOf(a.entry), extra = k >= 0 ? S.undo.length - k - 1 : 0; if (extra && !force && !confirm(`你在預覽後做了 ${extra} 個微調，改變項目會從框選前重做，微調會消失。要繼續嗎？`)) { afPanel(); return false; }
