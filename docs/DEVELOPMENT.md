@@ -162,6 +162,7 @@ DBF 讀取與就地修補 → 資料集（`datasetFromD`／`datasetFromKC`、`fi
 - **瀏覽器自動化測試**：以本機 `python -m http.server` 開頁，用 `DataTransfer` 把檔案塞進 `#fileIn` 觸發載入；用 `CadastralAPI.getView()` 換算螢幕座標；截圖座標可能有縮放；視窗被遮住時 `requestAnimationFrame` 會停。
 - **GitHub**：倉庫名不可含中文；`main` 已設定必須通過 `test` 檢查；PR 已通過 CI 時 `set_auto_merge` 會回「clean status」，直接 `gh pr merge --squash --delete-branch`。
 
+- **app.js 不在測試範圍**：測試只載入 core.js，app.js 語法錯誤時測試與 CI 全綠、頁面卻完全起不來（v0.32.1 開發時在單行函式中間加 `//` 註解，把 return 吃掉）。v0.32.1 起 `build.mjs` 先做語法檢查；這份程式很多單行函式，行內註解請用 `/* */` 或放在行尾確定沒有後文。介面改動一定要實際開頁面看過。
 - **render() 內的區域函式**：`tracePoly` 等是 `render()` 裡的區域函式，`drawTopo` 之類的外部繪圖函式不能用。v0.27.0 在 `drawTopo` 用了 `tracePoly`，丟例外時 `ctx.save()` 沒 `restore()`，`globalAlpha=0.25` 殘留，整張圖變淡（使用者回報「合併面後顏色變淡」）。v0.28.0 起 `render()` 開頭重設 `globalAlpha`／`setLineDash`。
 - **待修清單索引**：`S.tq.items` 是上一次的清單；「修好了」之後要重算（`tqLive()`）再跳，否則畫面跳到剛修好的那宗、對話框顯示下一筆（v0.27.0）。
 
