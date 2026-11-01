@@ -3812,6 +3812,14 @@ if (typeof module !== 'undefined') module.exports = Core;
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.32.1', date: '2026-11-01', type: 'patch',
+    title: '依舊圖自動修正：摘要不再把做不成的項目算進去',
+    changes: [
+      '預覽的移點、線加點、切面數只算實際做到的項目；做不成的項目在清單上標紅並寫原因（例：它切的那一塊來自被關掉的項目），綠線也不畫',
+      '補強測試：切面依賴、貼合容差是總移動量上限',
+    ],
+  },
+  {
     version: 'v0.32.0', date: '2026-11-01', type: 'minor',
     title: '依舊圖自動修正：框選一個範圍，系統依舊圖墨線調整點、線、面，先預覽再接受',
     changes: [
@@ -6795,11 +6803,11 @@ async function afRunNow(box, o) {
   S.af = { box: b, entry, res, ops: res.ops, im, focus: null, img0: { c: im.wf.c, f: im.wf.f } }; im.wf.c -= res.shift.dx; im.wf.f -= res.shift.dy; clearSel(); pushUndo(entry); afGhost(); afPanel(); msg(afSummary() + '：微調後按「接受」');
   return afReport();
 }
-function afSummary() { const c = k => S.af.ops.filter(o => o.on && o.kind === k), mv = c('move'); return `移點 ${mv.length}` + (mv.length ? `（最大 ${Math.max(...mv.map(o => o.dist)).toFixed(2)} m）` : '') + `、線加點 ${c('refine').reduce((t, o) => t + o.pts.length, 0)}、切面 ${c('cut').length}` + (c('merge').length ? `、併面 ${c('merge').length}` : ''); }
+function afSummary() { const c = k => S.af.ops.filter(o => o.on && !o.failed && o.kind === k), mv = c('move');   // 做不成的項目沒有動到圖，不算 return `移點 ${mv.length}` + (mv.length ? `（最大 ${Math.max(...mv.map(o => o.dist)).toFixed(2)} m）` : '') + `、線加點 ${c('refine').reduce((t, o) => t + o.pts.length, 0)}、切面 ${c('cut').length}` + (c('merge').length ? `、併面 ${c('merge').length}` : ''); }
 function afReport() { const a = S.af; if (!a) return null; return { box: a.box, shift: a.res.shift, ops: a.ops.map((o, i) => { const { from, to, A, B, pts, ids, ...r } = o; return { index: i, ...r, new_points: pts ? pts.length : undefined }; }), skipped: a.res.skipped, no_ink: a.res.noInk }; }
 function afReplay(force = false) {   // 依目前勾選的項目，從框選前重做
   const a = S.af, k = S.undo.lastIndexOf(a.entry), extra = k >= 0 ? S.undo.length - k - 1 : 0; if (extra && !force && !confirm(`你在預覽後做了 ${extra} 個微調，改變項目會從框選前重做，微調會消失。要繼續嗎？`)) { afPanel(); return false; }
-  if (k >= 0) S.undo.length = k + 1; S.redo.length = 0; Core.applyDatasetState(S.ds, a.entry.st0); const failed = Core.autoFixApply(S.ds, afOn(), a.res.opt); a.entry.st1 = Core.datasetState(S.ds); clearSel(); afterEdit('do', a.entry); afGhost(); afPanel(); refresh();
+  if (k >= 0) S.undo.length = k + 1; S.redo.length = 0; Core.applyDatasetState(S.ds, a.entry.st0); const failed = Core.autoFixApply(S.ds, afOn(), a.res.opt); for (const o of a.ops) delete o.failed; for (const f of failed) f.op.failed = f.why; a.entry.st1 = Core.datasetState(S.ds); clearSel(); afterEdit('do', a.entry); afGhost(); afPanel(); refresh();
   msg(afSummary() + (failed.length ? `；${failed.length} 項做不成（${[...new Set(failed.map(f => f.why))].join('、')}），多半是依賴被關掉的項目` : '')); return true;
 }
 function afImgBack(a) { if (a && a.img0) { a.im.wf.c = a.img0.c; a.im.wf.f = a.img0.f; a.img0 = null; } }   // 預覽時影像暫時對齊作業圖，線才看得出貼在墨線上；結束就還原（按「保留影像對齊」才留下）
@@ -6815,7 +6823,7 @@ function afAlignImage() {   // 預覽結束後影像也留在對齊的位置（�
 }
 function afPanel() {
   const a = S.af; $('afBox').classList.toggle('on', S.afArm); $('afBtns').style.display = a ? '' : 'none'; $('afAlign').disabled = !(a && a.img0); if (!a) { $('afInfo').textContent = S.afArm ? '在圖上拖出範圍…' : ''; $('afList').innerHTML = ''; return; }
-  const { shift, skipped, noInk } = a.res, row = (i, o, html) => `<label class="chk" style="display:flex;gap:4px;align-items:flex-start;margin-top:2px"><input type="checkbox" data-afop="${i}"${o.on ? ' checked' : ''}><span>${html}</span>${o.kind === 'move' ? '' : `<a href="#" data-afgo="${i}" style="margin-left:auto;white-space:nowrap">看</a>`}</label>`;
+  const { shift, skipped, noInk } = a.res, row = (i, o, html) => `<label class="chk" style="display:flex;gap:4px;align-items:flex-start;margin-top:2px"><input type="checkbox" data-afop="${i}"${o.on ? ' checked' : ''}><span>${html}${o.failed ? `<b style="color:#e03131">（做不成：${esc(o.failed)}）</b>` : ''}</span>${o.kind === 'move' ? '' : `<a href="#" data-afgo="${i}" style="margin-left:auto;white-space:nowrap">看</a>`}</label>`;
   $('afInfo').innerHTML = `舊圖影像比作業圖偏 E ${shift.dx.toFixed(2)}、N ${shift.dy.toFixed(2)} m，${a.img0 ? '預覽時暫時對齊' : '影像已移到對齊位置'}` + (shift.fit < 0.5 ? `；<b style="color:#e03131">這一帶只有 ${(shift.fit * 100).toFixed(0)}% 的界址線對得上墨線，結果請逐項看</b>` : '') + `。<b>${afSummary()}</b>。橘＝修正前、綠＝新線。可直接拖點或用下方工具微調`;
   const mv = a.ops.filter(o => o.kind === 'move'), parts = [];
   if (mv.length) parts.push(`<label class="chk" style="margin-top:2px"><input type="checkbox" data-afmv${mv.every(o => o.on) ? ' checked' : ''}>點貼墨線 ${mv.length} 點（最大 ${mv[0].dist.toFixed(2)} m）</label>`);
@@ -6829,7 +6837,7 @@ function drawAutoFix() {
   ctx.setLineDash([8, 5]); ctx.lineWidth = 1.5; ctx.strokeStyle = '#1971c2'; ctx.strokeRect(toSx(b.x0), toSy(b.y1), toSx(b.x1) - toSx(b.x0), toSy(b.y0) - toSy(b.y1));
   ctx.strokeStyle = '#f08c00'; ctx.setLineDash([5, 4]); for (const r of a.ghost || []) line(r, true);
   ctx.strokeStyle = '#ae3ec9'; ctx.setLineDash([2, 4]); ctx.lineWidth = 2; for (const n of a.res.noInk) { const p = S.ds.points.get(n.a), q = S.ds.points.get(n.b); if (p && q) line([p, q]); }
-  ctx.setLineDash([]); afOn().forEach(o => { ctx.strokeStyle = '#2f9e44'; ctx.lineWidth = o === a.focus ? 6 : 3; if (o.ids) line(o.ids.map(id => S.ds.points.get(id)).filter(Boolean)); /* 用現在的點位畫，微調後綠線跟著動 */ else if (o.kind === 'move') { ctx.lineWidth = 1.5; line([o.from, o.to]); ctx.beginPath(); ctx.arc(toSx(o.to.x), toSy(o.to.y), 4, 0, 7); ctx.stroke(); } });
+  ctx.setLineDash([]); afOn().filter(o => !o.failed).forEach(o => { ctx.strokeStyle = '#2f9e44'; ctx.lineWidth = o === a.focus ? 6 : 3; if (o.ids) line(o.ids.map(id => S.ds.points.get(id)).filter(Boolean)); /* 用現在的點位畫，微調後綠線跟著動 */ else if (o.kind === 'move') { ctx.lineWidth = 1.5; line([o.from, o.to]); ctx.beginPath(); ctx.arc(toSx(o.to.x), toSy(o.to.y), 4, 0, 7); ctx.stroke(); } });
   ctx.restore();
 }
 function afGo(pts) { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const q of pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } const m = Math.max(8, (x1 - x0 + y1 - y0) * 0.25); fit({ x0: x0 - m, x1: x1 + m, y0: y0 - m, y1: y1 + m }); }
