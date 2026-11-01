@@ -2419,6 +2419,10 @@ function afArm() {
 }
 const afOpts = () => { const v = (id, d) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x > 0 ? x : d; }; return { tol: v('afTol', 2.5), minLen: v('afMin', 6), move: $('afMove').checked, refine: $('afRefine').checked, cut: $('afCut').checked, lockOutline: $('afLock').checked, areaGuard: $('afGuard').checked, mother: unMother(), maxPts: unN() }; };
 async function afRun(box, o = {}) {
+  if (S.afBusy) throw new Error('上一次框選還在分析中'); S.afBusy = true;
+  try { return await afRunNow(box, o); } finally { S.afBusy = false; }
+}
+async function afRunNow(box, o) {
   if (!S.ds) throw new Error('請先載入圖資'); if (S.af) throw new Error('請先接受或放棄目前的預覽');
   const b = { x0: Math.min(box.x0, box.x1), x1: Math.max(box.x0, box.x1), y0: Math.min(box.y0, box.y1), y1: Math.max(box.y0, box.y1) }, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2; if (b.x1 - b.x0 < 5 || b.y1 - b.y0 < 5) throw new Error('範圍太小'); if (b.x1 - b.x0 > 800 || b.y1 - b.y0 > 800) throw new Error('範圍太大（每邊最多 800 m），請分段框選');
   const im = chkImages().slice().reverse().find(q => { const bb = imgBox(q); return cx >= bb.x0 && cx <= bb.x1 && cy >= bb.y0 && cy <= bb.y1; }); if (!im) throw new Error('框選範圍沒有舊圖影像：請在步驟 1 載入舊圖影像（JPG＋JGW）');
@@ -2434,7 +2438,7 @@ async function afRun(box, o = {}) {
   return afReport();
 }
 function afSummary() { const c = k => S.af.ops.filter(o => o.on && o.kind === k), mv = c('move'); return `移點 ${mv.length}` + (mv.length ? `（最大 ${Math.max(...mv.map(o => o.dist)).toFixed(2)} m）` : '') + `、線加點 ${c('refine').reduce((t, o) => t + o.pts.length, 0)}、切面 ${c('cut').length}` + (c('merge').length ? `、併面 ${c('merge').length}` : ''); }
-function afReport() { const a = S.af; if (!a) return null; return { box: a.box, shift: a.res.shift, ops: a.ops.map((o, i) => { const { from, to, A, B, pts, ...r } = o; return { index: i, ...r, new_points: pts ? pts.length : undefined }; }), skipped: a.res.skipped, no_ink: a.res.noInk }; }
+function afReport() { const a = S.af; if (!a) return null; return { box: a.box, shift: a.res.shift, ops: a.ops.map((o, i) => { const { from, to, A, B, pts, ids, ...r } = o; return { index: i, ...r, new_points: pts ? pts.length : undefined }; }), skipped: a.res.skipped, no_ink: a.res.noInk }; }
 function afReplay(force = false) {   // 依目前勾選的項目，從框選前重做
   const a = S.af, k = S.undo.lastIndexOf(a.entry), extra = k >= 0 ? S.undo.length - k - 1 : 0; if (extra && !force && !confirm(`你在預覽後做了 ${extra} 個微調，改變項目會從框選前重做，微調會消失。要繼續嗎？`)) { afPanel(); return false; }
   if (k >= 0) S.undo.length = k + 1; S.redo.length = 0; Core.applyDatasetState(S.ds, a.entry.st0); const failed = Core.autoFixApply(S.ds, afOn(), a.res.opt); a.entry.st1 = Core.datasetState(S.ds); clearSel(); afterEdit('do', a.entry); afGhost(); afPanel(); refresh();
@@ -2457,7 +2461,7 @@ function afPanel() {
   $('afInfo').innerHTML = `舊圖影像比作業圖偏 E ${shift.dx.toFixed(2)}、N ${shift.dy.toFixed(2)} m，${a.img0 ? '預覽時暫時對齊' : '影像已移到對齊位置'}` + (shift.fit < 0.5 ? `；<b style="color:#e03131">這一帶只有 ${(shift.fit * 100).toFixed(0)}% 的界址線對得上墨線，結果請逐項看</b>` : '') + `。<b>${afSummary()}</b>。橘＝修正前、綠＝新線。可直接拖點或用下方工具微調`;
   const mv = a.ops.filter(o => o.kind === 'move'), parts = [];
   if (mv.length) parts.push(`<label class="chk" style="margin-top:2px"><input type="checkbox" data-afmv${mv.every(o => o.on) ? ' checked' : ''}>點貼墨線 ${mv.length} 點（最大 ${mv[0].dist.toFixed(2)} m）</label>`);
-  a.ops.forEach((o, i) => { if (o.kind === 'cut') parts.push(row(i, o, `切開 ${esc(o.keep || o.parcel)}（沿墨線 ${o.len.toFixed(0)} m、新點 ${o.pts.length}）：留 ${(o.areaKeep || 0).toFixed(1)} m²` + (o.areaReg ? `，登記 ${o.areaReg.toFixed(0)}` : '') + `；切出 ${esc(o.on || !o.off ? o.created || '' : '')} ${(o.areaCut || 0).toFixed(1)} m²` + (o.off ? `<span class="muted">（${esc(o.off)}，預設不切）</span>` : ''))); else if (o.kind === 'refine') parts.push(row(i, o, `線 ${o.a}–${o.b} 依墨線加 ${o.pts.length} 點（彎出 ${o.off.toFixed(1)} m）`)); else if (o.kind === 'merge') parts.push(row(i, o, `${esc(o.drop)} 併入 ${esc(o.keep)}（共用線 ${o.len.toFixed(0)} m 沒有墨線）`)); });
+  a.ops.forEach((o, i) => { if (o.kind === 'cut') parts.push(row(i, o, `切開 ${esc(o.keep || o.parcel)}（沿墨線 ${o.len.toFixed(0)} m、新點 ${o.pts.length}）：留 ${(o.areaKeep || 0).toFixed(1)} m²` + (o.areaReg ? `，登記 ${o.areaReg.toFixed(0)}` : '') + `；切出 ${esc(o.on || !o.off ? o.created || '' : '')} ${(o.areaCut || 0).toFixed(1)} m²` + (o.off ? `<span class="muted">（${esc(o.off)}，預設不切）</span>` : ''))); else if (o.kind === 'refine') parts.push(row(i, o, `線 ${o.a}–${o.b} 依墨線加 ${o.pts.length} 點（彎出 ${o.bent.toFixed(1)} m）`)); else if (o.kind === 'merge') parts.push(row(i, o, `${esc(o.drop)} 併入 ${esc(o.keep)}（共用線 ${o.len.toFixed(0)} m 沒有墨線）`)); });
   if (skipped.length) parts.push(`<div class="muted" style="margin-top:4px">未處理 ${skipped.length} 處：${skipped.slice(0, 8).map(s => `<a href="#" data-afxy="${s.x},${s.y}">${esc(s.why)} ${s.len.toFixed(0)} m</a>`).join('、')}</div>`);
   if (noInk.length) parts.push(`<div class="muted" style="margin-top:2px">界線底下找不到墨線 ${noInk.length} 段、共 ${noInk.reduce((t, n) => t + n.len, 0).toFixed(0)} m（圖上紫虛線，未自動處理）</div>`);
   $('afList').innerHTML = parts.join('');
@@ -2467,7 +2471,7 @@ function drawAutoFix() {
   ctx.setLineDash([8, 5]); ctx.lineWidth = 1.5; ctx.strokeStyle = '#1971c2'; ctx.strokeRect(toSx(b.x0), toSy(b.y1), toSx(b.x1) - toSx(b.x0), toSy(b.y0) - toSy(b.y1));
   ctx.strokeStyle = '#f08c00'; ctx.setLineDash([5, 4]); for (const r of a.ghost || []) line(r, true);
   ctx.strokeStyle = '#ae3ec9'; ctx.setLineDash([2, 4]); ctx.lineWidth = 2; for (const n of a.res.noInk) { const p = S.ds.points.get(n.a), q = S.ds.points.get(n.b); if (p && q) line([p, q]); }
-  ctx.setLineDash([]); afOn().forEach(o => { ctx.strokeStyle = '#2f9e44'; ctx.lineWidth = o === a.focus ? 6 : 3; if (o.kind === 'cut') line([o.A, ...o.pts, o.B]); else if (o.kind === 'refine') { const p = S.ds.points.get(o.a), q = S.ds.points.get(o.b); if (p && q) line([p, ...o.pts, q]); } else if (o.kind === 'move') { ctx.lineWidth = 1.5; line([o.from, o.to]); ctx.beginPath(); ctx.arc(toSx(o.to.x), toSy(o.to.y), 4, 0, 7); ctx.stroke(); } });
+  ctx.setLineDash([]); afOn().forEach(o => { ctx.strokeStyle = '#2f9e44'; ctx.lineWidth = o === a.focus ? 6 : 3; if (o.ids) line(o.ids.map(id => S.ds.points.get(id)).filter(Boolean)); /* 用現在的點位畫，微調後綠線跟著動 */ else if (o.kind === 'move') { ctx.lineWidth = 1.5; line([o.from, o.to]); ctx.beginPath(); ctx.arc(toSx(o.to.x), toSy(o.to.y), 4, 0, 7); ctx.stroke(); } });
   ctx.restore();
 }
 function afGo(pts) { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const q of pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } const m = Math.max(8, (x1 - x0 + y1 - y0) * 0.25); fit({ x0: x0 - m, x1: x1 + m, y0: y0 - m, y1: y1 + m }); }

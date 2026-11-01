@@ -41,7 +41,7 @@ try {
   await t('call_api 轉送任意方法', async () => { await call('call_api', { method: 'mergePoints', params: { from: 'A1', to: 'A2' } }); assert.deepEqual(seen.at(-1).params, { from: 'A1', to: 'A2' }); assert.equal(seen.at(-1).method, 'mergePoints'); });
   await t('拒絕非本機來源的網頁', async () => { const code = await new Promise(r => { const q = http.request({ host: '127.0.0.1', port: PORT, headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', origin: 'https://evil.example' } });
     q.on('upgrade', () => r(101)); q.on('response', x => r(x.statusCode)); q.on('error', () => r('closed')); q.end(); });
-    assert.notEqual(code, 101); assert.match(err, /拒絕連線/); });
+    assert.notEqual(code, 101); await until(() => /拒絕連線/.test(err)); });   // stderr 是另一條管線，可能比 HTTP 回應晚到（CI 上遇過）
   ws.close();
   console.log(`\n全部 ${ok} 項通過`);
 } finally { br.kill(); }

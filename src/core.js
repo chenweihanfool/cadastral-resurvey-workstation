@@ -3038,10 +3038,10 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     for (let pass = 0; pass < 3; pass++) {
       let moved = 0;
       for (const id of ids) {
-        const q = P.get(id), c0 = cost(id, q.x, q.y); if (c0.c <= 0.25) continue; let best = null;
-        for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) { const m = Math.hypot(i, j) * 0.25; if (m > o.tol) continue; const x = q.x + i * 0.25, y = q.y + j * 0.25; if (R.dist(x, y) > 0.35) continue; if (nbr.get(id).some(nb => { const u = P.get(nb); return Math.hypot(u.x - x, u.y - y) < 0.3; })) continue; const v = cost(id, x, y), s = v.c + 0.03 * m; if (!best || s < best.s) best = { s, c: v.c, x, y }; }
+        const q = P.get(id), c0 = cost(id, q.x, q.y); if (c0.c <= 0.25) continue; let best = null; const o0 = from.get(id) || q;   // 每輪都以原始位置為中心：貼合容差是總移動量的上限，不是每輪的
+        for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) { const m = Math.hypot(i, j) * 0.25; if (m > o.tol) continue; const x = o0.x + i * 0.25, y = o0.y + j * 0.25; if (R.dist(x, y) > 0.35) continue; if (nbr.get(id).some(nb => { const u = P.get(nb); return Math.hypot(u.x - x, u.y - y) < 0.3; })) continue; const v = cost(id, x, y), s = v.c + 0.03 * m; if (!best || s < best.s) best = { s, c: v.c, x, y }; }
         if (!best || best.c > c0.c - 0.12 || Math.hypot(best.x - q.x, best.y - q.y) < 0.1) continue;
-        const parcels = (ds.pointParcels.get(id) || []).filter(i => !ds.parcels[i].deleted), base = afBase(ds, parcels), fx = q.x, fy = q.y, mid = R.center(best.x, best.y), gap = afAreaGap(ds, parcels);
+        const parcels = (ds.pointParcels.get(id) || []).filter(i => !ds.parcels[i].deleted), base = afBase(ds, parcels), fx = q.x, fy = q.y, c1 = R.center(best.x, best.y), mid = Math.hypot(c1.x - o0.x, c1.y - o0.y) <= o.tol ? c1 : best, gap = afAreaGap(ds, parcels);
         q.x = mid.x; q.y = mid.y; if (afNewConflicts(ds, parcels, base) || (o.areaGuard && afAreaGap(ds, parcels) > gap + 0.01)) { q.x = fx; q.y = fy; continue; }
         if (!from.has(id)) from.set(id, { y: fy, x: fx }); moved++;
       }
@@ -3081,15 +3081,15 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
       if (len > 1.5 * L + 2 || onInk < 0.85 * g.path.length) continue;
       const line = afSimplify([{ x: A.x, y: A.y }, ...pts.slice(1, -1), { x: B.x, y: B.y }], o.simplify).slice(1, -1); if (!line.length) continue;
       if (Math.max(...line.map(q => Math.abs((B.x - A.x) * (q.y - A.y) - (B.y - A.y) * (q.x - A.x)) / L)) < o.bend) continue;
-      const op = { kind: 'refine', a: e.a, b: e.b, pts: line.map(q => ({ y: q.y, x: q.x })), len: L, off: Math.max(off, 0) }, parcels = afLive(ds, e), base = afBase(ds, parcels), gap = afAreaGap(ds, parcels), r = afApplyRefine(ds, op);
+      const op = { kind: 'refine', a: e.a, b: e.b, pts: line.map(q => ({ y: q.y, x: q.x })), len: L, bent: off }, parcels = afLive(ds, e), base = afBase(ds, parcels), gap = afAreaGap(ds, parcels), r = afApplyRefine(ds, op);
       if (r && (afNewConflicts(ds, parcels, base) || (o.areaGuard && afAreaGap(ds, parcels) > gap + 0.01))) { applyDelta(ds, r, 'undo'); continue; } if (r) ops.push(op);
     }
     return ops;
   }
   function afApplyRefine(ds, op) {
-    if (!ds.edges.get(segKey(op.a, op.b))) return null; const d = newDelta(); let a = op.a;
-    for (const q of op.pts) { const r = insertPoint(ds, a, op.b, q.y, q.x, { project: false }); mergeDelta(d, r.delta); a = r.id; }
-    return closeDelta(ds, d);
+    if (!ds.edges.get(segKey(op.a, op.b))) return null; const d = newDelta(); let a = op.a; op.ids = [op.a];
+    for (const q of op.pts) { const r = insertPoint(ds, a, op.b, q.y, q.x, { project: false }); mergeDelta(d, r.delta); a = r.id; op.ids.push(a); }
+    op.ids.push(op.b); return closeDelta(ds, d);
   }
   // 沿折線切開：A、B＝{id} 或 {edge:[u,v], y, x}（線上加點，鄰宗同步），pts＝中間新點。opt.mother 新宗地母號（省略＝同母號）、opt.keepNear 保留面積最接近此值的一塊（省略＝較大者）
   function splitByPath(ds, pi, A, B, pts, opt = {}) {
@@ -3107,7 +3107,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     const walk = (s, e) => { const out = [ring[s]]; for (let k = s; k !== e;) { k = (k + 1) % n; out.push(ring[k]); } return out; }, c1 = walk(i, j).concat(mid.slice().reverse()), c2 = walk(j, i).concat(mid);
     const a1 = Math.abs(signedArea(c1, ds.points)), a2 = Math.abs(signedArea(c2, ds.points)), near = opt.keepNear, first = near > 0 ? Math.abs(a1 - near) <= Math.abs(a2 - near) : a1 >= a2, [big, small] = first ? [c1, c2] : [c2, c1];
     p.ids = big; p.mid = big.map(() => false); p.unregEdit = true; const q = createParcel(ds, d, opt.mother || mainNo(p), small, p);
-    return { delta: closeDelta(ds, d), keep: p.label, created: q.label, idx: q.idx, areaKeep: Math.max(first ? a1 : a2, 0), areaCut: first ? a2 : a1, points: mid };
+    return { delta: closeDelta(ds, d), keep: p.label, created: q.label, idx: q.idx, areaKeep: Math.max(first ? a1 : a2, 0), areaCut: first ? a2 : a1, points: mid, ids: [a, ...mid, b] };
   }
   // 點 Q 接到宗地環：離既有點 ≤ snapV 用既有點，否則投影到最近的邊（max m 內）
   function afAttach(ds, p, Q, snapV, max) {
@@ -3116,6 +3116,8 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     return be;
   }
   function afParcelAt(ds, y, x) { let best = null; for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3) continue; if (pointInRing(p.ids, ds.points, y, x) && !(p.holes || []).some(h => pointInRing(ds.parcels[h].ids, ds.points, y, x)) && (!best || p.area < best.area)) best = p; } return best; }
+  // 試切後還原：新宗地要整筆拿掉，留著會是「已刪除」的空殼，與下一筆切出的宗地同地號
+  function afUndoCut(ds, r) { applyDelta(ds, r.delta, 'undo'); if (ds.parcels[ds.parcels.length - 1].idx === r.idx) { ds.parcels.pop(); buildTopology(ds); } }
   function afApplyCut(ds, op, o) {
     const m = op.pts[Math.floor(op.pts.length / 2)] || { y: (op.A.y + op.B.y) / 2, x: (op.A.x + op.B.x) / 2 }, n = op.pts.length ? null : m, p = afParcelAt(ds, m.y, m.x); if (!p) throw new Error('切線不在宗地內'); void n;
     const A = afAttach(ds, p, op.A, o.snapV, o.attach + 1), B = afAttach(ds, p, op.B, o.snapV, o.attach + 1); if (!A || !B) throw new Error(`切線端點接不到 ${p.label} 的界線`);
@@ -3147,12 +3149,13 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
       const line = afSimplify(pts, o.simplify), op = { kind: 'cut', A: { y: line[0].y, x: line[0].x }, B: { y: line[line.length - 1].y, x: line[line.length - 1].x }, pts: line.slice(1, -1).map(p => ({ y: p.y, x: p.x })), len, parcel: q.label };
       const idxs = [q.idx], base = afBase(ds, idxs); let r;
       try { r = afApplyCut(ds, op, o); } catch (e) { skipped.push({ why: e.message, y: mid.y, x: mid.x, len }); continue; }
-      if (r.areaCut < o.minFace || afNewConflicts(ds, [q.idx, r.idx], base)) { applyDelta(ds, r.delta, 'undo'); skipped.push({ why: r.areaCut < o.minFace ? `切出面積 ${r.areaCut.toFixed(1)} m² 太小` : '切開後會有交錯', y: mid.y, x: mid.x, len }); continue; }
-      op.created = r.created; op.keep = r.keep; op.areaCut = r.areaCut; op.areaKeep = r.areaKeep; op.areaReg = ds.parcels[q.idx].areaReg || 0; ops.push(op);
+      if (r.areaCut < o.minFace || afNewConflicts(ds, [q.idx, r.idx], base)) { afUndoCut(ds, r); skipped.push({ why: r.areaCut < o.minFace ? `切出面積 ${r.areaCut.toFixed(1)} m² 太小` : '切開後會有交錯', y: mid.y, x: mid.x, len }); continue; }
+      const dep = ops.find(c => !c.off && c.created === q.label);   // 切的是前一刀切出來的塊：前一刀關掉時這刀不可重放（否則會切到原宗地上）
+      op.created = r.created; op.keep = r.keep; op.areaCut = r.areaCut; op.areaKeep = r.areaKeep; op.areaReg = ds.parcels[q.idx].areaReg || 0; op.ids = r.ids; op.seq = ops.length + 1; if (dep) op.dep = dep.seq; ops.push(op);
       // 面積是最強的佐證：KC0336 真的該切的，切完都更接近登記面積（120-1 +743→-68）；離登記更遠的多半是舊圖上已合併的線（989-4 -43→-13077）。
       // 這種、以及未登記地內部的線，只列出來預設不勾，先還原
       const before = Math.abs(r.areaKeep + r.areaCut - op.areaReg), after = Math.abs(r.areaKeep - op.areaReg);
-      if (!op.areaReg || after >= before - 1) { op.off = op.areaReg ? '切了離登記面積更遠' : '未登記地內部的線'; applyDelta(ds, r.delta, 'undo'); continue; }
+      if (!op.areaReg || after >= before - 1) { op.off = op.areaReg ? '切了離登記面積更遠' : '未登記地內部的線'; afUndoCut(ds, r); continue; }
       const ids = ds.parcels[r.idx].ids; for (let k = 0; k < ids.length; k++) stamp(ds.points.get(ids[k]), ds.points.get(ids[(k + 1) % ids.length]));
     }
     return { ops, skipped };
@@ -3183,9 +3186,9 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
   }
   // 重放（使用者關掉某些項目後，從修正前狀態重做）：回傳做不成的項目 [{op, why}]
   function autoFixApply(ds, ops, opt = {}) {
-    const o = { ...AUTOFIX_DEFAULT, ...opt }, failed = [], mv = ops.filter(q => q.kind === 'move' && ds.points.has(q.id)); if (mv.length) setPoints(ds, mv.map(m => [m.id, m.to.y, m.to.x]));
+    const o = { ...AUTOFIX_DEFAULT, ...opt }, failed = [], done = new Set(), mv = ops.filter(q => q.kind === 'move' && ds.points.has(q.id)); if (mv.length) setPoints(ds, mv.map(m => [m.id, m.to.y, m.to.x]));
     for (const op of ops) { if (op.kind === 'refine') { try { if (!afApplyRefine(ds, op)) failed.push({ op, why: '這條線已不存在' }); } catch (e) { failed.push({ op, why: e.message }); } }
-      else if (op.kind === 'cut') { try { const r = afApplyCut(ds, op, o); op.created = r.created; op.areaCut = r.areaCut; op.areaKeep = r.areaKeep; } catch (e) { failed.push({ op, why: e.message }); } }
+      else if (op.kind === 'cut') { if (op.dep && !done.has(op.dep)) { failed.push({ op, why: '它切的那一塊來自被關掉的項目' }); continue; } try { const r = afApplyCut(ds, op, o); op.created = r.created; op.areaCut = r.areaCut; op.areaKeep = r.areaKeep; op.ids = r.ids; done.add(op.seq); } catch (e) { failed.push({ op, why: e.message }); } }
       else if (op.kind === 'merge') { try { afApplyMerge(ds, op); } catch (e) { failed.push({ op, why: e.message }); } } }
     return failed;
   }
