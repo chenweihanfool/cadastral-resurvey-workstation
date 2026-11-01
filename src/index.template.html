@@ -298,6 +298,13 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div id="tqInfo" class="small" style="margin-top:4px"></div>
   <textarea id="tqNote" class="note" rows="2" disabled placeholder="跳到一筆待修項目後可寫備註"></textarea>
   <div class="row small"><span class="muted">備註存在專案檔、輸出互動報告時帶進去</span><button class="btn" data-act="notesimp" title="互動報告「匯出備註 CSV」的檔案：備註與「已處理」匯回工作站">匯入報告備註…</button></div></section>
+<section><h2>依舊圖自動修正（框選範圍）</h2>
+  <div class="row small"><button class="btn primary" id="afBox" title="按下後在圖上拖出一個範圍，系統依舊圖影像的墨線調整範圍內的點、線、面，先顯示預覽">框選範圍</button>
+    <label title="界址點離墨線多遠內才貼過去（已先扣除框內影像的整體偏移）">貼合 ≤ <input id="afTol" type="number" value="2.5" min="0.5" max="6" step="0.5" style="width:4em"> m</label>
+    <label title="比這短的多出墨線不切（文字、符號多半比這短）">新線 ≥ <input id="afMin" type="number" value="6" min="2" step="1" style="width:4em"> m</label></div>
+  <div class="row small" style="margin-top:4px"><label class="chk"><input type="checkbox" id="afMove" checked>點貼墨線</label><label class="chk"><input type="checkbox" id="afRefine" checked>線依墨線加點</label><label class="chk"><input type="checkbox" id="afCut" checked>切出未登記地</label><label class="chk" title="只屬於一宗的段界點不動，維持與鄰段密合"><input type="checkbox" id="afLock" checked>段界點不動</label><label class="chk" title="移點、加點只做不會讓相關登記地離登記面積更遠的；切面一律看面積，切了沒有更接近的預設不切"><input type="checkbox" id="afGuard" checked>不讓面積變差</label></div>
+  <div id="afInfo" class="small" style="margin-top:4px"></div><div id="afList" class="small"></div>
+  <div class="row small" id="afBtns" style="margin-top:4px;display:none"><button class="btn primary" id="afAccept" title="保留目前結果（含你的微調），整批算一次復原">接受</button><button class="btn" id="afCancel" title="回到框選前的狀態（你的微調也一起放棄）">放棄</button><button class="btn" id="afAlign" title="預覽時影像暫時對齊作業圖，結束會還原；按這裡讓影像留在對齊的位置">保留影像對齊</button></div></section>
 <section><h2>工具</h2><div id="topoTools"></div>
   <div id="topoHint" class="small" style="margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px"></div>
   <div class="small muted" style="margin-top:6px">工具選好後在圖上依序點選（橘色＝已點選），湊齊就執行並留在同一工具，可連續修下一筆。Esc 結束、Enter 完成（新增面、合併面）、Backspace 退一步；每個動作都可 Ctrl+Z 復原。點線面之間的位相（共用點、共用線、鄰宗）會一起維護：點貼到線會接進線兩側的宗地，刪線＝兩宗合併，新增線＝切成兩宗。</div></section>

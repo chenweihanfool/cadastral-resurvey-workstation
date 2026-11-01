@@ -964,4 +964,40 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const sl = { segs: [{ ax: 20, ay: 0, bx: 20, by: 10, a: 'A', b: 'B' }], pairs: [{ a: 'A', b: 'B', len: 10 }] };
   const pr = Core.seamPointPairs(cur, sl); assert.deepEqual(pr.map(q => [q.level, Math.round(q.d * 10) / 10]), [['ok', 0.1], ['warn', 1.2]]);
 }
+{
+  // 框選依舊圖自動修正：影像整體偏 (1.5, -1)，共用點 5 偏離墨線、東邊界墨線彎出去、宗地 10 裡有一條河（兩條線＋淡色帶）、文字不接界線
+  const X = 220000, Y = 2700000, mkDs = (pts, rings) => { const d = Core.newDataset('af', 't'); for (const [id, y, x] of pts) d.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x }); rings.forEach(([l, ids, reg]) => d.parcels.push({ key: '1|' + l + '|0', label: String(l), oldLabel: String(l), ids, mid: ids.map(() => false), areaReg: reg })); return Core.finalize(d); };
+  const mk = () => mkDs([[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0], [5, 50, 101.5], [6, 0, 160], [7, 100, 160]], [[10, [1, 2, 5, 3, 4], 5500], [11, [2, 6, 7, 3, 5], 6200]]);
+  const w = 880, h = 640, px = 0.25, rgba = new Uint8ClampedArray(w * h * 4), ox = -20, oy = 120, sx = 1.5, sy = -1;
+  for (let i = 0; i < w * h; i++) rgba.set([230, 212, 180, 255], 4 * i);
+  const put = (x, y, c, r = 1) => { const u = Math.round((x + sx - ox) / px), v = Math.round((oy - y - sy) / px); for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) { const q = v + a, t = u + b; if (q >= 0 && t >= 0 && q < h && t < w) rgba.set(c, 4 * (q * w + t)); } };
+  for (let y = 56; y < 69; y += 0.25) for (let x = 0; x < 100; x += 0.25) put(x, y, [205, 205, 185, 255], 0);   // 河道淡色帶
+  const line = (x0, y0, x1, y1) => { const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 0.1); for (let k = 0; k <= n; k++) put(x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n, [40, 40, 40, 255]); };
+  line(0, 0, 100, 0); line(100, 0, 160, 0); line(0, 100, 160, 100); line(0, 0, 0, 100); line(100, 0, 100, 100);   // 外框、共用線（直線，點 5 在作業圖上偏 1.5 m）
+  line(160, 0, 162, 30); line(162, 30, 162, 70); line(160, 100, 162, 70);   // 東界彎出去 2 m
+  line(0, 55, 100, 55); line(0, 70, 100, 70);   // 河的兩岸
+  line(30, 20, 33, 20); line(33, 20, 33, 23); line(30, 23, 33, 23); line(30, 20, 30, 23);   // 田字（不接界線）
+  const region = { rgba, w, h, wf: { a: px, b: 0, d: 0, e: -px, c: X + ox, f: Y + oy } }, box = { x0: X - 5, x1: X + 170, y0: Y - 5, y1: Y + 105 };
+  const ds = mk(), st0 = Core.datasetState(ds), r = Core.autoFixRun(ds, region, box, { mother: 9012 }), kinds = k => r.ops.filter(o => o.kind === k);
+  near(r.shift.dx, 1.5, 0.3, '偏移 dx'); near(r.shift.dy, -1, 0.3, '偏移 dy');
+  assert.deepEqual(kinds('move').map(o => o.id), [5], '只有偏離墨線的共用點要移'); near(ds.points.get(5).x, X + 100, 0.4, '點 5 貼回墨線');
+  assert.ok(kinds('refine').some(o => o.a === 7 || o.b === 7 || o.a === 6 || o.b === 6), '東界依墨線加點'); assert.ok(Math.max(...[...ds.points.values()].map(q => q.x)) > X + 161.5, '加的點在彎出去的墨線上');
+  assert.equal(kinds('cut').length, 2, '河的兩岸各切一刀'); const p10 = ds.parcels.find(p => p.label === '10');
+  near(p10.area, 5500, 40, '保留最接近登記面積的一塊'); const made = ds.parcels.filter(p => p.created && !p.deleted); assert.equal(made.length, 2); assert.ok(made.every(p => p.label.startsWith('9012-')), '切出的建為未登記地');
+  { const c = Core.ringConflicts(ds); assert.equal(c.cross.length + c.overlap.length, 0, '自動修正不可產生交錯或重疊'); assert.equal(Core.freeRegions(ds).length, 0, '不留縫'); }
+  assert.ok(ds.parcels.find(p => p.label === '11').ids.length > 5, '切線接到共用線：鄰宗同步插點');
+  const areas = d => d.parcels.filter(p => !p.deleted).map(p => [p.label, +p.area.toFixed(2)]);
+  const ds2 = mk(); Core.applyDatasetState(ds2, st0); assert.equal(Core.autoFixApply(ds2, r.ops, r.opt).length, 0, '重放全部項目'); assert.deepEqual(areas(ds2), areas(ds), '重放與直接執行結果相同');
+  const ds3 = mk(), sub = r.ops.filter(o => o.kind !== 'cut'); assert.equal(Core.autoFixApply(ds3, sub, r.opt).length, 0); assert.equal(ds3.parcels.filter(p => !p.deleted).length, 2, '關掉切面就不切'); near(ds3.points.get(5).x, X + 100, 0.4);
+  const ds4 = mk(), m4 = Core.autoFixRun(ds4, region, box, { mother: 9012, move: false, refine: false, cut: false }); assert.equal(m4.ops.length, 0, '全關就不動');
+  const ds5 = mk(), lock = Core.autoFixRun(ds5, region, { x0: X + 90, x1: X + 110, y0: Y + 40, y1: Y + 60 }, { mother: 9012, cut: false, refine: false }); assert.deepEqual(lock.ops.map(o => o.id), [5], '只動框內的點');
+  { const d = mk(), reg = { 0: 10100, 1: 5920 }; d.parcels.forEach(p => { p.areaReg = reg[p.idx]; }); const g = Core.autoFixRun(d, region, box, { mother: 9012, cut: false }); assert.equal(g.ops.filter(o => o.kind === 'move').length + g.ops.filter(o => o.kind === 'refine').length, 0, '面積已貼近登記：不為了貼墨線把面積改差');
+    const d2 = mk(); d2.parcels.forEach(p => { p.areaReg = reg[p.idx]; }); assert.ok(Core.autoFixRun(d2, region, box, { mother: 9012, cut: false, areaGuard: false }).ops.length > 0, '關掉閘門才動'); }
+  { const d = mk(); d.parcels[0].areaReg = 10000; const off = Core.autoFixRun(d, region, box, { mother: 9012, refine: false }), c = off.ops.filter(o => o.kind === 'cut' && o.len > 90); assert.ok(c.length >= 1 && c.every(o => o.off === '切了離登記面積更遠'), '切了離登記更遠的只列出、預設不做'); near(d.parcels[0].area, 10000, 2, '預設不切'); }
+  { const t = mk(); const r2 = Core.splitByPath(t, 0, { edge: [4, 1], y: Y + 70, x: X }, { edge: [4, 1], y: Y + 55, x: X }, [{ y: Y + 70, x: X + 50 }, { y: Y + 55, x: X + 50 }], { mother: 9012 }); near(r2.areaCut, 750, 1, '兩端在同一條線上（先插的點會把線拆開）'); assert.equal(Core.ringConflicts(t).cross.length, 0); }
+  { const blank = { rgba: new Uint8ClampedArray(w * h * 4).fill(235), w, h, wf: region.wf }, d = mk(); assert.throws(() => Core.autoFixRun(d, blank, box), /對不上/, '影像沒有墨線要停下'); }
+  const s = mk(); Core.splitByPath(s, 0, { edge: [1, 4], y: Y + 50, x: X }, { edge: [2, 5], y: Y + 25, x: X + 100.75 }, [{ y: Y + 45, x: X + 50 }], { mother: 9012 });
+  assert.equal(Core.ringConflicts(s).cross.length, 0); near(s.parcels.filter(p => !p.deleted && p.label !== '11').reduce((t, p) => t + p.area, 0), mk().parcels[0].area, 1e-6, '切開後面積總和不變');
+  { const t = mk(); assert.throws(() => Core.splitByPath(t, 0, { id: 1 }, { id: 3 }, [{ y: Y + 50, x: X + 130 }]), /切線/, '切線跑出宗地要拒絕'); assert.equal(t.parcels.filter(p => !p.deleted).length, 2); }
+}
 console.log('SYNTHETIC OK');
