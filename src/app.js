@@ -109,9 +109,9 @@ function rotateSelection(deg) {
   return transformSelection({ angle: deg * Math.PI / 180, pivot: pivotOf(ids) }, '旋轉');
 }
 function applyEntries(entries) { if (!S.ds) return; Core.setPoints(S.ds, entries); }
-function undo() { S.seamStale = true; const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); afterEdit('undo', e); projDirty(); refresh(); }
+function undo() { S.seamStale = true; const e = S.undo.pop(); if (!e) return; e.undoFn ? e.undoFn() : applyEntries(e.before); S.redo.push(e); if (S.af && e === S.af.entry) afEnd(); afterEdit('undo', e); projDirty(); refresh(); }
 function redo() { S.seamStale = true; const e = S.redo.pop(); if (!e) return; e.redoFn ? e.redoFn() : applyEntries(e.after); S.undo.push(e); afterEdit('redo', e); projDirty(); refresh(); }
-function resetAll() { if (!S.ds) return; Core.resetAll(S.ds); S.undo.length = 0; S.redo.length = 0; afterEdit('do', { label: '還原全部' }); projDirty(); refresh(); }
+function resetAll() { if (!S.ds) return; if (S.af) afEnd(); Core.resetAll(S.ds); S.undo.length = 0; S.redo.length = 0; afterEdit('do', { label: '還原全部' }); projDirty(); refresh(); }
 
 // ── 界址點編修（新增／修改／刪除）：核心在 Core.insertPoint／removePoints／cleanupPoints，這裡負責復原、選取與介面 ──
 function pruneSel() {
@@ -527,6 +527,7 @@ function render() {
     if ($('dlgChk').open && S.chk.res && $('chkMap').checked && !S.printing) drawCheck();
     if (S.sheet && S.sheet.show && $('sheetShow').checked && !S.printing) drawSheet();
     if (S.topo && !S.printing) drawTopo();
+    if (S.af && !S.printing) drawAutoFix();
     if (!S.printing) { if ($('dlgTopo').open) { drawBatch(); if (S.sheet && $('seamShow').checked) drawSeamPairs(); } drawLive(); if (S.msView && $('dlgMs').open) drawMs(); }
     if ($('dlgOwn').open && S.owner && S.owner.res && $('chkOwnMap').checked) drawOwners(ds);
     if ($('dlgUnreg').open && S.unreg && !S.printing) {   // 未登記地：黃＝未登記、橘＝需要分割（超過點數或太細長）、紅＝空隙
@@ -986,6 +987,7 @@ cv.addEventListener('pointerdown', e => {
     if (!im) { msg('請先載入影像'); return; }
     S.drag = { kind: 'img', im, wx: toWx(mx), wy: toWy(my), c0: im.wf.c, f0: im.wf.f }; refresh(); return;
   }
+  if (S.afArm) { S.drag = { kind: 'afbox', mx, my }; return; }
   if (S.topo) { if (S.ds) topoPick(mx, my); return; }
   if (S.align) { alignPick(mx, my); return; }
   if (S.redraw) { redrawPick(mx, my); return; }
@@ -1024,7 +1026,7 @@ cv.addEventListener('pointermove', e => {
   }
   if (d.kind === 'pan') { S.view.cx = d.cx - (mx - d.mx) / S.view.s; S.view.cy = d.cy + (my - d.my) / S.view.s; draw(); return; }
   if (d.kind === 'img') { setImgPos(d.im, d.c0 + (toWx(mx) - d.wx), d.f0 + (toWy(my) - d.wy)); return; }
-  if (d.kind === 'box') { if (Math.hypot(mx - d.mx, my - d.my) > 3) { S.box = { x0: d.mx, y0: d.my, x1: mx, y1: my }; draw(); } return; }
+  if (d.kind === 'box' || d.kind === 'afbox') { if (Math.hypot(mx - d.mx, my - d.my) > 3) { S.box = { x0: d.mx, y0: d.my, x1: mx, y1: my }; draw(); } return; }
   if (d.kind === 'move') {
     if (!d.moved && Math.hypot(mx - d.mx, my - d.my) < 4) return;
     d.moved = true; const wx = toWx(mx), wy = toWy(my);
@@ -1039,6 +1041,7 @@ cv.addEventListener('pointermove', e => {
 cv.addEventListener('pointerup', () => {
   const d = S.drag; S.drag = null; if (!d) return;
   if (d.kind === 'img') { if (d.im.wf.c !== d.c0 || d.im.wf.f !== d.f0) pushImgUndo(d.im, d.c0, d.f0, d.im.wf.c, d.im.wf.f); return; }
+  if (d.kind === 'afbox') { const b = S.box; S.box = null; S.afArm = false; setHint(''); afPanel(); draw(); if (b) afRun({ x0: toWx(b.x0), x1: toWx(b.x1), y0: toWy(b.y0), y1: toWy(b.y1) }).catch(e => msg('自動修正：' + e.message)); return; }
   if (d.kind === 'box') { if (S.box) { boxSelect(S.box.x0, S.box.y0, S.box.x1, S.box.y1, d.add); S.box = null; } refresh(); return; }
   if (d.kind === 'move') {
     if (d.moved) commit(d.before, snapshot(new Set(d.before.map(b => b[0]))), d.rot ? '旋轉' : d.hit ? '拖曳' : '整圖平移');
@@ -1067,7 +1070,7 @@ addEventListener('keydown', e => {
   if (k === ' ') { S.space = true; e.preventDefault(); }
   else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'y') { e.preventDefault(); redo(); }
-  else if (k === 'Escape') { if (S.topo) topoCancel(); else if (S.pocket) cancelPocket(); else if (S.redraw) cancelRedraw(); else if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
+  else if (k === 'Escape') { if (S.afArm) { S.afArm = false; setHint(''); afPanel(); } else if (S.topo) topoCancel(); else if (S.pocket) cancelPocket(); else if (S.redraw) cancelRedraw(); else if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
   else if (k === 'Enter') { if (S.topo && S.topo.picks.length) topoRun(); else if (S.pocket) finishPocket(); else if (S.redraw) finishRedraw(); else if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
   else if (k === 'Backspace' && S.topo) { S.topo.picks.pop(); topoPanel(); draw(); }
   else if (k === 'Backspace' && S.pocket) pocketBack();
@@ -1299,7 +1302,7 @@ async function loadFiles(files) {
     msg('缺少必要檔案：需要 D14+D13，或 COA+BNP，或 D2C+D2B；控制點用 CTL/CT2/D20；現況點請用「匯入現況點」'); return false;
   }
   S.caseFiles = caseFolderFiles(files, by.d14 || by.coa || by.d2c); srcMain(files);
-  S.bl.res = null; S.bl.focus = null; S.seam = null; S.clean = null; S.ringMark = null; S.redraw = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
+  if (S.af) afEnd(); S.bl.res = null; S.bl.focus = null; S.seam = null; S.clean = null; S.ringMark = null; S.redraw = null; S.ds = ds; S.ref = ref; S.names = names; S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; S.pivot = null; S.align = null;
   S.owner = null; let ownMsg = ''; if (mdbs.length) { const r = await loadOwners(mdbs.find(f => /exam/i.test(f.name)) || mdbs[0], true); ownMsg = r ? `；登記資料 ${r}` : ''; }
   fit(); snapReset(); refresh();
   msg(`已載入 ${ds.parcels.length} 宗地號／${ds.points.size} 點` + (ctlMsg ? `；已知點：${ctlMsg}` : '') + ownMsg + (dup.length ? `（同副檔名重複，略過：${dup.slice(0, 3).join('、')}）` : ''));
@@ -2399,6 +2402,83 @@ $('topoTools').addEventListener('click', e => { const b = e.target.closest('[dat
 $('tqPrev').onclick = () => tqGo(-1); $('tqNext').onclick = () => tqGo(1); $('tqDone').onclick = tqMarkDone; $('tqSrc').onchange = () => { S.tq.i = -1; tqPanel(); };
 $('dlgTopo').addEventListener('close', () => { if (S.topo) topoCancel(); });
 
+// ── 依舊圖自動修正（v0.32.0）：框一個範圍，Core.autoFixRun 依舊圖影像的墨線移點、加點、切面。結果直接套在作業圖上當預覽，
+// 所以工具箱每個工具、拖曳都能用來微調；「接受」把這段修改併成一個復原項目，「放棄」回到框選前。關掉某一項＝從框選前重放其餘項目（微調會消失，會先問）
+S.af = null;      // { box, entry（復原項目，st0／st1＝前後狀態）, res, ops, ghost, im, focus }
+S.afArm = false;  // 等使用者拖出範圍
+const afOn = () => S.af.ops.filter(o => o.on);
+function afGhost() {   // 被改到的宗地修正前的界線（畫成紅虛線）
+  const a = S.af, st = a.entry.st0, P = new Map(st.points.map(q => [q.id, q])), now = S.ds, out = [];
+  st.parcels.forEach((o, i) => { if (o.deleted || !o.ids || o.ids.length < 3) return; const p = now.parcels[i], same = p && !p.deleted && p.ids.length === o.ids.length && p.ids.every((id, k) => id === o.ids[k] && (q => q && P.get(id) && q.x === P.get(id).x && q.y === P.get(id).y)(now.points.get(id))); if (same) return;
+    out.push(o.ids.map(id => P.get(id)).filter(Boolean)); });
+  a.ghost = out;
+}
+function afArm() {
+  if (!S.ds) return msg('請先載入圖資'); if (S.af) return msg('請先按「接受」或「放棄」目前的預覽');
+  if (S.topo) topoCancel(); cancelModes(); setTool('select'); S.afArm = true; setHint('依舊圖自動修正：在圖上拖出要修正的範圍　Esc 取消'); afPanel();
+}
+const afOpts = () => { const v = (id, d) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x > 0 ? x : d; }; return { tol: v('afTol', 2.5), minLen: v('afMin', 6), move: $('afMove').checked, refine: $('afRefine').checked, cut: $('afCut').checked, lockOutline: $('afLock').checked, areaGuard: $('afGuard').checked, mother: unMother(), maxPts: unN() }; };
+async function afRun(box, o = {}) {
+  if (S.afBusy) throw new Error('上一次框選還在分析中'); S.afBusy = true;
+  try { return await afRunNow(box, o); } finally { S.afBusy = false; }
+}
+async function afRunNow(box, o) {
+  if (!S.ds) throw new Error('請先載入圖資'); if (S.af) throw new Error('請先接受或放棄目前的預覽');
+  const b = { x0: Math.min(box.x0, box.x1), x1: Math.max(box.x0, box.x1), y0: Math.min(box.y0, box.y1), y1: Math.max(box.y0, box.y1) }, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2; if (b.x1 - b.x0 < 5 || b.y1 - b.y0 < 5) throw new Error('範圍太小'); if (b.x1 - b.x0 > 800 || b.y1 - b.y0 > 800) throw new Error('範圍太大（每邊最多 800 m），請分段框選');
+  const im = chkImages().slice().reverse().find(q => { const bb = imgBox(q); return cx >= bb.x0 && cx <= bb.x1 && cy >= bb.y0 && cy <= bb.y1; }); if (!im) throw new Error('框選範圍沒有舊圖影像：請在步驟 1 載入舊圖影像（JPG＋JGW）');
+  msg('依舊圖影像分析中…'); await new Promise(r => setTimeout(r, 0));
+  const opt = { ...afOpts(), ...o }, m = Core.AUTOFIX_DEFAULT.context + Core.AUTOFIX_DEFAULT.shift + Core.AUTOFIX_DEFAULT.cap + opt.tol + 3, own = !im.bmp, bmp = im.bmp || await createImageBitmap(im.file, { imageOrientation: 'none' }).catch(() => createImageBitmap(im.file)), st0 = Core.datasetState(S.ds); let region, res;
+  try { region = imgRegion(im, bmp, document.createElement('canvas'), b.x0 - m, b.y0 - m, b.x1 + m, b.y1 + m); } finally { if (own && bmp.close) bmp.close(); }
+  if (!region) throw new Error('框選範圍沒有舊圖影像');
+  try { res = Core.autoFixRun(S.ds, region, b, opt); } catch (e) { Core.applyDatasetState(S.ds, st0); throw e; }
+  if (!res.ops.some(op => !op.off) && !res.ops.length) { Core.applyDatasetState(S.ds, st0); S.af = null; msg(`這個範圍依舊圖沒有要修的：影像偏移 E ${res.shift.dx.toFixed(2)}、N ${res.shift.dy.toFixed(2)} m；界線無墨線 ${res.noInk.length} 段` + (res.skipped.length ? `；未處理 ${res.skipped.length} 處（${[...new Set(res.skipped.map(s => s.why))].join('、')}）` : '')); afPanel(); refresh(); return { ops: [], shift: res.shift, skipped: res.skipped, noInk: res.noInk }; }
+  for (const op of res.ops) op.on = !op.off;
+  const entry = { st0, st1: Core.datasetState(S.ds), label: `依舊圖自動修正（${res.ops.length} 項）`, undoFn: () => { Core.applyDatasetState(S.ds, entry.st0); pruneSel(); }, redoFn: () => { Core.applyDatasetState(S.ds, entry.st1); pruneSel(); } };
+  S.af = { box: b, entry, res, ops: res.ops, im, focus: null, img0: { c: im.wf.c, f: im.wf.f } }; im.wf.c -= res.shift.dx; im.wf.f -= res.shift.dy; clearSel(); pushUndo(entry); afGhost(); afPanel(); msg(afSummary() + '：微調後按「接受」');
+  return afReport();
+}
+function afSummary() { const c = k => S.af.ops.filter(o => o.on && o.kind === k), mv = c('move'); return `移點 ${mv.length}` + (mv.length ? `（最大 ${Math.max(...mv.map(o => o.dist)).toFixed(2)} m）` : '') + `、線加點 ${c('refine').reduce((t, o) => t + o.pts.length, 0)}、切面 ${c('cut').length}` + (c('merge').length ? `、併面 ${c('merge').length}` : ''); }
+function afReport() { const a = S.af; if (!a) return null; return { box: a.box, shift: a.res.shift, ops: a.ops.map((o, i) => { const { from, to, A, B, pts, ids, ...r } = o; return { index: i, ...r, new_points: pts ? pts.length : undefined }; }), skipped: a.res.skipped, no_ink: a.res.noInk }; }
+function afReplay(force = false) {   // 依目前勾選的項目，從框選前重做
+  const a = S.af, k = S.undo.lastIndexOf(a.entry), extra = k >= 0 ? S.undo.length - k - 1 : 0; if (extra && !force && !confirm(`你在預覽後做了 ${extra} 個微調，改變項目會從框選前重做，微調會消失。要繼續嗎？`)) { afPanel(); return false; }
+  if (k >= 0) S.undo.length = k + 1; S.redo.length = 0; Core.applyDatasetState(S.ds, a.entry.st0); const failed = Core.autoFixApply(S.ds, afOn(), a.res.opt); a.entry.st1 = Core.datasetState(S.ds); clearSel(); afterEdit('do', a.entry); afGhost(); afPanel(); refresh();
+  msg(afSummary() + (failed.length ? `；${failed.length} 項做不成（${[...new Set(failed.map(f => f.why))].join('、')}），多半是依賴被關掉的項目` : '')); return true;
+}
+function afImgBack(a) { if (a && a.img0) { a.im.wf.c = a.img0.c; a.im.wf.f = a.img0.f; a.img0 = null; } }   // 預覽時影像暫時對齊作業圖，線才看得出貼在墨線上；結束就還原（按「保留影像對齊」才留下）
+function afEnd() { afImgBack(S.af); S.af = null; afPanel(); refresh(); }
+function afAccept() {
+  const a = S.af; if (!a) return; const k = S.undo.lastIndexOf(a.entry); if (k >= 0) S.undo.length = k + 1; a.entry.st1 = Core.datasetState(S.ds); const text = afSummary(); afEnd(); msg(`已接受依舊圖自動修正：${text}（Ctrl+Z 一次復原）`); return { accepted: true };
+}
+function afCancel() {
+  const a = S.af; if (!a) return; const k = S.undo.lastIndexOf(a.entry); if (k >= 0) S.undo.length = k; S.redo.length = 0; Core.applyDatasetState(S.ds, a.entry.st0); clearSel(); afterEdit('undo', a.entry); afEnd(); msg('已放棄自動修正，回到框選前'); return { cancelled: true };
+}
+function afAlignImage() {   // 預覽結束後影像也留在對齊的位置（不進復原堆疊：接受／放棄會截掉預覽之後的項目；要移回用「移影像」工具）
+  const a = S.af; if (!a || !a.img0) return; a.img0 = null; msg(`影像 ${a.im.name}：${imgPosText(a.im)}`); afPanel();
+}
+function afPanel() {
+  const a = S.af; $('afBox').classList.toggle('on', S.afArm); $('afBtns').style.display = a ? '' : 'none'; $('afAlign').disabled = !(a && a.img0); if (!a) { $('afInfo').textContent = S.afArm ? '在圖上拖出範圍…' : ''; $('afList').innerHTML = ''; return; }
+  const { shift, skipped, noInk } = a.res, row = (i, o, html) => `<label class="chk" style="display:flex;gap:4px;align-items:flex-start;margin-top:2px"><input type="checkbox" data-afop="${i}"${o.on ? ' checked' : ''}><span>${html}</span>${o.kind === 'move' ? '' : `<a href="#" data-afgo="${i}" style="margin-left:auto;white-space:nowrap">看</a>`}</label>`;
+  $('afInfo').innerHTML = `舊圖影像比作業圖偏 E ${shift.dx.toFixed(2)}、N ${shift.dy.toFixed(2)} m，${a.img0 ? '預覽時暫時對齊' : '影像已移到對齊位置'}` + (shift.fit < 0.5 ? `；<b style="color:#e03131">這一帶只有 ${(shift.fit * 100).toFixed(0)}% 的界址線對得上墨線，結果請逐項看</b>` : '') + `。<b>${afSummary()}</b>。橘＝修正前、綠＝新線。可直接拖點或用下方工具微調`;
+  const mv = a.ops.filter(o => o.kind === 'move'), parts = [];
+  if (mv.length) parts.push(`<label class="chk" style="margin-top:2px"><input type="checkbox" data-afmv${mv.every(o => o.on) ? ' checked' : ''}>點貼墨線 ${mv.length} 點（最大 ${mv[0].dist.toFixed(2)} m）</label>`);
+  a.ops.forEach((o, i) => { if (o.kind === 'cut') parts.push(row(i, o, `切開 ${esc(o.keep || o.parcel)}（沿墨線 ${o.len.toFixed(0)} m、新點 ${o.pts.length}）：留 ${(o.areaKeep || 0).toFixed(1)} m²` + (o.areaReg ? `，登記 ${o.areaReg.toFixed(0)}` : '') + `；切出 ${esc(o.on || !o.off ? o.created || '' : '')} ${(o.areaCut || 0).toFixed(1)} m²` + (o.off ? `<span class="muted">（${esc(o.off)}，預設不切）</span>` : ''))); else if (o.kind === 'refine') parts.push(row(i, o, `線 ${o.a}–${o.b} 依墨線加 ${o.pts.length} 點（彎出 ${o.bent.toFixed(1)} m）`)); else if (o.kind === 'merge') parts.push(row(i, o, `${esc(o.drop)} 併入 ${esc(o.keep)}（共用線 ${o.len.toFixed(0)} m 沒有墨線）`)); });
+  if (skipped.length) parts.push(`<div class="muted" style="margin-top:4px">未處理 ${skipped.length} 處：${skipped.slice(0, 8).map(s => `<a href="#" data-afxy="${s.x},${s.y}">${esc(s.why)} ${s.len.toFixed(0)} m</a>`).join('、')}</div>`);
+  if (noInk.length) parts.push(`<div class="muted" style="margin-top:2px">界線底下找不到墨線 ${noInk.length} 段、共 ${noInk.reduce((t, n) => t + n.len, 0).toFixed(0)} m（圖上紫虛線，未自動處理）</div>`);
+  $('afList').innerHTML = parts.join('');
+}
+function drawAutoFix() {
+  const a = S.af; ctx.save(); const b = a.box, line = (pts, close) => { ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)))); if (close) ctx.closePath(); ctx.stroke(); };
+  ctx.setLineDash([8, 5]); ctx.lineWidth = 1.5; ctx.strokeStyle = '#1971c2'; ctx.strokeRect(toSx(b.x0), toSy(b.y1), toSx(b.x1) - toSx(b.x0), toSy(b.y0) - toSy(b.y1));
+  ctx.strokeStyle = '#f08c00'; ctx.setLineDash([5, 4]); for (const r of a.ghost || []) line(r, true);
+  ctx.strokeStyle = '#ae3ec9'; ctx.setLineDash([2, 4]); ctx.lineWidth = 2; for (const n of a.res.noInk) { const p = S.ds.points.get(n.a), q = S.ds.points.get(n.b); if (p && q) line([p, q]); }
+  ctx.setLineDash([]); afOn().forEach(o => { ctx.strokeStyle = '#2f9e44'; ctx.lineWidth = o === a.focus ? 6 : 3; if (o.ids) line(o.ids.map(id => S.ds.points.get(id)).filter(Boolean)); /* 用現在的點位畫，微調後綠線跟著動 */ else if (o.kind === 'move') { ctx.lineWidth = 1.5; line([o.from, o.to]); ctx.beginPath(); ctx.arc(toSx(o.to.x), toSy(o.to.y), 4, 0, 7); ctx.stroke(); } });
+  ctx.restore();
+}
+function afGo(pts) { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity; for (const q of pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); } const m = Math.max(8, (x1 - x0 + y1 - y0) * 0.25); fit({ x0: x0 - m, x1: x1 + m, y0: y0 - m, y1: y1 + m }); }
+$('afBox').onclick = () => (S.afArm ? (S.afArm = false, setHint(''), afPanel()) : afArm()); $('afAccept').onclick = afAccept; $('afCancel').onclick = () => { if (S.undo.length - 1 > S.undo.lastIndexOf(S.af.entry) && !confirm('放棄自動修正，連你的微調一起回到框選前？')) return; afCancel(); }; $('afAlign').onclick = afAlignImage;
+$('afList').addEventListener('change', e => { const t = e.target, a = S.af; if (!a) return; const snap = a.ops.map(o => o.on); if (t.dataset.afop != null) a.ops[+t.dataset.afop].on = t.checked; else if ('afmv' in t.dataset) for (const o of a.ops) if (o.kind === 'move') o.on = t.checked; if (!afReplay()) a.ops.forEach((o, i) => { o.on = snap[i]; }), afPanel(); });
+$('afList').addEventListener('click', e => { const t = e.target.closest('a'); if (!t || !S.af) return; e.preventDefault(); if (t.dataset.afxy) { const [x, y] = t.dataset.afxy.split(',').map(Number); afGo([{ x, y }]); return; } const o = S.af.ops[+t.dataset.afgo]; if (!o) return; S.af.focus = o; afGo(o.kind === 'cut' ? [o.A, o.B, ...o.pts] : o.kind === 'merge' ? [o.A, o.B] : o.pts); draw(); });
+
 // ── 分幅線（v0.28.0）：分幅舊圖各幅的接合處。步驟 2 一鍵加入（載入兩幅以上的分幅舊圖時自動加入）；待修清單優先排分幅線附近的地號 ──
 S.sheet = null;   // { segs, pairs, length, show, near（附近宗地，依線排序）, nearKey }
 const sheetDist = () => { const v = parseFloat($('sheetDist').value); return Number.isFinite(v) && v > 0 ? v : 10; };
@@ -2449,7 +2529,7 @@ function projState() {
     nb: S.nb.map(n => ({ name: n.name, mode: n.mode, visible: n.visible })), settings, log: S.log, notes: S.notes, ms: S.ms, progress: projProgress(), summary: { case: caseBase(), fixed, rows: S.chk.res ? S.chk.res.rows.length : 0 } };
 }
 function projApply(st) {
-  Core.applyDatasetState(S.ds, st.ds); S.undo.length = S.redo.length = 0; clearSel(); S.hover = null;
+  Core.applyDatasetState(S.ds, st.ds); S.undo.length = S.redo.length = 0; clearSel(); S.hover = null; if (S.af) afEnd();
   for (const [id, v] of Object.entries(st.settings || {})) { const el = $(id); if (!el) continue; if (el.type === 'checkbox' || el.type === 'radio') el.checked = !!v; else el.value = v; }
   S.wf = st.wf || {}; S.bl.res = st.bl || null; S.chk.res = st.chk ? { ...st.chk.res, bl: S.bl.res } : null; S.chk.ok = new Set(st.chk ? st.chk.ok : []); S.chk.focus = null;
   if (st.tq) { $('tqSrc').value = st.tq.src || 'chk'; S.tq.i = st.tq.i ?? -1; S.tq.done = new Set(st.tq.done || []); }
@@ -2867,6 +2947,12 @@ const api = {
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
   exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
   // 待修清單（給 AI 逐筆修）：source 同工具箱下拉 chk／neg／area／unreg／ring／sheet；省略＝目前選的
+  // 依舊圖自動修正：autoFixBox 框選範圍並套用預覽（可傳 tol／minLen／move／refine／cut），getAutoFix 看項目，autoFixSet 開關某項（index，移點一起開關用 kind:'move'），autoFixAccept／autoFixCancel 結束預覽
+  autoFixBox: async ({ x0, y0, x1, y1, ...o }) => afRun({ x0, y0, x1, y1 }, o),
+  getAutoFix: () => afReport(),
+  autoFixSet: ({ index, kind, on }) => { if (!S.af) throw new Error('沒有進行中的預覽'); if (kind) S.af.ops.filter(o => o.kind === kind).forEach(o => { o.on = !!on; }); else { const o = S.af.ops[index]; if (!o) throw new Error('沒有這個項目'); o.on = !!on; } afReplay(true); return afReport(); },
+  autoFixAccept: () => { if (!S.af) throw new Error('沒有進行中的預覽'); return afAccept(); },
+  autoFixCancel: () => { if (!S.af) throw new Error('沒有進行中的預覽'); return afCancel(); },
   listFixQueue: ({ source, limit = 100 } = {}) => { tqSetSrc(source); const l = tqLive(); return { source: $('tqSrc').value, total: l.length, items: l.slice(0, limit).map(x => ({ label: x.label, text: x.text, note: S.notes[x.label] || '' })) }; },
   gotoFixItem: ({ source, label }) => { tqSetSrc(source); const l = tqLive(), i = l.findIndex(x => x.label === String(label)); if (i < 0) throw new Error('待修清單沒有 ' + label); S.tq.i = i; tqGo(0); return { ...l[i], rings: undefined, key: undefined, position: `${i + 1} / ${l.length}` }; },
   markFixed: ({ source, label, note }) => { tqSetSrc(source); const it = tqLive().find(x => x.label === String(label)); if (!it) throw new Error('待修清單沒有 ' + label); if (note) S.notes[it.label] = S.notes[it.label] ? S.notes[it.label] + '／' + note : note;

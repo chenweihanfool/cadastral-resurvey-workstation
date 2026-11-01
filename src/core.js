@@ -2985,6 +2985,214 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     return out.sort((u, v) => (u.pair === v.pair ? u.t - v.t : (pairLen.get(v.pair) || 0) - (pairLen.get(u.pair) || 0) || u.pair.localeCompare(v.pair)));
   }
 
+  // ── 框選依舊圖自動修正（v0.32.0）：使用者框一個範圍，依舊圖影像的墨線調整作業圖。步驟：
+  // 1. 墨線遮罩＋距離場（背景半徑比檢核小，河道的淡色帶不算線）；框內先求一個平移（舊圖掃描與作業圖的局部偏移），墨線一律先換回作業圖坐標。
+  // 2. 移點：界址點在 ±tol m 內找讓「點本身＋相鄰界址線」最貼墨線的位置（段界點預設不動，維持與鄰段密合）。
+  // 3. 線加點：界址線兩端都在墨線上、中間墨線彎出去（≥ bend m）就沿墨線補點，鄰宗同步插入。
+  // 4. 切面：離所有界址線 > explain m 的黑線連成一片，兩端都接到界線（≤ attach m）就沿線切開；文字、符號、虛線接不到界線，自然不算。
+  //    保留面積最接近登記面積的一塊，其餘建為未登記地（母號 opt.mother）；切了沒有更接近登記面積的列出來但預設不做（op.off＝原因）。
+  // 每一步都用 localConflicts 把關：做了會多出交錯／重疊就不做。結果是一串可逐項關閉、以坐標描述的 ops（autoFixApply 可重放），由介面預覽、微調後才接受。
+  const AUTOFIX_DEFAULT = { shift: 5, cap: 2, tol: 2.5, context: 60, reach: 15, explain: 1, attach: 2.5, gap: 0.8, minLen: 6, minFace: 5, snapV: 1, simplify: 0.35, bend: 0.5, bg: 1.4, dark: 22, red: 22, lockOutline: true, areaGuard: true, move: true, refine: true, cut: true, maxCuts: 24, maxPts: 30, mother: 0 };
+  function afRaster(region, o) {
+    const { rgba, w, h, wf } = region, px = Math.hypot(wf.a, wf.d), det = wf.a * wf.e - wf.b * wf.d;
+    const M = inkMask(rgba, w, h, { red: o.red, dark: o.dark, bgPx: Math.max(2, o.bg / px) }), D = distanceField(M, w, h);
+    const R = { M, D, w, h, wf, px, det, dx: 0, dy: 0 };
+    R.idx = (x, y) => { const X = x + R.dx - wf.c, Y = y + R.dy - wf.f, u = Math.round((wf.e * X - wf.b * Y) / det), v = Math.round((-wf.d * X + wf.a * Y) / det); return u < 0 || v < 0 || u >= w || v >= h ? -1 : v * w + u; };
+    R.world = i => { const u = i % w, v = (i - u) / w; return { x: wf.a * u + wf.b * v + wf.c - R.dx, y: wf.d * u + wf.e * v + wf.f - R.dy }; };
+    R.dist = (x, y) => { const i = R.idx(x, y); return i < 0 ? Infinity : D[i] * px; };
+    let I = null;   // 線內到線緣的距離：落點收到墨線中心（距離場在線內全是 0，不收的話會停在靠原位那一側，差半個線寬）
+    R.center = (x, y) => { if (!I) I = distanceField(Uint8Array.from(M, v => (v ? 0 : 1)), w, h); const i0 = R.idx(x, y); if (i0 < 0 || D[i0] > 0) return { x, y }; const r = Math.max(1, Math.round(0.5 / px)), u0 = i0 % w, v0 = (i0 - u0) / w; let best = i0, bv = I[i0]; for (let dv = -r; dv <= r; dv++) for (let du = -r; du <= r; du++) { const u = u0 + du, v = v0 + dv; if (u < 0 || v < 0 || u >= w || v >= h) continue; const j = v * w + u; if (I[j] > bv + 1e-6) { bv = I[j]; best = j; } } return best === i0 ? { x, y } : R.world(best); };
+    return R;
+  }
+  const afLive = (ds, e) => e.parcels.filter(i => !ds.parcels[i].deleted);
+  function afEdges(ds, box) {   // 框內（含穿過框）的界址線
+    const P = ds.points, out = [];
+    for (const e of ds.edges.values()) { const a = P.get(e.a), b = P.get(e.b); if (!a || !b || !afLive(ds, e).length) continue; if (Math.max(a.x, b.x) < box.x0 || Math.min(a.x, b.x) > box.x1 || Math.max(a.y, b.y) < box.y0 || Math.min(a.y, b.y) > box.y1) continue; out.push(e); }
+    return out;
+  }
+  // 框內平移：同 inkBlock 的粗搜＋細搜（距離封頂，少數偏很遠的線不影響）
+  function afShift(ds, R, box, o) {
+    const smp = []; for (const e of afEdges(ds, box)) { const a = ds.points.get(e.a), b = ds.points.get(e.b), L = Math.hypot(b.x - a.x, b.y - a.y), n = Math.max(1, Math.round(L / 0.6)); for (let k = 0; k <= n; k++) { const x = a.x + (b.x - a.x) * k / n, y = a.y + (b.y - a.y) * k / n; if (x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1) smp.push({ x, y }); } }
+    if (!smp.length) throw new Error('框內沒有界址線');
+    const at = (x, y) => { const X = x - R.wf.c, Y = y - R.wf.f, u = Math.round((R.wf.e * X - R.wf.b * Y) / R.det), v = Math.round((-R.wf.d * X + R.wf.a * Y) / R.det); return u < 0 || v < 0 || u >= R.w || v >= R.h ? -1 : v * R.w + u; };
+    const cost = (dx, dy) => { let c = 0, n = 0; for (const q of smp) { const i = at(q.x + dx, q.y + dy); if (i < 0) continue; c += Math.min(R.D[i] * R.px, o.cap); n++; } return n ? c / n : o.cap; };
+    let best = { dx: 0, dy: 0, c: cost(0, 0) };
+    const scan = (cx, cy, r, st) => { for (let dx = cx - r; dx <= cx + r + 1e-9; dx += st) for (let dy = cy - r; dy <= cy + r + 1e-9; dy += st) { if (Math.abs(dx) > o.shift + 1e-9 || Math.abs(dy) > o.shift + 1e-9) continue; const c = cost(dx, dy); if (c < best.c - 1e-9) best = { dx, dy, c }; } };
+    scan(0, 0, Math.ceil(o.shift), 1); const b0 = best; scan(b0.dx, b0.dy, 1, 0.25);
+    let ok = 0, all = 0; for (const q of smp) { const i = at(q.x + best.dx, q.y + best.dy); if (i < 0) continue; all++; if (R.D[i] * R.px <= 0.6) ok++; }
+    R.dx = best.dx; R.dy = best.dy; return { dx: best.dx, dy: best.dy, fit: all ? ok / all : 0, samples: all };
+  }
+  function afNewConflicts(ds, idxs, base) { return localConflicts(ds, idxs).filter(c => c.kind !== 'tee' && !base.has(c.text)).length; }
+  const afBase = (ds, idxs) => new Set(localConflicts(ds, idxs).filter(c => c.kind !== 'tee').map(c => c.text));
+  // 面積閘門：這些宗地裡登記地的 |計算－登記| 總和。KC0336 實測：貼墨線不看面積時，沒問題的區域多數宗地反而離登記面積更遠（圖解圖本來就有誤差），所以移點、加點都不可讓它變差
+  const afAreaGap = (ds, idxs) => { let s = 0; for (const i of new Set(idxs)) { const p = ds.parcels[i]; if (p && !p.deleted && p.areaReg > 0) s += Math.abs(parcelArea(ds, p) - p.areaReg); } return s; };
+  // 2. 移點（逐點更新、3 輪，新位置會影響鄰點；直接改 ds，回傳 ops）
+  function afMoves(ds, R, box, o) {
+    const P = ds.points, nbr = new Map(), lock = new Set(), add = (a, b) => { if (!nbr.has(a)) nbr.set(a, []); nbr.get(a).push(b); };
+    for (const e of ds.edges.values()) { const live = afLive(ds, e); if (!live.length) continue; add(e.a, e.b); add(e.b, e.a); if (e.arcPart || (o.lockOutline && live.length < 2)) { lock.add(e.a); lock.add(e.b); } }
+    for (const p of ds.parcels) if (!p.deleted && ringHasArc(p)) for (const id of p.ids) lock.add(id);
+    const cost = (id, x, y) => { let c = 0, n = 0; for (const nb of nbr.get(id)) { const q = P.get(nb), L = Math.hypot(q.x - x, q.y - y); if (L < 1e-6) continue; const m = Math.min(L, o.reach), st = Math.max(2, Math.ceil(m / 0.6)); for (let k = 1; k <= st; k++) { const t = k / st * m / L; c += Math.min(R.dist(x + (q.x - x) * t, y + (q.y - y) * t), o.cap); n++; } }
+      const d0 = Math.min(R.dist(x, y), o.cap); return { c: (c + 3 * d0) / (n + 3), d0 }; };
+    const ids = [...nbr.keys()].filter(id => { const q = P.get(id); return q && !lock.has(id) && q.x >= box.x0 && q.x <= box.x1 && q.y >= box.y0 && q.y <= box.y1; });
+    const from = new Map(), r = Math.round(o.tol / 0.25);
+    for (let pass = 0; pass < 3; pass++) {
+      let moved = 0;
+      for (const id of ids) {
+        const q = P.get(id), c0 = cost(id, q.x, q.y); if (c0.c <= 0.25) continue; let best = null; const o0 = from.get(id) || q;   // 每輪都以原始位置為中心：貼合容差是總移動量的上限，不是每輪的
+        for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) { const m = Math.hypot(i, j) * 0.25; if (m > o.tol) continue; const x = o0.x + i * 0.25, y = o0.y + j * 0.25; if (R.dist(x, y) > 0.35) continue; if (nbr.get(id).some(nb => { const u = P.get(nb); return Math.hypot(u.x - x, u.y - y) < 0.3; })) continue; const v = cost(id, x, y), s = v.c + 0.03 * m; if (!best || s < best.s) best = { s, c: v.c, x, y }; }
+        if (!best || best.c > c0.c - 0.12 || Math.hypot(best.x - q.x, best.y - q.y) < 0.1) continue;
+        const parcels = (ds.pointParcels.get(id) || []).filter(i => !ds.parcels[i].deleted), base = afBase(ds, parcels), fx = q.x, fy = q.y, c1 = R.center(best.x, best.y), mid = Math.hypot(c1.x - o0.x, c1.y - o0.y) <= o.tol ? c1 : best, gap = afAreaGap(ds, parcels);
+        q.x = mid.x; q.y = mid.y; if (afNewConflicts(ds, parcels, base) || (o.areaGuard && afAreaGap(ds, parcels) > gap + 0.01)) { q.x = fx; q.y = fy; continue; }
+        if (!from.has(id)) from.set(id, { y: fy, x: fx }); moved++;
+      }
+      if (!moved) break;
+    }
+    const ops = []; for (const [id, f] of from) { const q = P.get(id), to = { y: q.y, x: q.x }; q.x = f.x; q.y = f.y; ops.push({ kind: 'move', id, from: f, to, dist: Math.hypot(to.x - f.x, to.y - f.y) }); }
+    if (ops.length) setPoints(ds, ops.map(m => [m.id, m.to.y, m.to.x]));
+    return ops.sort((u, v) => v.dist - u.dist);
+  }
+  // 在像素格上找最短路徑：allow(i) 可走的像素、weight(i) 每格權重；src、dst 為像素 Set。回傳像素序列或 null
+  function gridPath(w, h, allow, weight, src, dst, jump = 1) {
+    const dist = new Map(), prev = new Map(), H = []; const up = k => { while (k > 0) { const p = (k - 1) >> 1; if (H[p][0] <= H[k][0]) break; [H[p], H[k]] = [H[k], H[p]]; k = p; } }, down = k => { for (;;) { let m = k; const l = 2 * k + 1, r = l + 1; if (l < H.length && H[l][0] < H[m][0]) m = l; if (r < H.length && H[r][0] < H[m][0]) m = r; if (m === k) return; [H[m], H[k]] = [H[k], H[m]]; k = m; } };
+    const push = (d, i) => { H.push([d, i]); up(H.length - 1); }; for (const i of src) { dist.set(i, 0); push(0, i); }
+    while (H.length) { const [d, i] = H[0], last = H.pop(); if (H.length) { H[0] = last; down(0); } if (d > dist.get(i)) continue;
+      if (dst.has(i)) { const out = [i]; for (let k = i; prev.has(k);) { k = prev.get(k); out.push(k); } return { path: out.reverse(), cost: d }; }
+      const u = i % w, v = (i - u) / w;
+      for (let dv = -jump; dv <= jump; dv++) for (let du = -jump; du <= jump; du++) { if (!du && !dv) continue; const a = u + du, b = v + dv; if (a < 0 || b < 0 || a >= w || b >= h) continue; const j = b * w + a; if (!allow(j)) continue; const nd = d + Math.hypot(du, dv) * weight(j); if (nd < (dist.has(j) ? dist.get(j) : Infinity)) { dist.set(j, nd); prev.set(j, i); push(nd, j); } } }
+    return null;
+  }
+  function afSimplify(pts, eps) {   // Douglas–Peucker
+    const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1; const st = [[0, pts.length - 1]];
+    while (st.length) { const [i, j] = st.pop(); if (j <= i + 1) continue; const A = pts[i], B = pts[j], L = Math.hypot(B.x - A.x, B.y - A.y) || 1e-9; let m = -1, md = eps; for (let k = i + 1; k < j; k++) { const d = Math.abs((B.x - A.x) * (pts[k].y - A.y) - (B.y - A.y) * (pts[k].x - A.x)) / L; if (d > md) { md = d; m = k; } } if (m >= 0) { keep[m] = 1; st.push([i, m], [m, j]); } }
+    return pts.filter((_, k) => keep[k]);
+  }
+  // 3. 線加點
+  function afRefine(ds, R, box, o) {
+    const P = ds.points, ops = [];
+    for (const e of afEdges(ds, box)) {
+      if (e.arcPart) continue; const A = P.get(e.a), B = P.get(e.b), L = Math.hypot(B.x - A.x, B.y - A.y); if (L < 4) continue;
+      if (R.dist(A.x, A.y) > 0.6 || R.dist(B.x, B.y) > 0.6) continue;
+      let off = 0; const n = Math.ceil(L / 0.6); for (let k = 1; k < n; k++) off = Math.max(off, R.dist(A.x + (B.x - A.x) * k / n, A.y + (B.y - A.y) * k / n)); if (off < o.bend) continue;
+      const s = R.idx(A.x, A.y), t = R.idx(B.x, B.y); if (s < 0 || t < 0) continue; const lim = (o.tol / R.px) * (o.tol / R.px), W = R.w;
+      const ax = s % W, ay = (s - ax) / W, bx = t % W, by = (t - bx) / W, l2 = (bx - ax) ** 2 + (by - ay) ** 2 || 1;
+      const allow = i => { const u = i % W, v = (i - u) / W, tt = Math.max(0, Math.min(1, ((u - ax) * (bx - ax) + (v - ay) * (by - ay)) / l2)); return (u - ax - tt * (bx - ax)) ** 2 + (v - ay - tt * (by - ay)) ** 2 <= lim; };
+      const g = gridPath(R.w, R.h, allow, i => 1 + 4 * Math.min(R.D[i], 6), new Set([s]), new Set([t])); if (!g) continue;
+      const pts = g.path.map(i => R.world(i)); let len = 0, onInk = 0; for (let k = 1; k < pts.length; k++) len += Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y); for (const i of g.path) if (R.D[i] * R.px <= 0.35) onInk++;
+      if (len > 1.5 * L + 2 || onInk < 0.85 * g.path.length) continue;
+      const line = afSimplify([{ x: A.x, y: A.y }, ...pts.slice(1, -1), { x: B.x, y: B.y }], o.simplify).slice(1, -1); if (!line.length) continue;
+      if (Math.max(...line.map(q => Math.abs((B.x - A.x) * (q.y - A.y) - (B.y - A.y) * (q.x - A.x)) / L)) < o.bend) continue;
+      const op = { kind: 'refine', a: e.a, b: e.b, pts: line.map(q => ({ y: q.y, x: q.x })), len: L, bent: off }, parcels = afLive(ds, e), base = afBase(ds, parcels), gap = afAreaGap(ds, parcels), r = afApplyRefine(ds, op);
+      if (r && (afNewConflicts(ds, parcels, base) || (o.areaGuard && afAreaGap(ds, parcels) > gap + 0.01))) { applyDelta(ds, r, 'undo'); continue; } if (r) ops.push(op);
+    }
+    return ops;
+  }
+  function afApplyRefine(ds, op) {
+    if (!ds.edges.get(segKey(op.a, op.b))) return null; const d = newDelta(); let a = op.a; op.ids = [op.a];
+    for (const q of op.pts) { const r = insertPoint(ds, a, op.b, q.y, q.x, { project: false }); mergeDelta(d, r.delta); a = r.id; op.ids.push(a); }
+    op.ids.push(op.b); return closeDelta(ds, d);
+  }
+  // 沿折線切開：A、B＝{id} 或 {edge:[u,v], y, x}（線上加點，鄰宗同步），pts＝中間新點。opt.mother 新宗地母號（省略＝同母號）、opt.keepNear 保留面積最接近此值的一塊（省略＝較大者）
+  function splitByPath(ds, pi, A, B, pts, opt = {}) {
+    const p = ds.parcels[pi]; if (!p || p.deleted) throw new Error('宗地不存在'); if (ringHasArc(p)) throw new Error(`${p.label} 含圓弧，暫不支援`);
+    if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，暫不支援切開`);
+    const d = newDelta(), fail = msg => { applyDelta(ds, closeDelta(ds, d), 'undo'); throw new Error(msg); }, end = E => { if (E.id != null) return E.id; let [u, v] = E.edge; if (!ds.edges.get(segKey(u, v))) { const t = afAttach(ds, p, E, 0, 0.5); if (!t || !t.edge) fail('切線端點已不在界線上'); [u, v] = t.edge; } const r = insertPoint(ds, u, v, E.y, E.x); mergeDelta(d, r.delta); return r.id; };   // 兩端落在同一條線時，先插的點會把線拆開，後一端要重找
+    const a = end(A), b = end(B); if (a === b) fail('切線兩端是同一點');
+    const ring = ccwIds(p.ids, ds.points), i = ring.indexOf(a), j = ring.indexOf(b); if (i < 0 || j < 0) fail(`切線兩端都要在 ${p.label} 的界線上`);
+    const line = [ds.points.get(a), ...pts, ds.points.get(b)], n = ring.length, RP = ring.map(id => ds.points.get(id)), cr = (o, u, v) => (u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x);
+    for (let k = 0; k + 1 < line.length; k++) { const U = line[k], V = line[k + 1];
+      for (let m = 0; m < n; m++) { const m2 = (m + 1) % n; if (ring[m] === a || ring[m2] === a || ring[m] === b || ring[m2] === b) { if ((k === 0 || k === line.length - 2)) continue; } const C = RP[m], D = RP[m2], d1 = cr(U, V, C), d2 = cr(U, V, D), d3 = cr(C, D, U), d4 = cr(C, D, V); if (d1 * d2 < 0 && d3 * d4 < 0) fail('切線穿出宗地'); }
+      if (!pointInRing(ring, ds.points, (U.y + V.y) / 2, (U.x + V.x) / 2)) fail('切線不在宗地內'); }
+    for (let u = 0; u + 1 < line.length; u++) for (let v = u + 2; v + 1 < line.length; v++) { const U = line[u], V = line[u + 1], X = line[v], Y = line[v + 1]; if (cr(U, V, X) * cr(U, V, Y) < 0 && cr(X, Y, U) * cr(X, Y, V) < 0) fail('切線自我交錯'); }
+    touchParcel(d, p); const mid = pts.map(q => { const id = nextPointId(ds), np = { id, y: q.y, x: q.x, y0: q.y, x0: q.x, row: null, added: true }; ds.points.set(id, np); d.added.push(np); return id; });
+    const walk = (s, e) => { const out = [ring[s]]; for (let k = s; k !== e;) { k = (k + 1) % n; out.push(ring[k]); } return out; }, c1 = walk(i, j).concat(mid.slice().reverse()), c2 = walk(j, i).concat(mid);
+    const a1 = Math.abs(signedArea(c1, ds.points)), a2 = Math.abs(signedArea(c2, ds.points)), near = opt.keepNear, first = near > 0 ? Math.abs(a1 - near) <= Math.abs(a2 - near) : a1 >= a2, [big, small] = first ? [c1, c2] : [c2, c1];
+    p.ids = big; p.mid = big.map(() => false); p.unregEdit = true; const q = createParcel(ds, d, opt.mother || mainNo(p), small, p);
+    return { delta: closeDelta(ds, d), keep: p.label, created: q.label, idx: q.idx, areaKeep: Math.max(first ? a1 : a2, 0), areaCut: first ? a2 : a1, points: mid, ids: [a, ...mid, b] };
+  }
+  // 點 Q 接到宗地環：離既有點 ≤ snapV 用既有點，否則投影到最近的邊（max m 內）
+  function afAttach(ds, p, Q, snapV, max) {
+    const P = ds.points; let bv = null, bd = snapV; for (const id of p.ids) { const q = P.get(id), v = Math.hypot(q.x - Q.x, q.y - Q.y); if (v <= bd) { bd = v; bv = id; } } if (bv != null) return { id: bv, dist: bd };
+    let be = null, ed = max; for (let i = 0; i < p.ids.length; i++) { const u = p.ids[i], v = p.ids[(i + 1) % p.ids.length], A = P.get(u), B = P.get(v), bx = B.x - A.x, by = B.y - A.y, l2 = bx * bx + by * by; if (!l2) continue; const t = Math.max(0, Math.min(1, ((Q.x - A.x) * bx + (Q.y - A.y) * by) / l2)), x = A.x + t * bx, y = A.y + t * by, dd = Math.hypot(Q.x - x, Q.y - y); if (dd <= ed) { ed = dd; be = { edge: [u, v], y, x, dist: dd }; } }
+    return be;
+  }
+  function afParcelAt(ds, y, x) { let best = null; for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3) continue; if (pointInRing(p.ids, ds.points, y, x) && !(p.holes || []).some(h => pointInRing(ds.parcels[h].ids, ds.points, y, x)) && (!best || p.area < best.area)) best = p; } return best; }
+  // 試切後還原：新宗地要整筆拿掉，留著會是「已刪除」的空殼，與下一筆切出的宗地同地號
+  function afUndoCut(ds, r) { applyDelta(ds, r.delta, 'undo'); if (ds.parcels[ds.parcels.length - 1].idx === r.idx) { ds.parcels.pop(); buildTopology(ds); } }
+  function afApplyCut(ds, op, o) {
+    const m = op.pts[Math.floor(op.pts.length / 2)] || { y: (op.A.y + op.B.y) / 2, x: (op.A.x + op.B.x) / 2 }, n = op.pts.length ? null : m, p = afParcelAt(ds, m.y, m.x); if (!p) throw new Error('切線不在宗地內'); void n;
+    const A = afAttach(ds, p, op.A, o.snapV, o.attach + 1), B = afAttach(ds, p, op.B, o.snapV, o.attach + 1); if (!A || !B) throw new Error(`切線端點接不到 ${p.label} 的界線`);
+    const mother = mainNo(p) >= UNREG_MIN ? mainNo(p) : o.mother || UNREG_MIN + 1; return splitByPath(ds, p.idx, A, B, op.pts, { mother, keepNear: p.areaReg });
+  }
+  // 4. 切面：回傳 { ops, skipped:[{why, x, y, len}] }
+  function afCuts(ds, R, box, o) {
+    const { w, h, px } = R, N = w * h, ops = [], skipped = [], ink = Uint8Array.from(R.M, v => (v === 1 ? 1 : 0));
+    const edgeMask = new Uint8Array(N), stamp = (a, b) => { const n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (px * 0.7)) + 1; for (let k = 0; k <= n; k++) { const i = R.idx(a.x + (b.x - a.x) * k / n, a.y + (b.y - a.y) * k / n); if (i >= 0) edgeMask[i] = 1; } };
+    const hasRing = () => { for (const e of ds.edges.values()) { if (!afLive(ds, e).length) continue; const a = ds.points.get(e.a), b = ds.points.get(e.b); if (a && b) stamp(a, b); } }; hasRing();
+    const inBox = i => { const q = R.world(i); return q.x >= box.x0 && q.x <= box.x1 && q.y >= box.y0 && q.y <= box.y1; }, g = Math.max(1, Math.round(o.gap / px));
+    for (let round = 0; round < o.maxCuts; round++) {
+      const E = distanceField(edgeMask, w, h), resid = new Uint8Array(N); for (let i = 0; i < N; i++) if (ink[i] && E[i] * px > o.explain && inBox(i)) resid[i] = 1;
+      const comp = new Int32Array(N), comps = []; let c = 0;
+      for (let s = 0; s < N; s++) { if (!resid[s] || comp[s]) continue; c++; const st = [s], list = []; comp[s] = c; while (st.length) { const i = st.pop(); list.push(i); const u = i % w, v = (i - u) / w; for (let dv = -g; dv <= g; dv++) for (let du = -g; du <= g; du++) { const a = u + du, b = v + dv; if (a < 0 || b < 0 || a >= w || b >= h) continue; const j = b * w + a; if (resid[j] && !comp[j]) { comp[j] = c; st.push(j); } } } comps.push(list); }
+      const cands = [];
+      for (const list of comps) {
+        let u0 = w, u1 = 0, v0 = h, v1 = 0; for (const i of list) { const u = i % w, v = (i - u) / w; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); } if (Math.hypot(u1 - u0, v1 - v0) * px < o.minLen) continue;
+        const near = list.filter(i => E[i] * px <= o.attach), seen = new Set(), groups = [], nearSet = new Set(near);   // 接點群：接近界線的像素依相連分群，每群取最靠近界線者
+        for (const s of near) { if (seen.has(s)) continue; const st = [s], gp = []; seen.add(s); while (st.length) { const i = st.pop(); gp.push(i); const u = i % w, v = (i - u) / w; for (let dv = -g; dv <= g; dv++) for (let du = -g; du <= g; du++) { const j = (v + dv) * w + u + du; if (nearSet.has(j) && !seen.has(j)) { seen.add(j); st.push(j); } } } groups.push(gp); }
+        if (groups.length < 2) { let len = 0; if (groups.length === 1) len = Math.hypot(u1 - u0, v1 - v0) * px; if (len >= 3 * o.minLen) { const q = R.world(list[0]); skipped.push({ why: '墨線只有一端接到界線', y: q.y, x: q.x, len }); } for (const i of list) ink[i] = 0; continue; }
+        const ends = groups.map(gp => gp.reduce((a, b) => (E[b] < E[a] ? b : a))), mine = new Set(list), wt = i => { const u = i % w; return 1 + (u > 0 && u < w - 1 && i >= w && i < N - w && R.M[i - 1] && R.M[i + 1] && R.M[i - w] && R.M[i + w] ? 0 : 2); };
+        let best = null; for (let a = 0; a < ends.length; a++) for (let b = a + 1; b < ends.length; b++) { const r = gridPath(w, h, i => mine.has(i), wt, new Set([ends[a]]), new Set([ends[b]]), g); if (r && (!best || r.path.length > best.path.length)) best = r; }
+        if (best) cands.push({ list, path: best.path }); else for (const i of list) ink[i] = 0;
+      }
+      if (!cands.length) break; cands.sort((u, v) => v.path.length - u.path.length); const { list, path } = cands[0]; for (const i of list) ink[i] = 0;
+      const pts = path.map(i => R.world(i)); let len = 0; for (let k = 1; k < pts.length; k++) len += Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y); const mid = pts[pts.length >> 1], q = afParcelAt(ds, mid.y, mid.x);
+      if (len < o.minLen) continue; if (!q) { skipped.push({ why: '墨線在宗地外（可能是空隙）', y: mid.y, x: mid.x, len }); continue; }
+      const line = afSimplify(pts, o.simplify), op = { kind: 'cut', A: { y: line[0].y, x: line[0].x }, B: { y: line[line.length - 1].y, x: line[line.length - 1].x }, pts: line.slice(1, -1).map(p => ({ y: p.y, x: p.x })), len, parcel: q.label };
+      const idxs = [q.idx], base = afBase(ds, idxs); let r;
+      try { r = afApplyCut(ds, op, o); } catch (e) { skipped.push({ why: e.message, y: mid.y, x: mid.x, len }); continue; }
+      if (r.areaCut < o.minFace || afNewConflicts(ds, [q.idx, r.idx], base)) { afUndoCut(ds, r); skipped.push({ why: r.areaCut < o.minFace ? `切出面積 ${r.areaCut.toFixed(1)} m² 太小` : '切開後會有交錯', y: mid.y, x: mid.x, len }); continue; }
+      const dep = ops.find(c => !c.off && c.created === q.label);   // 切的是前一刀切出來的塊：前一刀關掉時這刀不可重放（否則會切到原宗地上）
+      op.created = r.created; op.keep = r.keep; op.areaCut = r.areaCut; op.areaKeep = r.areaKeep; op.areaReg = ds.parcels[q.idx].areaReg || 0; op.ids = r.ids; op.seq = ops.length + 1; if (dep) op.dep = dep.seq; ops.push(op);
+      // 面積是最強的佐證：KC0336 真的該切的，切完都更接近登記面積（120-1 +743→-68）；離登記更遠的多半是舊圖上已合併的線（989-4 -43→-13077）。
+      // 這種、以及未登記地內部的線，只列出來預設不勾，先還原
+      const before = Math.abs(r.areaKeep + r.areaCut - op.areaReg), after = Math.abs(r.areaKeep - op.areaReg);
+      if (!op.areaReg || after >= before - 1) { op.off = op.areaReg ? '切了離登記面積更遠' : '未登記地內部的線'; afUndoCut(ds, r); continue; }
+      const ids = ds.parcels[r.idx].ids; for (let k = 0; k < ids.length; k++) stamp(ds.points.get(ids[k]), ds.points.get(ids[(k + 1) % ids.length]));
+    }
+    return { ops, skipped };
+  }
+  // 5. 這次切出來的塊彼此相鄰、共用界線底下沒有墨線（例：河道被原本跨河的界址線分成兩塊）就併成一筆。只併這次新建的，既有未登記地是分割過的，不動。
+  function afMerges(ds, R, cuts, o) {
+    const ops = [], labels = new Set(cuts.map(c => c.created));
+    for (let again = true; again;) {
+      again = false; const list = ds.parcels.filter(p => !p.deleted && labels.has(p.label));
+      for (let i = 0; i < list.length && !again; i++) for (let j = i + 1; j < list.length && !again; j++) {
+        const p = list[i], q = list[j]; if (p.ids.length + q.ids.length - 2 > o.maxPts + 2) continue; let len = 0, ok = 0, n = 0;
+        for (let k = 0; k < p.ids.length; k++) { const a = p.ids[k], b = p.ids[(k + 1) % p.ids.length], e = ds.edges.get(segKey(a, b)); if (!e || !e.parcels.includes(q.idx)) continue; const A = ds.points.get(a), B = ds.points.get(b), L = Math.hypot(B.x - A.x, B.y - A.y), st = Math.ceil(L / 0.6); len += L; for (let t = 0; t <= st; t++) { n++; if (R.dist(A.x + (B.x - A.x) * t / st, A.y + (B.y - A.y) * t / st) <= 0.8) ok++; } }
+        if (!len || ok > 0.3 * n) continue;
+        const [keep, drop] = p.area >= q.area ? [p, q] : [q, p], op = { kind: 'merge', A: interiorPoint(keep.ids, ds.points), B: interiorPoint(drop.ids, ds.points), keep: keep.label, drop: drop.label, len }; try { const r = mergeParcels(ds, [p.idx, q.idx], keep.idx); op.area = keep.area; void r; ops.push(op); labels.delete(drop.label); again = true; } catch (e) { /* 合併後會有空洞或不相連：留著 */ }
+      }
+    }
+    return ops;
+  }
+  function afApplyMerge(ds, op) { const p = afParcelAt(ds, op.A.y, op.A.x), q = afParcelAt(ds, op.B.y, op.B.x); if (!p || !q || p === q || !p.created || !q.created) throw new Error('要合併的兩塊已不存在'); mergeParcels(ds, [p.idx, q.idx], p.idx); }
+  // 主程式：直接修改 ds，回傳 { ops, shift, px, skipped, noInk }。region＝{ rgba, w, h, wf }，box＝{x0,y0,x1,y1}（作業圖坐標）
+  // 平移用框外擴 context m 來求：框得很小時，平移會把真正要修的偏差吃掉（只框一條線，那條線偏 1.5 m 就被當成影像偏移），呼叫端讀影像要包含這段外擴
+  function autoFixRun(ds, region, box, opt = {}) {
+    const o = { ...AUTOFIX_DEFAULT, ...opt }, c = o.context, R = afRaster(region, o), shift = afShift(ds, R, { x0: box.x0 - c, x1: box.x1 + c, y0: box.y0 - c, y1: box.y1 + c }, o), ops = [];
+    if (shift.fit < 0.2) throw new Error(`這一帶影像與作業圖對不上（只有 ${(shift.fit * 100).toFixed(0)}% 的界址線找得到墨線），請檢查影像定位`);
+    if (o.move) ops.push(...afMoves(ds, R, box, o)); if (o.refine) ops.push(...afRefine(ds, R, box, o)); const cut = o.cut ? afCuts(ds, R, box, o) : { ops: [], skipped: [] }; ops.push(...cut.ops, ...afMerges(ds, R, cut.ops.filter(q => !q.off), o));
+    const noInk = []; for (const e of afEdges(ds, box)) { const a = ds.points.get(e.a), b = ds.points.get(e.b), L = Math.hypot(b.x - a.x, b.y - a.y); if (L < 4) continue; let ok = 0; const n = Math.ceil(L / 0.6); for (let k = 0; k <= n; k++) if (R.dist(a.x + (b.x - a.x) * k / n, a.y + (b.y - a.y) * k / n) <= 0.8) ok++; if (ok < 0.4 * (n + 1)) noInk.push({ a: e.a, b: e.b, len: L }); }
+    return { ops, shift, px: R.px, skipped: cut.skipped, noInk, opt: o };
+  }
+  // 重放（使用者關掉某些項目後，從修正前狀態重做）：回傳做不成的項目 [{op, why}]
+  function autoFixApply(ds, ops, opt = {}) {
+    const o = { ...AUTOFIX_DEFAULT, ...opt }, failed = [], done = new Set(), mv = ops.filter(q => q.kind === 'move' && ds.points.has(q.id)); if (mv.length) setPoints(ds, mv.map(m => [m.id, m.to.y, m.to.x]));
+    for (const op of ops) { if (op.kind === 'refine') { try { if (!afApplyRefine(ds, op)) failed.push({ op, why: '這條線已不存在' }); } catch (e) { failed.push({ op, why: e.message }); } }
+      else if (op.kind === 'cut') { if (op.dep && !done.has(op.dep)) { failed.push({ op, why: '它切的那一塊來自被關掉的項目' }); continue; } try { const r = afApplyCut(ds, op, o); op.created = r.created; op.areaCut = r.areaCut; op.areaKeep = r.areaKeep; op.ids = r.ids; done.add(op.seq); } catch (e) { failed.push({ op, why: e.message }); } }
+      else if (op.kind === 'merge') { try { afApplyMerge(ds, op); } catch (e) { failed.push({ op, why: e.message }); } } }
+    return failed;
+  }
+
   // ── 即時檢查（v0.29.0）：只看 idxs（剛改過的宗地）附近——交錯、重疊（edgeRelation），T 字接點（某宗的界址點落在另一宗的邊上卻沒接進去，≤ tol m）。
   // 回傳 [{kind:'cross'|'overlap'|'tee', x, y, text, parcels:[地號]}]。編修當下就標出來，不必等匯出後 NECEXE 的 .ERR
   function localConflicts(ds, idxs, tol = 0.02) {
@@ -3110,6 +3318,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall, trimExcess, planTrimExcess,
     baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
+    AUTOFIX_DEFAULT, autoFixRun, autoFixApply, splitByPath,
     parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner, sheetLines, nearSheetLines, datasetState, applyDatasetState, healAround, localConflicts, nearDupPoints, nearEdgePoints, seamPointPairs, diffState, parseReportNotes };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
