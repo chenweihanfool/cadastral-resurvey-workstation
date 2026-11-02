@@ -2992,7 +2992,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
   // 4. 切面：離所有界址線 > explain m 的黑線連成一片，兩端都接到界線（≤ attach m）就沿線切開；文字、符號、虛線接不到界線，自然不算。
   //    保留面積最接近登記面積的一塊，其餘建為未登記地（母號 opt.mother）；切了沒有更接近登記面積的列出來但預設不做（op.off＝原因）。
   // 每一步都用 localConflicts 把關：做了會多出交錯／重疊就不做。結果是一串可逐項關閉、以坐標描述的 ops（autoFixApply 可重放），由介面預覽、微調後才接受。
-  const AUTOFIX_DEFAULT = { shift: 5, cap: 2, tol: 2.5, context: 60, reach: 15, explain: 1, attach: 2.5, gap: 0.8, minLen: 6, minFace: 5, snapV: 1, simplify: 0.35, bend: 0.5, bg: 1.4, dark: 22, red: 22, lockOutline: true, areaGuard: true, move: true, refine: true, cut: true, maxCuts: 24, maxPts: 30, mother: 0 };
+  const AUTOFIX_DEFAULT = { shift: 5, cap: 2, tol: 2.5, context: 60, reach: 15, explain: 1, attach: 2.5, gap: 0.8, minLen: 6, minFace: 5, snapV: 1, simplify: 0.35, bend: 0.5, bg: 1.4, dark: 22, red: 22, lockOutline: true, areaGuard: true, move: true, refine: true, cut: true, maxCuts: 24, maxPts: 30, mother: 0, mergeUnreg: true, tipMax: 30 };
   function afRaster(region, o) {
     const { rgba, w, h, wf } = region, px = Math.hypot(wf.a, wf.d), det = wf.a * wf.e - wf.b * wf.d;
     const M = inkMask(rgba, w, h, { red: o.red, dark: o.dark, bgPx: Math.max(2, o.bg / px) }), D = distanceField(M, w, h);
@@ -3172,9 +3172,51 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
         const [keep, drop] = p.area >= q.area ? [p, q] : [q, p], op = { kind: 'merge', A: interiorPoint(keep.ids, ds.points), B: interiorPoint(drop.ids, ds.points), keep: keep.label, drop: drop.label, len }; try { const r = mergeParcels(ds, [p.idx, q.idx], keep.idx); op.area = keep.area; void r; ops.push(op); labels.delete(drop.label); again = true; } catch (e) { /* 合併後會有空洞或不相連：留著 */ }
       }
     }
+    if (o.mergeUnreg) for (const n of ds.parcels.filter(p => !p.deleted && labels.has(p.label))) {
+      for (const c of afUnregTargets(ds, R, n, labels, o)) {
+        const op = { kind: 'merge', into: true, A: interiorPoint(c.u.ids, ds.points), B: interiorPoint(n.ids, ds.points), keep: c.u.label, drop: n.label, len: c.len, tip: c.tip ? { parcel: c.tip.q.label, area: c.tip.area, ink: c.tip.ink, v: afXY(ds, c.tip.v), a: afXY(ds, c.tip.a), b: afXY(ds, c.tip.b) } : null };
+        const st = datasetState(ds); try { afMergeInto(ds, c.u, n, c.tip); op.area = c.u.area; op.points = c.u.ids.length; ops.push(op); labels.delete(n.label); break; } catch (e) { applyDatasetState(ds, st); }
+      }
+    }
     return ops;
   }
-  function afApplyMerge(ds, op) { const p = afParcelAt(ds, op.A.y, op.A.x), q = afParcelAt(ds, op.B.y, op.B.x); if (!p || !q || p === q || !p.created || !q.created) throw new Error('要合併的兩塊已不存在'); mergeParcels(ds, [p.idx, q.idx], p.idx); }
+  // 6. 這次切出的塊併入相鄰的既有未登記地（v0.33.0，使用者 2026-11-02：「我想要允許自動合併未登記土地 例如這案要合併9001-453 9001-383」）。
+  // 與步驟 4「相連的未登記地合併」同一規則：相鄰就併，不看共用線有沒有墨線；保留既有地號，切出的塊消失。只併入一筆（共用線最長者），
+  // 既有的未登記地彼此不因此連成一筆（步驟 4 分割過的不還原）。點數不設限，超過步驟 4 的上限就在項目上註明，可再用步驟 4 分割。
+  // 只碰到一點時：中間常夾著別宗的小尖角（KC0336：河道 9001-383 往東南轉進 122，切出的 9001-453 與它之間夾著 142 的尖角 9972–9925–12869）。
+  // 尖角夠小（≤ tipMax m²）、截角線底下有墨線、截掉不會讓那宗離登記面積更遠（areaGuard），就把尖角切給切出的塊，再合併。
+  const afXY = (ds, id) => { const q = ds.points.get(id); return { y: q.y, x: q.x }; };
+  function afUnregTargets(ds, R, n, labels, o) {
+    const P = ds.points, out = [], own = new Set(n.ids), ok = u => u && u !== n && isUnreg(u) && !labels.has(u.label) && u.ids.length >= 3 && !(u.holes || []).length && !(u.containers || []).length && !ringHasArc(u);
+    const shared = new Map(); for (let k = 0; k < n.ids.length; k++) { const a = n.ids[k], b = n.ids[(k + 1) % n.ids.length], e = ds.edges.get(segKey(a, b)); if (!e) continue; const A = P.get(a), B = P.get(b), L = Math.hypot(B.x - A.x, B.y - A.y); for (const i of afLive(ds, e)) if (ok(ds.parcels[i])) shared.set(i, (shared.get(i) || 0) + L); }
+    for (const [i, len] of shared) out.push({ u: ds.parcels[i], len, tip: null });
+    if (!out.length) {   // 只碰到一點：找夾在中間的尖角
+      const nb = (ids, v) => { const k = ids.indexOf(v), m = ids.length; return k < 0 ? [] : [ids[(k - 1 + m) % m], ids[(k + 1) % m]]; };
+      for (const v of n.ids) for (const ui of ds.pointParcels.get(v) || []) { const u = ds.parcels[ui]; if (!ok(u)) continue;
+        for (const qi of ds.pointParcels.get(v) || []) { const q = ds.parcels[qi]; if (!q || q.deleted || q === n || q === u || q.ids.length < 4 || ringHasArc(q) || (q.holes || []).length || (q.containers || []).length) continue;
+          const [p0, p1] = nb(q.ids, v), na = nb(n.ids, v), ua = nb(u.ids, v); let a = null, b = null;
+          if (na.includes(p0) && ua.includes(p1)) { a = p0; b = p1; } else if (na.includes(p1) && ua.includes(p0)) { a = p1; b = p0; } if (a == null || own.has(b)) continue;
+          const V = P.get(v), A = P.get(a), B = P.get(b), area = Math.abs((A.x - V.x) * (B.y - V.y) - (A.y - V.y) * (B.x - V.x)) / 2; if (area > o.tipMax) continue;
+          const L = Math.hypot(B.x - A.x, B.y - A.y), st = Math.max(2, Math.ceil(L / 0.3)); let hit = 0; for (let t = 0; t <= st; t++) if (R.dist(A.x + (B.x - A.x) * t / st, A.y + (B.y - A.y) * t / st) <= 0.8) hit++; const ink = hit / (st + 1); if (ink < 0.6) continue;
+          if (o.areaGuard && q.areaReg > 0 && Math.abs(q.area - area - q.areaReg) > Math.abs(q.area - q.areaReg) + 0.01) continue;
+          out.push({ u, len: 0, tip: { q, v, a, b, area, ink } }); } }
+    }
+    return out.sort((x, y) => y.len - x.len || (x.tip ? x.tip.area : 0) - (y.tip ? y.tip.area : 0));
+  }
+  // 尖角 a–v–b 從 q 截掉、補給 n（n 的 v–a 之間插入 b），再把 n 併入 u（保留 u 的地號）。出錯丟例外，呼叫端還原
+  function afMergeInto(ds, u, n, tip) {
+    if (tip) { const { q, v, a, b } = tip, base = afBase(ds, [q.idx, n.idx]); setRing(ds, q.idx, q.ids.filter(id => id !== v)); const k = n.ids.indexOf(v), m = n.ids.length, ids = n.ids.slice();
+      if (ids[(k + 1) % m] === a) ids.splice(k + 1, 0, b); else if (ids[(k - 1 + m) % m] === a) ids.splice(k, 0, b); else throw new Error('尖角不在切出的塊旁');
+      setRing(ds, n.idx, ids); buildTopology(ds); if (afNewConflicts(ds, [q.idx, n.idx], base)) throw new Error('截掉尖角後會有交錯'); }
+    mergeParcels(ds, [u.idx, n.idx], u.idx);
+  }
+  function afApplyMerge(ds, op) {
+    const p = afParcelAt(ds, op.A.y, op.A.x), q = afParcelAt(ds, op.B.y, op.B.x); if (!p || !q || p === q || !q.created || !(op.into ? isUnreg(p) : p.created)) throw new Error('要合併的兩塊已不存在');
+    if (!op.into) return mergeParcels(ds, [p.idx, q.idx], p.idx);
+    let tip = null; if (op.tip) { const t = op.tip, Q = ds.parcels.find(r => !r.deleted && r.label === t.parcel), at = (ids, c) => ids.find(id => { const z = ds.points.get(id); return z && Math.hypot(z.x - c.x, z.y - c.y) < 0.01; });
+      const v = Q && at(Q.ids, t.v), a = Q && at(Q.ids, t.a), b = Q && at(Q.ids, t.b); if (v == null || a == null || b == null) throw new Error(`${t.parcel} 的尖角已不存在`); tip = { q: Q, v, a, b }; }
+    const st = datasetState(ds); try { afMergeInto(ds, p, q, tip); } catch (e) { applyDatasetState(ds, st); throw e; }
+  }
   // 主程式：直接修改 ds，回傳 { ops, shift, px, skipped, noInk }。region＝{ rgba, w, h, wf }，box＝{x0,y0,x1,y1}（作業圖坐標）
   // 平移用框外擴 context m 來求：框得很小時，平移會把真正要修的偏差吃掉（只框一條線，那條線偏 1.5 m 就被當成影像偏移），呼叫端讀影像要包含這段外擴
   function autoFixRun(ds, region, box, opt = {}) {

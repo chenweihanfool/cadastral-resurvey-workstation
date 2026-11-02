@@ -2417,7 +2417,7 @@ function afArm() {
   if (!S.ds) return msg('請先載入圖資'); if (S.af) return msg('請先按「接受」或「放棄」目前的預覽');
   if (S.topo) topoCancel(); cancelModes(); setTool('select'); S.afArm = true; setHint('依舊圖自動修正：在圖上拖出要修正的範圍　Esc 取消'); afPanel();
 }
-const afOpts = () => { const v = (id, d) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x > 0 ? x : d; }; return { tol: v('afTol', 2.5), minLen: v('afMin', 6), move: $('afMove').checked, refine: $('afRefine').checked, cut: $('afCut').checked, lockOutline: $('afLock').checked, areaGuard: $('afGuard').checked, mother: unMother(), maxPts: unN() }; };
+const afOpts = () => { const v = (id, d) => { const x = parseFloat($(id).value); return Number.isFinite(x) && x > 0 ? x : d; }; return { tol: v('afTol', 2.5), minLen: v('afMin', 6), move: $('afMove').checked, refine: $('afRefine').checked, cut: $('afCut').checked, lockOutline: $('afLock').checked, areaGuard: $('afGuard').checked, mergeUnreg: $('afUnreg').checked, mother: unMother(), maxPts: unN() }; };
 async function afRun(box, o = {}) {
   if (S.afBusy) throw new Error('上一次框選還在分析中'); S.afBusy = true;
   try { return await afRunNow(box, o); } finally { S.afBusy = false; }
@@ -2461,7 +2461,7 @@ function afPanel() {
   $('afInfo').innerHTML = `舊圖影像比作業圖偏 E ${shift.dx.toFixed(2)}、N ${shift.dy.toFixed(2)} m，${a.img0 ? '預覽時暫時對齊' : '影像已移到對齊位置'}` + (shift.fit < 0.5 ? `；<b style="color:#e03131">這一帶只有 ${(shift.fit * 100).toFixed(0)}% 的界址線對得上墨線，結果請逐項看</b>` : '') + `。<b>${afSummary()}</b>。橘＝修正前、綠＝新線。可直接拖點或用下方工具微調`;
   const mv = a.ops.filter(o => o.kind === 'move'), parts = [];
   if (mv.length) parts.push(`<label class="chk" style="margin-top:2px"><input type="checkbox" data-afmv${mv.every(o => o.on) ? ' checked' : ''}>點貼墨線 ${mv.length} 點（最大 ${mv[0].dist.toFixed(2)} m）</label>`);
-  a.ops.forEach((o, i) => { if (o.kind === 'cut') parts.push(row(i, o, `切開 ${esc(o.keep || o.parcel)}（沿墨線 ${o.len.toFixed(0)} m、新點 ${o.pts.length}）：留 ${(o.areaKeep || 0).toFixed(1)} m²` + (o.areaReg ? `，登記 ${o.areaReg.toFixed(0)}` : '') + `；切出 ${esc(o.on || !o.off ? o.created || '' : '')} ${(o.areaCut || 0).toFixed(1)} m²` + (o.off ? `<span class="muted">（${esc(o.off)}，預設不切）</span>` : ''))); else if (o.kind === 'refine') parts.push(row(i, o, `線 ${o.a}–${o.b} 依墨線加 ${o.pts.length} 點（彎出 ${o.bent.toFixed(1)} m）`)); else if (o.kind === 'merge') parts.push(row(i, o, `${esc(o.drop)} 併入 ${esc(o.keep)}（共用線 ${o.len.toFixed(0)} m 沒有墨線）`)); });
+  a.ops.forEach((o, i) => { if (o.kind === 'cut') parts.push(row(i, o, `切開 ${esc(o.keep || o.parcel)}（沿墨線 ${o.len.toFixed(0)} m、新點 ${o.pts.length}）：留 ${(o.areaKeep || 0).toFixed(1)} m²` + (o.areaReg ? `，登記 ${o.areaReg.toFixed(0)}` : '') + `；切出 ${esc(o.on || !o.off ? o.created || '' : '')} ${(o.areaCut || 0).toFixed(1)} m²` + (o.off ? `<span class="muted">（${esc(o.off)}，預設不切）</span>` : ''))); else if (o.kind === 'refine') parts.push(row(i, o, `線 ${o.a}–${o.b} 依墨線加 ${o.pts.length} 點（彎出 ${o.bent.toFixed(1)} m）`)); else if (o.kind === 'merge') parts.push(row(i, o, o.into ? `${esc(o.drop)} 併入相鄰未登記地 ${esc(o.keep)}` + (o.tip ? `（中間 ${esc(o.tip.parcel)} 的尖角 ${o.tip.area.toFixed(1)} m² 一起切過來，截角線 ${(o.tip.ink * 100).toFixed(0)}% 有墨線）` : `（共用線 ${o.len.toFixed(0)} m）`) + (o.points > unN() ? `<span class="muted">；合併後 ${o.points} 點，超過 ${unN()} 點，可再用步驟 4 分割</span>` : '') : `${esc(o.drop)} 併入 ${esc(o.keep)}（共用線 ${o.len.toFixed(0)} m 沒有墨線）`)); });
   if (skipped.length) parts.push(`<div class="muted" style="margin-top:4px">未處理 ${skipped.length} 處：${skipped.slice(0, 8).map(s => `<a href="#" data-afxy="${s.x},${s.y}">${esc(s.why)} ${s.len.toFixed(0)} m</a>`).join('、')}</div>`);
   if (noInk.length) parts.push(`<div class="muted" style="margin-top:2px">界線底下找不到墨線 ${noInk.length} 段、共 ${noInk.reduce((t, n) => t + n.len, 0).toFixed(0)} m（圖上紫虛線，未自動處理）</div>`);
   $('afList').innerHTML = parts.join('');
@@ -2947,7 +2947,7 @@ const api = {
   undo: () => (undo(), api.getState()), redo: () => (redo(), api.getState()),
   exportSession: () => Core.exportSession(S.ds || Core.newDataset('', ''), { files: S.names, control_points: [...S.controls.values()].map(p => ({ name: p.name, y: p.y, x: p.x, source: p.src })), neighbors: S.nb.map(n => n.name), seam_report: S.seam }, S.survey),
   // 待修清單（給 AI 逐筆修）：source 同工具箱下拉 chk／neg／area／unreg／ring／sheet；省略＝目前選的
-  // 依舊圖自動修正：autoFixBox 框選範圍並套用預覽（可傳 tol／minLen／move／refine／cut），getAutoFix 看項目，autoFixSet 開關某項（index，移點一起開關用 kind:'move'），autoFixAccept／autoFixCancel 結束預覽
+  // 依舊圖自動修正：autoFixBox 框選範圍並套用預覽（可傳 tol／minLen／move／refine／cut／mergeUnreg），getAutoFix 看項目，autoFixSet 開關某項（index，移點一起開關用 kind:'move'），autoFixAccept／autoFixCancel 結束預覽
   autoFixBox: async ({ x0, y0, x1, y1, ...o }) => afRun({ x0, y0, x1, y1 }, o),
   getAutoFix: () => afReport(),
   autoFixSet: ({ index, kind, on }) => { if (!S.af) throw new Error('沒有進行中的預覽'); if (kind) S.af.ops.filter(o => o.kind === kind).forEach(o => { o.on = !!on; }); else { const o = S.af.ops[index]; if (!o) throw new Error('沒有這個項目'); o.on = !!on; } afReplay(true); return afReport(); },
