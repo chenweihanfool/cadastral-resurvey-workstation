@@ -308,6 +308,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
 <section><h2>工具</h2><div id="topoTools"></div>
   <div id="topoHint" class="small" style="margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px"></div>
   <div id="carvePanel" class="small" style="margin-top:6px;display:none"></div>
+  <div id="carveBandPanel" class="small" style="margin-top:6px;display:none"></div>
   <div class="small muted" style="margin-top:6px">工具選好後在圖上依序點選（橘色＝已點選），湊齊就執行並留在同一工具，可連續修下一筆。Esc 結束、Enter 完成（新增面、合併面）、Backspace 退一步；每個動作都可 Ctrl+Z 復原。點線面之間的位相（共用點、共用線、鄰宗）會一起維護：點貼到線會接進線兩側的宗地，刪線＝兩宗合併，新增線＝切成兩宗。</div></section>
 <section><h2>即時檢查</h2><div class="row small"><label class="chk"><input type="checkbox" id="liveChk" checked>每次修改後檢查</label><button class="btn" id="liveNext">看下一處 ▶</button></div><div id="liveInfo" class="small" style="margin-top:4px"></div></section>
 <section><h2>批次處理（同類一次做完）</h2><div class="row small"><select id="batchKind"></select><span id="batchTolWrap">≤ <input id="batchTol" type="number" value="0.05" step="0.01" min="0.001" style="width:5em"> m</span><button class="btn" id="batchPrev">預覽</button><button class="btn primary" id="batchApply" disabled>全部套用</button></div><div id="batchInfo" class="small" style="margin-top:4px"></div></section>
@@ -410,7 +411,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="row small" style="margin-top:8px"><button class="btn" id="btnStyleReset">全部還原預設</button><span class="muted">設定會記在這台電腦的瀏覽器；列印成果圖同樣套用。</span></div></section></div></dialog>
 <dialog id="help"><h3 style="margin-top:0">操作說明</h3>
 <p><b>作業流程</b>：左側「作業流程」欄（上方「☰ 流程」開關）照順序做：<b>1 讀檔</b>（「開啟專案資料夾」一次讀入案件、舊圖影像、分幅舊圖、鄰段、EXAM.MDB）→ <b>2 自動接圖</b>（目前先加入分幅線：分幅舊圖各幅的接合處，載入兩幅以上時自動加入；依分幅線自動接圖開發中）→ <b>3 鄰段接合</b> → <b>4 未登記土地合併分割</b> → <b>5 去除雜點</b> → <b>6 檢核</b>。每步按「一鍵執行」用預設值做完並顯示結果，「詳細設定…」開原本的面板調整；全部可復原。專案資料夾的慣例：鄰段放在名稱含「鄰段」的資料夾、分幅舊圖放在含「分幅」的資料夾。</p>
-<p><b>點線面編修工具箱</b>（上方「工具箱」）：看完檢核報告逐筆手工修。上半是<b>待修清單</b>（舊圖檢核、較差為負、面積超限、未登記地、界址串問題），◀ ▶ 跳到下一筆、「✓ 修好了」劃掉。下半是工具：點（線上加點、加孤立點、移動、刪點、點貼到線、點併點）、線（新增線＝切開宗地、刪除線＝兩宗合併）、面（新增面＝空地建新地號、刪除面、合併面、重繪界址串）。選工具後在圖上依序點選，湊齊就執行；Esc 結束、Enter 完成、Backspace 退一步，Ctrl+Z 復原。勾「分幅線附近優先」時，分幅線附近的地號排在清單最前面（也可選「分幅線附近」沿接合線逐宗看）。</p>
+<p><b>點線面編修工具箱</b>（上方「工具箱」）：看完檢核報告逐筆手工修。上半是<b>待修清單</b>（舊圖檢核、較差為負、面積超限、未登記地、界址串問題），◀ ▶ 跳到下一筆、「✓ 修好了」劃掉。下半是工具：點（線上加點、加孤立點、移動、刪點、點貼到線、點併點）、線（新增線＝切開宗地、刪除線＝兩宗合併）、面（新增面＝空地建新地號、刪除面、合併面、重繪界址串、切出併入＝沿突起切下併入相鄰地、跨宗切出＝沿帶狀地兩側各畫一條線，從所有壓到的宗地一次切出）。選工具後在圖上依序點選，湊齊就執行；Esc 結束、Enter 完成、Backspace 退一步，Ctrl+Z 復原。勾「分幅線附近優先」時，分幅線附近的地號排在清單最前面（也可選「分幅線附近」沿接合線逐宗看）。</p>
 <p><b>工具箱其他區塊</b>：<b>即時檢查</b>（每次修改後查動到的宗地有沒有交錯、重疊、T 字接點，紅圈標出）、<b>批次處理</b>（碎片併入、離線點貼到線、重複點併點、分幅線接合點併點：先預覽再全部套用，一次復原）、<b>分幅線接合點</b>（兩幅接邊點配對：綠 < 0.3 m 可一鍵併、黃 0.3～2 m 逐對判斷）。待修清單每筆可寫備註，輸出互動報告時帶進去；報告匯出的備註 CSV 可再匯回。</p>
 <p><b>作業紀錄、里程碑</b>（檔案選單）：作業紀錄記下每個動作與動到的地號、面積前後，可輸出 CSV 或列印版；里程碑把目前的圖存成一個版本，可比較差異或還原。都存在專案檔裡。右側較差表勾「法定公差」時，Δ登記與塗色用第 243 條公差，超出的塗紅。</p>
 <p><b>專案檔</b>（檔案 → 儲存專案檔，Ctrl+S）：把讀入的原始檔案（案件、鄰段、分幅舊圖、EXAM.MDB，可選含影像）與目前進度（點位、界址串、各步驟結果、檢核報告與「修好了」、待修清單、分幅線、設定）存成一個 <code>.crwp</code> 檔；下次「開啟專案檔」或把它拖進畫面就接著做（復原記錄不存）。程式也會自動暫存在瀏覽器，重開時流程欄上方會出現「接著做」。流程欄上方的進度條：綠＝圖資準備 6 步、藍＝檢核後逐筆修劃掉的比例。</p>
