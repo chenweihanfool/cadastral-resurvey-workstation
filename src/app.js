@@ -1071,7 +1071,8 @@ addEventListener('keydown', e => {
   else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'y') { e.preventDefault(); redo(); }
   else if (k === 'Escape') { if (S.afArm) { S.afArm = false; setHint(''); afPanel(); } else if (S.topo) topoCancel(); else if (S.pocket) cancelPocket(); else if (S.redraw) cancelRedraw(); else if (S.align) cancelAlign(); else if (S.draft) { S.draft = null; setHint(''); draw(); } else { clearSel(); refresh(); } }
-  else if (k === 'Enter') { if (S.topo && S.topo.picks.length) topoRun(); else if (S.pocket) finishPocket(); else if (S.redraw) finishRedraw(); else if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
+  else if (k === 'Enter') { if (S.topo && S.topo.tool === 'carveBand') carveBandEnter(); else if (S.topo && S.topo.picks.length) topoRun(); else if (S.pocket) finishPocket(); else if (S.redraw) finishRedraw(); else if (S.align && S.align.step === 2) { finishAlign(); } else if (S.draft) finishDraft(false); }
+  else if (k === 'Backspace' && S.topo && S.topo.tool === 'carveBand') carveBandBack();
   else if (k === 'Backspace' && S.topo) { S.topo.picks.pop(); topoPanel(); draw(); }
   else if (k === 'Backspace' && S.pocket) pocketBack();
   else if (k === 'Backspace' && S.redraw) { S.redraw.ids.pop(); redrawHint(); draw(); }
@@ -2299,20 +2300,24 @@ const TOPO = {
   mergeFace: { g: '面', name: '合併面', picks: ['pars'], hint: '依序點要合併的相連宗地，Enter 合併（保留已登記且地號小者）' },
   redraw: { g: '面', name: '重繪界址串', picks: ['par'], hint: '點一下宗地，再依序點它的界址點重畫界址串（Enter 完成）' },
   carve: { g: '面', name: '切出併入', picks: ['pts'], hint: '沿宗地突起畫切線：第一點與最後一點吸附界址點／線，中間點自由；Enter 預覽，選好歸屬後接受' },
+  carveBand: { g: '面', name: '跨宗切出', picks: ['pts'], hint: '沿帶狀地兩側各畫一條線：每點 12px 內吸附界址點、8px 內吸附界址線，否則自由點；第一條線 Enter 結束，第二條線 Enter 預覽' },
 };
 S.topo = null;   // { tool, picks:[{t:'pt'|'edge'|'par'|'xy', …}] }
 function topoPanel() {
   const by = {}; for (const [k, t] of Object.entries(TOPO)) (by[t.g] = by[t.g] || []).push([k, t]);
   $('topoTools').innerHTML = Object.entries(by).map(([g, list]) => `<div class="tgrp"><b>${g}</b><div class="row small">${list.map(([k, t]) => `<button class="btn${S.topo && S.topo.tool === k ? ' primary' : ''}" data-topo="${k}" title="${esc(t.hint)}">${t.name}</button>`).join('')}</div></div>`).join('');
   const T = S.topo;
-  $('topoHint').textContent = T ? `${TOPO[T.tool].name}：${TOPO[T.tool].hint}` + (T.carve ? '（預覽中）' : T.picks.length ? `（已點 ${T.picks.length}）` : '') + (T.err ? `　⚠ 沒有執行：${T.err}` : '') : '選一個工具，然後在圖上點選。Esc 取消、Enter 完成、Backspace 退一步；每次都可 Ctrl+Z 復原。';
+  $('topoHint').textContent = T ? (T.tool === 'carveBand' ? carveBandHint(T) : `${TOPO[T.tool].name}：${TOPO[T.tool].hint}` + (T.carve ? '（預覽中）' : T.picks.length ? `（已點 ${T.picks.length}）` : '')) + (T.err ? `　⚠ 沒有執行：${T.err}` : '') : '選一個工具，然後在圖上點選。Esc 取消、Enter 完成、Backspace 退一步；每次都可 Ctrl+Z 復原。';
   carvePanel();
+  carveBandPanel();
   tqPanel();
 }
 function topoStart(tool) {
   if (!S.ds) return msg('請先載入圖資'); cancelModes();
   if (tool === 'move') { S.topo = null; setTool('select'); S.filter.pt = true; S.filter.edge = S.filter.par = false; document.querySelectorAll('#filters button').forEach(b => b.classList.toggle('on', S.filter[b.dataset.f])); setHint('移動點：拖曳界址點（只選得到點）；方向鍵微調、Shift×10'); topoPanel(); return; }
-  S.topo = { tool, picks: [] }; setTool('select'); setHint(`${TOPO[tool].name}：${TOPO[tool].hint}　Esc 取消`); topoPanel(); draw();
+  S.topo = { tool, picks: [] };
+  if (tool === 'carveBand') S.topo.cb = { A: [], B: null, plan: null, target: null, err: '' };
+  setTool('select'); setHint(`${TOPO[tool].name}：${TOPO[tool].hint}　Esc 取消`); topoPanel(); draw();
 }
 function cancelModes() { if (S.pocket) cancelPocket(); if (S.redraw) cancelRedraw(); if (S.align) cancelAlign(); }
 function topoCancel() { S.topo = null; setHint(''); topoPanel(); draw(); }
@@ -2320,6 +2325,7 @@ function parcelAt(wx, wy) { let best = null; for (const p of S.ds.parcels) { if 
 function topoPick(mx, my) {
   const T = S.topo, def = TOPO[T.tool], wx = toWx(mx), wy = toWy(my), need = def.picks[Math.min(T.picks.length, def.picks.length - 1)]; T.err = '';
   if (T.tool === 'carve') return carvePick(wx, wy);
+  if (T.tool === 'carveBand') return carveBandPick(wx, wy);
   const pt = () => nearestPoint(S.ds.points, wx, wy, 12 / S.view.s), edge = () => hitEdgeAt(wx, wy, 8 / S.view.s);
   if (need === 'pt' || need === 'pts') { const q = pt(); if (!q) return msg('請點在界址點上');
     if (need === 'pts' && T.picks.length >= 3 && q.id === T.picks[0].id) return topoRun();
@@ -2439,6 +2445,120 @@ if ($('carvePanel')) {
   $('carvePanel').addEventListener('change', e => { const t = e.target; if (!t || t.name !== 'carveTarget' || !(S.topo && S.topo.carve)) return; S.topo.carve.target = t.value; });
   $('carvePanel').addEventListener('click', e => { const b = e.target.closest('[data-carve]'); if (!b) return; if (b.dataset.carve === 'swap') carveSwap(); else if (b.dataset.carve === 'accept') carveAccept(); else carveCancel(); });
 }
+// ── 跨宗切出（v0.35.0）：沿帶狀地兩側各畫一條線（第一條橘、第二條藍），Enter 預覽後選歸屬 ──
+function carveBandHint(T) {
+  const c = T && T.cb; if (!c) return '跨宗切出';
+  if (c.plan) return `跨宗切出：預覽中——切出 ${c.plan.area.toFixed(2)} m²，選好歸屬後按「接受」，「取消」重新畫線、Esc 結束`;
+  if (c.B === null) return `跨宗切出：畫第一條線（已點 ${c.A.length} 點）——12px 內吸附界址點、8px 內吸附界址線，Enter 結束第一條線、Backspace 退一點、Esc 取消`;
+  return `跨宗切出：畫第二條線（第一條 ${c.A.length} 點、第二條 ${c.B.length} 點）——Enter 預覽、Backspace 退一點（退空後回第一條線）、Esc 取消`;
+}
+function carveBandSnap(wx, wy) {
+  const q = nearestPoint(S.ds.points, wx, wy, 12 / S.view.s); if (q) return { t: 'pt', id: q.id, y: q.y, x: q.x };
+  const e = hitEdgeAt(wx, wy, 8 / S.view.s); return e ? { t: 'edge', a: e.a, b: e.b, y: wy, x: wx } : { t: 'xy', y: wy, x: wx };
+}
+const carveBandXY = p => (p.t === 'pt' ? S.ds.points.get(p.id) : p);
+const carveBandLine = line => line.map(p => (p.t === 'pt' ? { id: p.id } : p.t === 'edge' ? { edge: [p.a, p.b], y: p.y, x: p.x } : { y: p.y, x: p.x }));
+function carveBandPick(wx, wy) {
+  const T = S.topo, c = T.cb; if (!c) return; T.err = ''; c.err = '';
+  if (c.plan) return msg('請先按「接受」或「取消」完成這個跨宗切出預覽');
+  const q = carveBandSnap(wx, wy);
+  if (c.B === null) c.A.push(q); else c.B.push(q);
+  setHint(carveBandHint(T)); topoPanel(); draw();
+}
+function carveBandBack() {
+  const T = S.topo, c = T && T.cb; if (!c) return;
+  if (c.plan) { c.plan = null; c.target = null; }
+  else if (c.B !== null && c.B.length) c.B.pop();
+  else if (c.B !== null) c.B = null;
+  else c.A.pop();
+  c.err = ''; T.err = ''; setHint(carveBandHint(T)); topoPanel(); draw();
+}
+function carveBandEnter() {
+  const T = S.topo, c = T && T.cb; if (!c || c.plan) return;
+  try {
+    if (c.B === null) {
+      if (c.A.length < 2) throw new Error('第一條線至少要有 2 點');
+      c.B = [];
+    } else {
+      if (c.B.length < 2) throw new Error('第二條線至少要有 2 點');
+      const plan = Core.planCarveBand(S.ds, carveBandLine(c.A), carveBandLine(c.B));
+      c.plan = plan; c.target = plan.defaultTarget; T.err = '';
+      msg(`跨宗切出：切出 ${plan.area.toFixed(2)} m²，選好歸屬後按「接受」`);
+    }
+    c.err = '';
+  } catch (e) { c.err = e.message; T.err = e.message; msg(`跨宗切出：${e.message}`); }
+  setHint(carveBandHint(T)); topoPanel(); draw();
+}
+function carveBandCancel() {
+  const T = S.topo; if (!T) return;
+  T.cb = { A: [], B: null, plan: null, target: null, err: '' }; T.err = '';
+  setHint(carveBandHint(T)); topoPanel(); draw();
+}
+function carveBandAccept() {
+  const T = S.topo, c = T && T.cb; if (!c || !c.plan || !S.ds) return;
+  try {
+    let to = c.target || c.plan.defaultTarget, areaReg;
+    if (to === '__other') {
+      const el = $('cbLabel'), re = $('cbReg');
+      to = el ? el.value.trim() : '';
+      if (!to) throw new Error('請輸入要新建的地號');
+      if (re && re.value.trim() !== '') areaReg = +re.value;
+    }
+    const r = Core.carveBand(S.ds, carveBandLine(c.A), carveBandLine(c.B), { to, areaReg, mother: unMother() });
+    pushStruct(r.delta, `跨宗切出 → ${r.into}`);
+    const idxs = c.plan.parcels.map(p => p.idx), q = S.ds.parcels.find(x => !x.deleted && x.label === r.into); if (q && !idxs.includes(q.idx)) idxs.push(q.idx);
+    T.cb = { A: [], B: null, plan: null, target: null, err: '' }; T.err = '';
+    liveCheck(idxs);
+    msg(`跨宗切出：切出 ${r.area.toFixed(2)} m² → ${r.into}（Ctrl+Z 一次復原）`);
+    setHint(`跨宗切出：已完成（${r.into}）　繼續沿下一段帶狀地畫兩條線，Esc 結束`); topoPanel(); refresh();
+  } catch (e) {
+    c.err = e.message; T.err = e.message; msg(`跨宗切出：${e.message}`);
+    setHint(`跨宗切出沒有執行：${e.message}　（重新預覽或「取消」）`); topoPanel(); draw();
+  }
+}
+function carveBandPanel() {
+  const el = $('carveBandPanel'); if (!el) return;
+  const c = S.topo && S.topo.tool === 'carveBand' ? S.topo.cb : null;
+  if (!c || !c.plan) { el.innerHTML = ''; el.style.display = 'none'; return; }
+  el.style.display = '';
+  const pl = c.plan, f = v => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2));
+  const rows = pl.parcels.map(p => {
+    const worse = p.areaReg > 0 && p.diffAfter != null && p.diffBefore != null && Math.abs(p.diffAfter) > Math.abs(p.diffBefore) + 1e-9;
+    const line = p.areaReg > 0 ? `${esc(p.label)}：面積 ${p.area0.toFixed(2)} → ${p.area1.toFixed(2)}，較差 ${f(p.diffBefore)} → <b style="${worse ? 'color:var(--bad)' : ''}">${f(p.diffAfter)}</b>（容許 ±${p.tol.toFixed(2)}）${worse ? ' <b style="color:var(--bad)">離登記面積更遠</b>' : ''}` : `${esc(p.label)}：面積 ${p.area0.toFixed(2)} → ${p.area1.toFixed(2)}（沒有登記面積）`;
+    return `<div>${line}</div>` + (p.extra && p.extra.length ? `<div class="muted" style="margin-left:1em">${esc(p.label)} 被切成 ${p.extra.length + 1} 塊，另一塊編 ${p.extra.map(esc).join('、')}</div>` : '');
+  }).join('');
+  const rad = [`<label class="chk" style="display:block"><input type="radio" name="carveBandTarget" value="new" ${c.target === 'new' ? 'checked' : ''}> 新建未登記地（母號 ${unMother()}）</label>`]
+    .concat(pl.targets.map(t => `<label class="chk" style="display:block"><input type="radio" name="carveBandTarget" value="${esc(t.label)}" ${c.target === t.label ? 'checked' : ''}> 併入 ${esc(t.label)} <span class="muted">（${t.kind === 'unreg' ? '未登記地' : '登記地'}，共用邊 ${t.shared.toFixed(1)} m）</span></label>`))
+    .join('') + `<label class="chk" style="display:block"><input type="radio" name="carveBandTarget" value="__other" ${c.target === '__other' ? 'checked' : ''}> 指定地號 <input id="cbLabel" style="width:7em" spellcheck="false"> 登記面積 <input id="cbReg" type="number" step="0.01" style="width:6em"> m²</label>`;
+  el.innerHTML = `<div style="padding:6px 8px;border:1px solid var(--line);border-radius:6px">` +
+    `<div>切出總面積 <b>${pl.area.toFixed(2)}</b> m²</div>` + rows +
+    `<div style="margin-top:4px">切出的部分歸誰：</div>${rad}` +
+    `<div class="row" style="margin-top:6px"><button class="btn primary" data-cb="accept">接受</button><button class="btn" data-cb="cancel">取消</button></div>` +
+    (c.err ? `<div style="color:var(--bad);margin-top:4px">⚠ ${esc(c.err)}</div>` : '') + `</div>`;
+}
+if ($('carveBandPanel')) {
+  $('carveBandPanel').addEventListener('change', e => {
+    const t = e.target; if (!t || t.name !== 'carveBandTarget' || !(S.topo && S.topo.cb)) return;
+    S.topo.cb.target = t.value; topoPanel();
+  });
+  $('carveBandPanel').addEventListener('click', e => { const b = e.target.closest('[data-cb]'); if (!b) return; if (b.dataset.cb === 'accept') carveBandAccept(); else carveBandCancel(); });
+}
+function drawCarveBand(c) {
+  const line = (pts, color) => {
+    if (!pts || pts.length < 2) return;
+    ctx.save(); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.beginPath();
+    pts.map(carveBandXY).forEach((q, i) => (i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y))));
+    ctx.stroke(); ctx.setLineDash([]);
+    for (const p of pts) { const q = carveBandXY(p); ctx.beginPath(); ctx.arc(toSx(q.x), toSy(q.y), 4, 0, 7); ctx.fill(); }
+    ctx.restore();
+  };
+  if (c.plan && c.plan.polygon && c.plan.polygon.length >= 3) {
+    ctx.save(); ctx.beginPath();
+    c.plan.polygon.forEach((q, i) => (i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y))));
+    ctx.closePath(); ctx.fillStyle = 'rgba(240,140,0,.30)'; ctx.fill(); ctx.strokeStyle = '#f08c00'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+  }
+  line(c.A, '#f08c00'); if (c.B) line(c.B, '#1c7ed6');
+}
 function drawCarve(c) {
   const ring = (pts, fill, stroke) => { ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)))); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); };
   const k = c.plan.keep; ring(c.plan.pieces[k].ring, 'rgba(47,158,68,.30)', '#2f9e44'); ring(c.plan.pieces[1 - k].ring, 'rgba(240,140,0,.30)', '#f08c00');
@@ -2446,6 +2566,7 @@ function drawCarve(c) {
 function drawTopo() {
   const T = S.topo; if (!T) return;
   if (T.carve) { ctx.save(); drawCarve(T.carve); ctx.restore(); }
+  if (T.tool === 'carveBand') { if (T.cb) { ctx.save(); drawCarveBand(T.cb); ctx.restore(); } return; }
   if (!T.picks.length) return; ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = ctx.fillStyle = '#f08c00';
   if (T.tool === 'carve') {
     ctx.setLineDash([6, 4]); ctx.beginPath();
@@ -2990,6 +3111,9 @@ const api = {
   // 切出併入（v0.34.0）：planCarve 只算不改圖；carveTo 一次切開＋併入，單一復原項目
   planCarve: ({ parcel, A, B, pts = [] }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); return Core.planCarve(S.ds, p.idx, A, B, pts); },
   carveTo: ({ parcel, A, B, pts = [], to = 'unreg', swap = false } = {}) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.carveTo(S.ds, p.idx, A, B, pts, { to, swap, mother: unMother() }); pushStruct(r.delta, `切出併入 ${r.keep} → ${r.into}`); const idxs = [p.idx], q = S.ds.parcels.find(x => !x.deleted && x.label === r.into); if (q) idxs.push(q.idx); liveCheck(idxs); return { keep: r.keep, into: r.into, areaKeep: r.areaKeep, areaCut: r.areaCut }; },
+  // 跨宗切出（v0.35.0）：lineA／lineB 各為 {id}、{edge:[u,v],y,x} 或 {y,x} 的點陣列；plan 只算不改圖
+  planCarveBand: ({ lineA, lineB }) => Core.planCarveBand(S.ds, lineA, lineB),
+  carveBand: ({ lineA, lineB, to = 'new', label, areaReg } = {}) => { const dest = label != null && label !== '' ? label : to; const r = Core.carveBand(S.ds, lineA, lineB, { to: dest, areaReg, mother: unMother() }); pushStruct(r.delta, `跨宗切出 → ${r.into}`); const idxs = r.parcels.map(p => p.idx), q = S.ds.parcels.find(x => !x.deleted && x.label === r.into); if (q && !idxs.includes(q.idx)) idxs.push(q.idx); liveCheck(idxs); return { into: r.into, area: r.area, parcels: r.parcels, targets: r.targets, defaultTarget: r.defaultTarget }; },
   deleteEdge: ({ a, b }) => { const r = Core.deleteEdge(S.ds, a, b); pushStruct(r.delta, `刪除線 ${a}–${b}`); return { keep: r.keep, merged: r.merged }; },
   addFace: ({ ids, mother = 9001 }) => { const r = Core.addFace(S.ds, ids, mother); pushStruct(r.delta, `新增面 ${r.label}`); return { label: r.label }; },
   getBaselineReport: () => { const r = S.bl.res; if (!r) return null; const strip = l => l.map(({ rings, ...x }) => x);
