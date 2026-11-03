@@ -1565,22 +1565,43 @@ const Core = (() => {
   function mergeParcels(ds, idxs, keep) {
     idxs = [...new Set(idxs)]; if (idxs.length < 2) throw new Error('至少選兩筆');
     for (const i of idxs) { const p = ds.parcels[i]; if (!p || p.deleted) throw new Error('宗地不存在');
-      if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，尚未支援合併`);
-      if (p.mid && p.mid.some(Boolean)) throw new Error(`${p.label} 含圓弧，尚未支援合併`); }
-    const d = newDelta(); d.deleted = []; healJunctions(ds, d, idxs);
-    const loops = outlineLoops(ds, idxs).filter(l => Math.abs(l.area) > 1e-6);
-    if (loops.length !== 1 || loops[0].area <= 0) {
-      if (d.parcels.size) applyDelta(ds, closeDelta(ds, d), 'undo');
-      throw new Error(loops.some(l => l.area < 0) ? '合併後中間會有空洞，請連空洞一起處理' : `選取的宗地沒有全部相連（外圍 ${loops.filter(l => l.area > 0).length} 個環；可能有縫隙或重疊）`);
+      if (p.mid && p.mid.some(Boolean)) throw new Error(`${p.label} 含圓弧，尚未支援合併`);
+      if ((p.holes || []).length && (p.containers || []).length) throw new Error(`${p.label} 同時含地中地又是地中地，尚未支援合併`); }
+    const inGroup = new Set(idxs);
+    // 地中地（v0.34.0）：成員本身是地中地時只有兩種情形可合併——
+    // B1 外圈也在這次合併的成員裡（地中地併回外圈，面積併入外圈）；B2 全部都是同一個外圈的地中地、外圈不在成員裡（留在外圈內互併）。
+    // 其餘（地中地與外圈以外的宗地合併、分屬不同外圈）拒絕，訊息要指出是哪一宗的地中地。
+    const holeMem = idxs.filter(i => (ds.parcels[i].containers || []).length);
+    let dissolve = new Set();
+    if (holeMem.length) {
+      const conts = new Set(); for (const i of holeMem) for (const c of ds.parcels[i].containers) conts.add(c);
+      if (!(holeMem.length === idxs.length && conts.size === 1 && !inGroup.has([...conts][0]))) {   // 不是 B2 就必須是 B1
+        for (const i of holeMem) for (const c of ds.parcels[i].containers) if (!inGroup.has(c)) throw new Error(`${ds.parcels[i].label} 是 ${ds.parcels[c].label} 的地中地，不能與外圈以外的宗地合併`);
+        dissolve = new Set(holeMem);
+      }
     }
-    const order = idxs.map(i => ds.parcels[i]).sort((a, b) => (a.created - b.created) || (mainNo(a) - mainNo(b)) || (subNo(a) - subNo(b)));
-    const k = keep != null ? ds.parcels[keep] : order[0];
-    const inGroup = new Set(idxs), onLoop = new Set(loops[0].ids), drop = new Set();
-    for (const i of idxs) { const p = ds.parcels[i]; touchParcel(d, p); for (const id of p.ids) if (!onLoop.has(id) && (ds.pointParcels.get(id) || []).every(x => inGroup.has(x))) drop.add(id); }
-    for (const i of idxs) { const p = ds.parcels[i]; if (p === k) continue; p.ids = []; p.mid = []; p.deleted = true; d.deleted.push(i); }
-    k.ids = loops[0].ids.slice(); k.mid = k.ids.map(() => false); k.unregEdit = true;
-    for (const id of drop) { const q = ds.points.get(id); if (q) { ds.points.delete(id); d.removed.push(q); } }
-    return { delta: closeDelta(ds, d), keep: k.label, merged: idxs.filter(i => i !== k.idx).map(i => ds.parcels[i].label), removedPoints: [...drop] };
+    const geo = idxs.filter(i => !dissolve.has(i));   // 外圍用這些宗地的環算（地中地與外圈沒有共用邊，不能放進來）
+    if (keep != null) { if (!inGroup.has(keep)) throw new Error('保留的宗地不在選取範圍'); if (dissolve.has(keep)) throw new Error(`${ds.parcels[keep].label} 是地中地，合併後併入外圈，不能保留這個地號`); }
+    const d = newDelta(); d.deleted = []; d.holes = [];
+    try {
+      healJunctions(ds, d, geo);
+      const loops = outlineLoops(ds, geo).filter(l => Math.abs(l.area) > 1e-6);
+      if (loops.length !== 1 || loops[0].area <= 0) throw new Error(loops.some(l => l.area < 0) ? '合併後中間會有空洞，請連空洞一起處理' : `選取的宗地沒有全部相連（外圍 ${loops.filter(l => l.area > 0).length} 個環；可能有縫隙或重疊）`);
+      const order = geo.map(i => ds.parcels[i]).sort((a, b) => (a.created - b.created) || (mainNo(a) - mainNo(b)) || (subNo(a) - subNo(b)));
+      const k = keep != null ? ds.parcels[keep] : order[0];
+      const onLoop = new Set(loops[0].ids), drop = new Set();
+      for (const i of idxs) { const p = ds.parcels[i]; touchParcel(d, p); for (const id of p.ids) if (!onLoop.has(id) && (ds.pointParcels.get(id) || []).every(x => inGroup.has(x))) drop.add(id); }
+      for (const hi of dissolve) { touchParcel(d, ds.parcels[hi]); for (const c of (ds.parcels[hi].containers || []).slice()) { touchParcel(d, ds.parcels[c]); linkHole(ds, c, hi, false); d.holes.push({ p: c, h: hi, on: false }); } }   // 地中地併回外圈
+      for (const i of geo) { const p = ds.parcels[i]; if (p === k) continue; for (const hi of (p.holes || []).slice()) {   // A：其餘成員的地中地都轉給保留宗地
+        if (dissolve.has(hi)) continue; const had = (k.holes || []).includes(hi); linkHole(ds, i, hi, false); d.holes.push({ p: i, h: hi, on: false });
+        if (!had) { linkHole(ds, k.idx, hi, true); d.holes.push({ p: k.idx, h: hi, on: true }); } } }
+      for (const i of idxs) { const p = ds.parcels[i]; if (p === k) continue;
+        if (!dissolve.has(i)) for (const c of (p.containers || []).slice()) { touchParcel(d, ds.parcels[c]); linkHole(ds, c, i, false); d.holes.push({ p: c, h: i, on: false }); }   // B2：被刪掉的地中地要解除與外圈的關係
+        p.ids = []; p.mid = []; p.deleted = true; d.deleted.push(i); }
+      k.ids = loops[0].ids.slice(); k.mid = k.ids.map(() => false); k.unregEdit = true;
+      for (const id of drop) { const q = ds.points.get(id); if (q) { ds.points.delete(id); d.removed.push(q); } }
+      return { delta: closeDelta(ds, d), keep: k.label, merged: idxs.filter(i => i !== k.idx).map(i => ds.parcels[i].label), removedPoints: [...drop] };
+    } catch (e) { applyDelta(ds, closeDelta(ds, d), 'undo'); throw e; }   // 整筆還原（含已改過的 linkHole）
   }
   // 碎塊歸併（v0.24.0）：面積 < minArea 的未登記地併入「共用界線最長」的相鄰未登記地（保留鄰宗地號）。地中地、圓弧略過；
   // 只與登記地相鄰的碎塊不動（併進登記地會改變登記地面積），列在 left。idxs：只處理這些宗地（省略＝全部未登記地）。回傳 {deltas, merged:[{from, into}], left:[地號]}
@@ -3112,9 +3133,9 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     for (let u = 0; u + 1 < line.length; u++) for (let v = u + 2; v + 1 < line.length; v++) { const U = line[u], V = line[u + 1], X = line[v], Y = line[v + 1]; if (cr(U, V, X) * cr(U, V, Y) < 0 && cr(X, Y, U) * cr(X, Y, V) < 0) fail('切線自我交錯'); }
     touchParcel(d, p); const mid = pts.map(q => { const id = nextPointId(ds), np = { id, y: q.y, x: q.x, y0: q.y, x0: q.x, row: null, added: true }; ds.points.set(id, np); d.added.push(np); return id; });
     const walk = (s, e) => { const out = [ring[s]]; for (let k = s; k !== e;) { k = (k + 1) % n; out.push(ring[k]); } return out; }, c1 = walk(i, j).concat(mid.slice().reverse()), c2 = walk(j, i).concat(mid);
-    const a1 = Math.abs(signedArea(c1, ds.points)), a2 = Math.abs(signedArea(c2, ds.points)), near = opt.keepNear, first = near > 0 ? Math.abs(a1 - near) <= Math.abs(a2 - near) : a1 >= a2, [big, small] = first ? [c1, c2] : [c2, c1];
+    const a1 = Math.abs(signedArea(c1, ds.points)), a2 = Math.abs(signedArea(c2, ds.points)), near = opt.keepNear, first = opt.keepFirst != null ? !!opt.keepFirst : near > 0 ? Math.abs(a1 - near) <= Math.abs(a2 - near) : a1 >= a2, [big, small] = first ? [c1, c2] : [c2, c1];
     p.ids = big; p.mid = big.map(() => false); p.unregEdit = true; const q = createParcel(ds, d, opt.mother || mainNo(p), small, p);
-    return { delta: closeDelta(ds, d), keep: p.label, created: q.label, idx: q.idx, areaKeep: Math.max(first ? a1 : a2, 0), areaCut: first ? a2 : a1, points: mid, ids: [a, ...mid, b] };
+    return { delta: closeDelta(ds, d), keep: p.label, created: q.label, idx: q.idx, areaKeep: Math.max(first ? a1 : a2, 0), areaCut: first ? a2 : a1, points: mid, ids: [a, ...mid, b], first };
   }
   // 點 Q 接到宗地環：離既有點 ≤ snapV 用既有點，否則投影到最近的邊（max m 內）
   function afAttach(ds, p, Q, snapV, max) {
@@ -3125,6 +3146,71 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
   function afParcelAt(ds, y, x) { let best = null; for (const p of ds.parcels) { if (p.deleted || p.ids.length < 3) continue; if (pointInRing(p.ids, ds.points, y, x) && !(p.holes || []).some(h => pointInRing(ds.parcels[h].ids, ds.points, y, x)) && (!best || p.area < best.area)) best = p; } return best; }
   // 試切後還原：新宗地要整筆拿掉，留著會是「已刪除」的空殼，與下一筆切出的宗地同地號
   function afUndoCut(ds, r) { applyDelta(ds, r.delta, 'undo'); if (ds.parcels[ds.parcels.length - 1].idx === r.idx) { ds.parcels.pop(); buildTopology(ds); } }
+  // 切出併入（v0.34.0）：沿折線試切，只算不改圖；A、B 同 splitByPath，opt.swap 供介面預覽對調保留側
+  function planCarve(ds, pi, A, B, pts, opt = {}) {
+    const p = ds.parcels[pi]; if (!p || p.deleted) throw new Error('宗地不存在');
+    const area0 = p.area, areaReg = p.areaReg > 0 ? p.areaReg : null;
+    const hadUE = 'unregEdit' in p, ue0 = p.unregEdit, hadMid = 'mid' in p, mid0 = p.mid ? p.mid.slice() : p.mid;
+    let r = null, keepXY = null, cutXY = null, a1 = 0, a2 = 0, sharesKeep = [], sharesCut = [], first = true;
+    try {
+      r = splitByPath(ds, pi, A, B, pts, { keepNear: areaReg || undefined });
+      const q = ds.parcels[r.idx], ringXY = ids => ids.map(id => { const z = ds.points.get(id); return { y: z.y, x: z.x }; });
+      first = r.first; keepXY = ringXY(p.ids); cutXY = ringXY(q.ids); a1 = r.areaKeep; a2 = r.areaCut;
+      // 共用邊長：查切開後的位相（切線端點與中間點都在），同一鄰宗加總；本宗與切出的那一塊都不算
+      const side = (ring, areaCut) => {
+        const m = new Map(), n = ring.length;
+        for (let i = 0; i < n; i++) {
+          const ia = ring[i], ib = ring[(i + 1) % n], e = ds.edges.get(segKey(ia, ib)); if (!e) continue;
+          const A1 = ds.points.get(ia), B1 = ds.points.get(ib), L = Math.hypot(B1.x - A1.x, B1.y - A1.y);
+          for (const j of e.parcels) {
+            if (j === pi || j === r.idx) continue; const t = ds.parcels[j]; if (!t || t.deleted) continue;
+            m.set(j, (m.get(j) || 0) + L);
+          }
+        }
+        const out = [...m].map(([j, shared]) => { const t = ds.parcels[j], reg = t.areaReg > 0 ? t.areaReg : 0; return { kind: isUnreg(t) ? 'unreg' : 'reg', label: t.label, idx: j, shared, diffAfter: reg > 0 ? t.area + areaCut - reg : null }; });
+        out.sort((u, v) => (u.kind === v.kind ? 0 : u.kind === 'unreg' ? -1 : 1) || v.shared - u.shared || String(u.label).localeCompare(String(v.label), 'zh-Hant'));
+        return out;
+      };
+      sharesKeep = side(p.ids, a1); sharesCut = side(q.ids, a2);
+    } finally {
+      if (r) { afUndoCut(ds, r); if (hadUE) p.unregEdit = ue0; else delete p.unregEdit; if (hadMid) p.mid = mid0; else delete p.mid; }
+    }
+    const rings = first ? [keepXY, cutXY] : [cutXY, keepXY], areas = first ? [a1, a2] : [a2, a1], shareSides = first ? [sharesKeep, sharesCut] : [sharesCut, sharesKeep];
+    const defKeep = first ? 0 : 1, keep = opt.swap ? 1 - defKeep : defKeep, cut = 1 - keep;
+    const targets = [...shareSides[cut], { kind: 'new', label: 'new', shared: 0, diffAfter: null }, { kind: 'child', label: 'child', shared: 0, diffAfter: null }];
+    const longest = targets.filter(t => t.kind === 'unreg').sort((u, v) => v.shared - u.shared)[0];
+    return { parcel: p.label, pieces: [{ ring: rings[0], area: areas[0] }, { ring: rings[1], area: areas[1] }], keep, areaReg: p.areaReg || 0, tol: areaReg ? areaTol(areaReg) : null,
+      diffBefore: areaReg ? area0 - areaReg : null, diffAfter: areaReg ? areas[keep] - areaReg : null, targets, defaultTarget: longest ? longest.label : 'new' };
+  }
+  // 切出併入（v0.34.0）：一次完成切開＋合併（單一 delta）。to＝'unreg'（同 planCarve 預設）、'new'、'child' 或地號；swap 保留另一塊
+  function carveTo(ds, pi, A, B, pts, o = {}) {
+    const p = ds.parcels[pi]; if (!p || p.deleted) throw new Error('宗地不存在');
+    const swap = !!o.swap, to = o.to == null ? 'unreg' : o.to, plan = planCarve(ds, pi, A, B, pts, { swap });
+    let toLabel = null;
+    if (to === 'unreg') {
+      const u = plan.targets.filter(t => t.kind === 'unreg').sort((x, y) => y.shared - x.shared)[0];
+      if (!u) throw new Error('切下的部分沒有接到未登記地'); toLabel = u.label;
+    } else if (to !== 'new' && to !== 'child') {
+      const ex = ds.parcels.find(t => !t.deleted && (t.label === String(to) || t.oldLabel === String(to)));
+      if (!ex) throw new Error('找不到地號 ' + to); if (ex.idx === pi) throw new Error('不能併回本宗');
+      if (!plan.targets.some(t => t.idx === ex.idx)) throw new Error(`切下的部分沒有和 ${ex.label} 相鄰`);
+      toLabel = ex.label;
+    }
+    const mother = to === 'new' ? (o.mother != null ? o.mother : UNREG_MIN + 1) : mainNo(p);
+    const r = splitByPath(ds, pi, A, B, pts, { mother, keepFirst: plan.keep === 0 }), q = ds.parcels[r.idx];
+    if (to === 'new' || to === 'child') return { delta: r.delta, keep: p.label, into: q.label, areaKeep: r.areaKeep, areaCut: r.areaCut };
+    const tgt = ds.parcels.find(t => !t.deleted && t.label === toLabel);
+    if (!tgt) { afUndoCut(ds, r); throw new Error('找不到地號 ' + toLabel); }
+    let adj = false; const n = q.ids.length;
+    for (let i = 0; i < n && !adj; i++) { const e = ds.edges.get(segKey(q.ids[i], q.ids[(i + 1) % n])); if (e && e.parcels.includes(tgt.idx)) adj = true; }
+    if (!adj) { afUndoCut(ds, r); throw new Error(`切下的部分沒有和 ${tgt.label} 相鄰`); }
+    let m; try { m = mergeParcels(ds, [r.idx, tgt.idx], tgt.idx); } catch (e) { afUndoCut(ds, r); throw e; }
+    const d = newDelta(); mergeDelta(d, r.delta); mergeDelta(d, m.delta);
+    d.created = (r.delta.created || []).filter(i => i !== r.idx); d.deleted = (m.delta.deleted || []).filter(i => i !== r.idx); d.holes = (m.delta.holes || []).filter(l => l.p !== r.idx && l.h !== r.idx); d.parcels.delete(r.idx);
+    if (ds.parcels[ds.parcels.length - 1].idx === r.idx) ds.parcels.pop();   // 暫存的切出宗地已併入，不留空殼（undo 才能回到原狀、redo 不會多一宗）
+    closeDelta(ds, d);
+    return { delta: d, keep: p.label, into: tgt.label, areaKeep: r.areaKeep, areaCut: r.areaCut };
+  }
   function afApplyCut(ds, op, o) {
     const m = op.pts[Math.floor(op.pts.length / 2)] || { y: (op.A.y + op.B.y) / 2, x: (op.A.x + op.B.x) / 2 }, n = op.pts.length ? null : m, p = afParcelAt(ds, m.y, m.x); if (!p) throw new Error('切線不在宗地內'); void n;
     const A = afAttach(ds, p, op.A, o.snapV, o.attach + 1), B = afAttach(ds, p, op.B, o.snapV, o.attach + 1); if (!A || !B) throw new Error(`切線端點接不到 ${p.label} 的界線`);
@@ -3367,7 +3453,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall, trimExcess, planTrimExcess,
     baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
-    AUTOFIX_DEFAULT, autoFixRun, autoFixApply, splitByPath,
+    AUTOFIX_DEFAULT, autoFixRun, autoFixApply, splitByPath, planCarve, carveTo,
     parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner, sheetLines, nearSheetLines, datasetState, applyDatasetState, healAround, localConflicts, nearDupPoints, nearEdgePoints, seamPointPairs, diffState, parseReportNotes };
 })();
 if (typeof module !== 'undefined') module.exports = Core;

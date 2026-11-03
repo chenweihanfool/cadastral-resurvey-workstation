@@ -2298,12 +2298,15 @@ const TOPO = {
   delFace: { g: '面', name: '刪除面', picks: ['par'], hint: '點一下要刪的宗地：地中地併入外圈，一般宗地範圍變成空地／段外' },
   mergeFace: { g: '面', name: '合併面', picks: ['pars'], hint: '依序點要合併的相連宗地，Enter 合併（保留已登記且地號小者）' },
   redraw: { g: '面', name: '重繪界址串', picks: ['par'], hint: '點一下宗地，再依序點它的界址點重畫界址串（Enter 完成）' },
+  carve: { g: '面', name: '切出併入', picks: ['pts'], hint: '沿宗地突起畫切線：第一點與最後一點吸附界址點／線，中間點自由；Enter 預覽，選好歸屬後接受' },
 };
 S.topo = null;   // { tool, picks:[{t:'pt'|'edge'|'par'|'xy', …}] }
 function topoPanel() {
   const by = {}; for (const [k, t] of Object.entries(TOPO)) (by[t.g] = by[t.g] || []).push([k, t]);
   $('topoTools').innerHTML = Object.entries(by).map(([g, list]) => `<div class="tgrp"><b>${g}</b><div class="row small">${list.map(([k, t]) => `<button class="btn${S.topo && S.topo.tool === k ? ' primary' : ''}" data-topo="${k}" title="${esc(t.hint)}">${t.name}</button>`).join('')}</div></div>`).join('');
-  $('topoHint').textContent = S.topo ? `${TOPO[S.topo.tool].name}：${TOPO[S.topo.tool].hint}` + (S.topo.picks.length ? `（已點 ${S.topo.picks.length}）` : '') + (S.topo.err ? `　⚠ 沒有執行：${S.topo.err}` : '') : '選一個工具，然後在圖上點選。Esc 取消、Enter 完成、Backspace 退一步；每次都可 Ctrl+Z 復原。';
+  const T = S.topo;
+  $('topoHint').textContent = T ? `${TOPO[T.tool].name}：${TOPO[T.tool].hint}` + (T.carve ? '（預覽中）' : T.picks.length ? `（已點 ${T.picks.length}）` : '') + (T.err ? `　⚠ 沒有執行：${T.err}` : '') : '選一個工具，然後在圖上點選。Esc 取消、Enter 完成、Backspace 退一步；每次都可 Ctrl+Z 復原。';
+  carvePanel();
   tqPanel();
 }
 function topoStart(tool) {
@@ -2316,6 +2319,7 @@ function topoCancel() { S.topo = null; setHint(''); topoPanel(); draw(); }
 function parcelAt(wx, wy) { let best = null; for (const p of S.ds.parcels) { if (p.deleted || p.ids.length < 3) continue; if (Core.pointInRing(p.ids, S.ds.points, wy, wx) && (!best || p.area < best.area)) best = p; } return best; }
 function topoPick(mx, my) {
   const T = S.topo, def = TOPO[T.tool], wx = toWx(mx), wy = toWy(my), need = def.picks[Math.min(T.picks.length, def.picks.length - 1)]; T.err = '';
+  if (T.tool === 'carve') return carvePick(wx, wy);
   const pt = () => nearestPoint(S.ds.points, wx, wy, 12 / S.view.s), edge = () => hitEdgeAt(wx, wy, 8 / S.view.s);
   if (need === 'pt' || need === 'pts') { const q = pt(); if (!q) return msg('請點在界址點上');
     if (need === 'pts' && T.picks.length >= 3 && q.id === T.picks[0].id) return topoRun();
@@ -2348,12 +2352,107 @@ function topoRun() {
       case 'delFace': deleteParcelUI([P[0].idx]); break;
       case 'mergeFace': if (P.length < 2) throw new Error('至少點兩宗'); mergeParcelsUI(P.map(p => p.idx)); break;
       case 'redraw': clearSel(); S.sel.par.add(P[0].idx); S.topo = null; startRedraw(); topoPanel(); return;
+      case 'carve': carveStart(P); break;
     }
   } catch (err) { T.err = err.message; msg(`${TOPO[T.tool].name}：${err.message}`); }   // 失敗原因也寫進工具箱與圖上提示：狀態列 9 秒就清掉，提示又馬上換成「繼續下一筆」，看起來像沒反應（v0.33.1）
-  setHint(T.err ? `${TOPO[T.tool].name}沒有執行：${T.err}　（重新點選，Esc 結束）` : `${TOPO[T.tool].name}：${TOPO[T.tool].hint}　（繼續下一筆，Esc 結束）`); topoPanel(); refresh();
+  setHint(T.err ? `${TOPO[T.tool].name}沒有執行：${T.err}　（重新點選，Esc 結束）` : T.carve ? `切出併入：預覽中——選好歸屬後按「接受」，「取消」重新畫線、Esc 結束` : `${TOPO[T.tool].name}：${TOPO[T.tool].hint}　（繼續下一筆，Esc 結束）`); topoPanel(); refresh();
+}
+// ── 切出併入（v0.34.0）：第一點吸附界址點／線，中間點自由，最後一點按 Enter 時吸附；預覽兩塊與歸屬，接受後一次完成 ──
+const carveXY = p => (p.t === 'pt' ? S.ds.points.get(p.id) : p);
+function carveSnapAt(wx, wy) {
+  const q = nearestPoint(S.ds.points, wx, wy, 12 / S.view.s); if (q) return { t: 'pt', id: q.id, y: q.y, x: q.x };
+  const e = hitEdgeAt(wx, wy, 8 / S.view.s); return e ? { t: 'edge', a: e.a, b: e.b, y: wy, x: wx } : null;
+}
+function carvePick(wx, wy) {
+  const T = S.topo; T.err = '';
+  if (T.carve) return msg('請先按「接受」或「取消」完成這個切出預覽');
+  if (!T.picks.length) { const q = carveSnapAt(wx, wy); if (!q) return msg('第一點請點在界址點或界址線上（12px／8px 內）'); T.picks.push(q); }
+  else T.picks.push({ t: 'xy', y: wy, x: wx });
+  setHint(`切出併入：已點 ${T.picks.length} 點（第一點吸附界址點／線；最後一點按 Enter 時吸附；中間點自由）　Enter 預覽、Backspace 退一點、Esc 取消`);
+  topoPanel(); draw();
+}
+function carveStart(P) {
+  const T = S.topo, ds = S.ds;
+  if (T.carve) throw new Error('請先接受或取消目前的切出預覽');
+  if (P.length < 2) throw new Error('至少要有起訖兩點');
+  const first = P[0], last0 = P[P.length - 1];
+  const e1 = first.t === 'pt' ? { id: first.id } : first.t === 'edge' ? { edge: [first.a, first.b], y: first.y, x: first.x } : null;
+  if (!e1) throw new Error('第一點要點在界址點或界址線上');
+  const last = last0.t === 'xy' ? carveSnapAt(last0.x, last0.y) : last0;
+  if (!last) throw new Error('最後一點要點在界址點或界址線上（12px／8px 內）');
+  const e2 = last.t === 'pt' ? { id: last.id } : { edge: [last.a, last.b], y: last.y, x: last.x };
+  const pts = P.slice(1, -1).map(p => ({ y: p.y, x: p.x })), cand = [], add = pi => { if (pi != null && !cand.includes(pi)) cand.push(pi); };
+  const addAt = p => {
+    if (p.t === 'pt') for (const pi of ds.pointParcels.get(p.id) || []) add(pi);
+    else { const e = p.t === 'edge' ? ds.edges.get(p.a < p.b ? p.a + '-' + p.b : p.b + '-' + p.a) : null; if (e) for (const pi of e.parcels) add(pi); }
+    const q = carveXY(p), pp = q && parcelAt(q.x, q.y); if (pp) add(pp.idx);
+  };
+  addAt(first); addAt(last);
+  const a = carveXY(first), b = carveXY(last), mp = parcelAt((a.x + b.x) / 2, (a.y + b.y) / 2); if (mp) add(mp.idx);
+  let plan = null, pi = -1, err = null;
+  for (const j of cand) { try { plan = Core.planCarve(ds, j, e1, e2, pts); pi = j; break; } catch (e) { err = e; } }
+  if (!plan) throw err || new Error('切線不在宗地內');
+  T.carve = { pi, A: e1, B: e2, pts, plan, swap: false, target: plan.defaultTarget, err: '' }; T.picks = [];
+  msg(`切出併入：${plan.parcel} 保留 ${plan.pieces[plan.keep].area.toFixed(2)} m²、切下 ${plan.pieces[1 - plan.keep].area.toFixed(2)} m²——選好歸屬後按「接受」`);
+}
+function carvePanel() {
+  const el = $('carvePanel'); if (!el) return;
+  const c = S.topo && S.topo.tool === 'carve' ? S.topo.carve : null;
+  if (!c) { el.innerHTML = ''; el.style.display = 'none'; return; }
+  el.style.display = '';
+  const pl = c.plan, k = pl.keep, f = v => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2));
+  const worse = pl.areaReg > 0 && Math.abs(pl.diffAfter) > Math.abs(pl.diffBefore) + 1e-9;
+  const diffLine = pl.areaReg > 0 ? `本宗較差：切前 ${f(pl.diffBefore)} → 切後 <b style="${worse ? 'color:var(--bad)' : ''}">${f(pl.diffAfter)}</b>（容許 ±${pl.tol.toFixed(2)}）${worse ? ' <b style="color:var(--bad)">離登記面積更遠</b>' : ''}` : '本宗沒有登記面積，不計較差';
+  const rad = pl.targets.map(t => {
+    const key = t.kind === 'new' ? 'new' : t.kind === 'child' ? 'child' : t.label;
+    const title = t.kind === 'new' ? `新建未登記地（母號 ${unMother()}）` : t.kind === 'child' ? `留為 ${esc(pl.parcel)} 的子號` : `併入 ${esc(t.label)}`;
+    const meta = (t.kind === 'unreg' || t.kind === 'reg') ? `共用邊 ${t.shared.toFixed(1)} m；併入後較差 ${t.diffAfter == null ? '—' : f(t.diffAfter)}` : '沒有登記面積';
+    return `<label class="chk" style="display:block"><input type="radio" name="carveTarget" value="${esc(key)}" ${key === c.target ? 'checked' : ''}> ${title} <span class="muted">${meta}</span></label>`;
+  }).join('');
+  el.innerHTML = `<div style="padding:6px 8px;border:1px solid var(--line);border-radius:6px">` +
+    `<div>保留側 <b>${pl.pieces[k].area.toFixed(2)}</b> m²（${esc(pl.parcel)}）／切下側 <b>${pl.pieces[1 - k].area.toFixed(2)}</b> m²</div>` +
+    `<div>${diffLine}</div><div style="margin-top:4px">切下的部分歸誰：</div>${rad}` +
+    `<div class="row" style="margin-top:6px"><button class="btn" data-carve="swap">對調保留側</button><button class="btn primary" data-carve="accept">接受</button><button class="btn" data-carve="cancel">取消</button></div>` +
+    (c.err ? `<div style="color:var(--bad);margin-top:4px">⚠ ${esc(c.err)}</div>` : '') + `</div>`;
+}
+function carveSwap() {
+  const c = S.topo && S.topo.carve; if (!c) return;
+  try { c.swap = !c.swap; c.plan = Core.planCarve(S.ds, c.pi, c.A, c.B, c.pts, { swap: c.swap }); c.target = c.plan.defaultTarget; c.err = ''; S.topo.err = ''; }
+  catch (e) { c.err = e.message; }
+  topoPanel(); draw();
+}
+function carveCancel() {
+  if (!S.topo) return; S.topo.carve = null; S.topo.picks = []; S.topo.err = ''; setHint(`切出併入：${TOPO.carve.hint}　Esc 結束`); topoPanel(); draw();
+}
+function carveAccept() {
+  const c = S.topo && S.topo.carve; if (!c || !S.ds) return;
+  try {
+    const r = Core.carveTo(S.ds, c.pi, c.A, c.B, c.pts, { to: c.target, swap: c.swap, mother: unMother() });
+    pushStruct(r.delta, `切出併入 ${r.keep} → ${r.into}`);
+    const idxs = [c.pi], q = S.ds.parcels.find(x => !x.deleted && x.label === r.into); if (q) idxs.push(q.idx);
+    S.topo.carve = null; S.topo.picks = []; S.topo.err = ''; liveCheck(idxs);
+    msg(`切出併入：${r.keep} 保留 ${r.areaKeep.toFixed(2)} m²，切下 ${r.areaCut.toFixed(2)} m² 併入 ${r.into}（Ctrl+Z 一次復原）`);
+    setHint(`切出併入：已完成（${r.keep} → ${r.into}）　繼續點下一條切線，Esc 結束`); topoPanel(); refresh();
+  } catch (e) { c.err = e.message; S.topo.err = e.message; msg(`切出併入：${e.message}`); setHint(`切出併入沒有執行：${e.message}　（重新預覽或「取消」）`); topoPanel(); draw(); }
+}
+if ($('carvePanel')) {
+  $('carvePanel').addEventListener('change', e => { const t = e.target; if (!t || t.name !== 'carveTarget' || !(S.topo && S.topo.carve)) return; S.topo.carve.target = t.value; });
+  $('carvePanel').addEventListener('click', e => { const b = e.target.closest('[data-carve]'); if (!b) return; if (b.dataset.carve === 'swap') carveSwap(); else if (b.dataset.carve === 'accept') carveAccept(); else carveCancel(); });
+}
+function drawCarve(c) {
+  const ring = (pts, fill, stroke) => { ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y)))); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); };
+  const k = c.plan.keep; ring(c.plan.pieces[k].ring, 'rgba(47,158,68,.30)', '#2f9e44'); ring(c.plan.pieces[1 - k].ring, 'rgba(240,140,0,.30)', '#f08c00');
 }
 function drawTopo() {
-  const T = S.topo; if (!T || !T.picks.length) return; ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = ctx.fillStyle = '#f08c00';
+  const T = S.topo; if (!T) return;
+  if (T.carve) { ctx.save(); drawCarve(T.carve); ctx.restore(); }
+  if (!T.picks.length) return; ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = ctx.fillStyle = '#f08c00';
+  if (T.tool === 'carve') {
+    ctx.setLineDash([6, 4]); ctx.beginPath();
+    T.picks.map(carveXY).forEach((q, i) => (i ? ctx.lineTo(toSx(q.x), toSy(q.y)) : ctx.moveTo(toSx(q.x), toSy(q.y))));
+    ctx.stroke(); ctx.setLineDash([]);
+    for (const p of T.picks) { const q = carveXY(p); ctx.beginPath(); ctx.arc(toSx(q.x), toSy(q.y), 5, 0, 7); ctx.fill(); }
+  }
   for (const p of T.picks) {
     if (p.t === 'pt') { const q = S.ds.points.get(p.id); if (q) { ctx.beginPath(); ctx.arc(toSx(q.x), toSy(q.y), 8, 0, 7); ctx.stroke(); } }
     else if (p.t === 'edge') { const a = S.ds.points.get(p.a), b = S.ds.points.get(p.b); ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(toSx(a.x), toSy(a.y)); ctx.lineTo(toSx(b.x), toSy(b.y)); ctx.stroke(); ctx.lineWidth = 3; }
@@ -2888,6 +2987,9 @@ const api = {
   trimExcess: ({ label, to = 'unreg', faces, mother, minFace, items } = {}) => trimApply(items || [{ label, to, faces, mother, minFace }]),
   getBaselineRings: ({ label }) => { if (!S.bl.res) blRun(); const x = [...S.bl.res.area, ...S.bl.res.missing, ...S.bl.res.partial, ...S.bl.res.unreg].find(a => a.label === String(label)); if (!x) throw new Error('接圖前比對沒有 ' + label); return { label: x.label, rings: (x.rings || []).map(r => r.map(q => ({ y: q.y, x: q.x }))) }; },
   splitByChord: ({ parcel, a, b }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.splitByChord(S.ds, p.idx, a, b); pushStruct(r.delta, `新增線 ${a}–${b}`); return { keep: r.keep, created: r.created }; },
+  // 切出併入（v0.34.0）：planCarve 只算不改圖；carveTo 一次切開＋併入，單一復原項目
+  planCarve: ({ parcel, A, B, pts = [] }) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); return Core.planCarve(S.ds, p.idx, A, B, pts); },
+  carveTo: ({ parcel, A, B, pts = [], to = 'unreg', swap = false } = {}) => { const p = findPar(parcel); if (!p) throw new Error('找不到地號 ' + parcel); const r = Core.carveTo(S.ds, p.idx, A, B, pts, { to, swap, mother: unMother() }); pushStruct(r.delta, `切出併入 ${r.keep} → ${r.into}`); const idxs = [p.idx], q = S.ds.parcels.find(x => !x.deleted && x.label === r.into); if (q) idxs.push(q.idx); liveCheck(idxs); return { keep: r.keep, into: r.into, areaKeep: r.areaKeep, areaCut: r.areaCut }; },
   deleteEdge: ({ a, b }) => { const r = Core.deleteEdge(S.ds, a, b); pushStruct(r.delta, `刪除線 ${a}–${b}`); return { keep: r.keep, merged: r.merged }; },
   addFace: ({ ids, mother = 9001 }) => { const r = Core.addFace(S.ds, ids, mother); pushStruct(r.delta, `新增面 ${r.label}`); return { label: r.label }; },
   getBaselineReport: () => { const r = S.bl.res; if (!r) return null; const strip = l => l.map(({ rings, ...x }) => x);
