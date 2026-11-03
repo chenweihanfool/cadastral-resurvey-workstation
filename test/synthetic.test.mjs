@@ -1284,4 +1284,96 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.throws(() => Core.carveBand(d, [{ y: Y - 10, x: X + 190 }, { y: Y - 10, x: X + 310 }], [{ y: Y + 110, x: X + 190 }, { y: Y + 110, x: X + 310 }]), /整宗在範圍內，請改用合併面/, '登記地整宗在範圍內');
   assert.deepEqual(Core.datasetState(d), st, '整宗登記地失敗後狀態不變');
 }
+
+// ── 跨宗切出：PM 第 2 次退回 A–E（專案檔重開、自由點起點、沿界線跨宗、子號、重疊訊息）──
+{
+  const Y = 2700000, X = 220000;
+  const live = d => d.parcels.filter(p => !p.deleted), noConf = d => { const c = Core.ringConflicts(d); assert.equal(c.cross.length + c.overlap.length, 0, '不可交錯或重疊'); };
+  const mkBand = (extra = []) => {
+    const d = Core.newDataset('band', 't');
+    for (const [id, y, x] of [[1, 0, 0], [2, 0, 100], [3, 0, 200], [4, 0, 300], [5, 100, 0], [6, 100, 100], [7, 100, 200], [8, 100, 300], ...extra]) d.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x });
+    const add = (l, ids, reg) => d.parcels.push({ key: `1|${l}|0`, label: String(l), oldLabel: String(l), ids, mid: ids.map(() => false), areaReg: reg || 0 });
+    add('10', [1, 2, 6, 5], 10000); add('11', [2, 3, 7, 6], 10000); add('12', [3, 4, 8, 7], 10000);
+    return Core.finalize(d);
+  };
+
+  // A. 專案檔重開：D11 有改號（10/11/12 → 210/211/212）時，保留原地號的那一塊不得動 key／label／oldLabel／areaReg
+  const mkD = () => {
+    const pts = rd(F_D14, [[1, 0, 0], [2, 0, 100], [3, 0, 200], [4, 0, 300], [5, 100, 0], [6, 100, 100], [7, 100, 200], [8, 100, 300]].map(([n, y, x]) => pt(n, Y + y, X + x)));
+    const bnd = rd(F_D13, [ring(1, 10, 0, [1, 2, 6, 5]), ring(1, 11, 0, [2, 3, 7, 6]), ring(1, 12, 0, [3, 4, 8, 7])]);
+    const par = rd(F_D11, [[10, 210], [11, 211], [12, 212]].map(([o, n]) => ({ SECTION_O: 1, PAR_O_M: o, PAR_O_C: 0, PAR_N_M: n, PAR_N_C: 0, SECTION_N: 1, AREA_OLD: 1, AREA_NEW: 1 })));
+    return Core.datasetFromD({ pts, bnd, par });
+  };
+  {
+    const dA = mkD();
+    assert.equal(dA.parcels[0].label, '210'); assert.equal(dA.parcels[0].key, '1|10|0');
+    Core.carveBand(dA, [{ y: Y - 10, x: X + 280 }, { y: Y + 10, x: X + 310 }], [{ y: Y - 10, x: X + 270 }, { y: Y + 20, x: X + 310 }], { to: 'new' });
+    const stA = Core.datasetState(dA), re = mkD();
+    Core.applyDatasetState(re, stA);   // 不加 force：要像開專案檔一樣通過原始圖資比對
+    assert.deepEqual(Core.datasetState(re), stA, '切一角：專案檔重開後狀態相同');
+    assert.equal(re.parcels[2].key, '1|12|0', '保留原宗地的 key 不變'); assert.equal(re.parcels[2].label, '212', 'label 不變');
+  }
+  {
+    const dB = mkD();
+    Core.carveBand(dB, [{ y: Y + 30, x: X - 10 }, { y: Y + 20, x: X + 200 }], [{ y: Y + 60, x: X - 10 }, { y: Y + 50, x: X + 200 }], { to: 'new' });
+    const stB = Core.datasetState(dB), re = mkD();
+    Core.applyDatasetState(re, stB);
+    assert.deepEqual(Core.datasetState(re), stB, '橫穿兩宗：專案檔重開後狀態相同');
+    assert.equal(re.parcels[1].key, '1|11|0', '11 的 key 不變'); assert.equal(re.parcels[1].label, '211');
+  }
+  {   // newDataset 手建、沒有 section 欄位的宗地，key 也不能被改掉
+    const dN = mkBand(), st0 = Core.datasetState(dN);
+    Core.carveBand(dN, [{ y: Y + 30, x: X - 10 }, { y: Y + 20, x: X + 310 }], [{ y: Y + 60, x: X - 10 }, { y: Y + 50, x: X + 310 }], { to: 'new' });
+    const stN = Core.datasetState(dN), re = mkBand();
+    Core.applyDatasetState(re, stN);
+    assert.deepEqual(Core.datasetState(re), stN, '沒有 section 的手建宗地，重開也要相同');
+    assert.deepEqual(re.parcels.slice(0, 3).map(p => p.key), ['1|10|0', '1|11|0', '1|12|0'], '原始 key 不變');
+    assert.deepEqual(st0.keys, ['1|10|0', '1|11|0', '1|12|0']);
+  }
+
+  // B. 兩線端點都在宗地內的自由點：多邊形每條邊的中點都在宗地內、沒有任何 -1 → 仍要切得出來
+  {
+    const d = mkBand();
+    const r = Core.carveBand(d, [{ y: Y + 30, x: X + 199 }, { y: Y + 30, x: X + 201 }], [{ y: Y + 60, x: X + 199 }, { y: Y + 60, x: X + 201 }], { to: 'new' });
+    near(r.area, 60, 0.01, '跨 11／12 的帶狀面積 1×30＋1×30');
+    const A = (l) => live(d).find(p => p.label === l).area;
+    near(A('11'), 9970, 0.01, '11 只少 1×30'); near(A('12'), 9970, 0.01, '12 只少 1×30');
+    near(A(r.into), 60, 0.01, '新宗地面積'); noConf(d);
+  }
+  {   // 整個多邊形都在同一宗內部（不碰界線）→ 講清楚是地中地
+    const d = mkBand();
+    assert.throws(() => Core.carveBand(d, [{ y: Y + 40, x: X + 10 }, { y: Y + 40, x: X + 20 }], [{ y: Y + 60, x: X + 10 }, { y: Y + 60, x: X + 20 }], { to: 'new' }), /範圍完全在 10 內部/, '全在宗地內要說地中地');
+  }
+
+  // C. 沿界線跨宗：第二條線只點最西（1）與最東（4）兩點，中間界址點 2、3 偏 0.3 m → 要沿整條界線走
+  {
+    const d = Core.newDataset('bandC', 't');
+    for (const [id, y, x] of [[1, 0, 0], [2, 0.3, 100], [3, 0, 200], [4, 0, 300], [5, 100, 0], [6, 100, 100], [7, 100, 200], [8, 100, 300], [11, -100, 0], [12, -100, 100], [13, -100, 200], [14, -100, 300]]) d.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x });
+    const add = (l, ids) => d.parcels.push({ key: `1|${l}|0`, label: String(l), oldLabel: String(l), ids, mid: ids.map(() => false), areaReg: 10000 });
+    add('10', [1, 2, 6, 5]); add('11', [2, 3, 7, 6]); add('12', [3, 4, 8, 7]);
+    add('20', [11, 12, 2, 1]); add('21', [12, 13, 3, 2]); add('22', [13, 14, 4, 3]); Core.finalize(d);
+    const before = new Map(live(d).map(p => [p.label, p.area]));
+    const r = Core.carveBand(d, [{ y: Y - 50, x: X }, { y: Y - 50, x: X + 300 }], [{ id: 1 }, { id: 4 }], { to: 'new' });
+    const A = (l) => live(d).find(p => p.label === l).area;
+    for (const l of ['10', '11', '12']) near(A(l), before.get(l), 0.01, `南列 ${l} 不變`);
+    near(A('20'), 5000, 0.01, '北列 20 剩 5000'); near(A('21'), 5000, 0.01, '北列 21 剩 5000'); near(A('22'), 5000, 0.01, '北列 22 剩 5000');
+    near(r.area, 15030, 0.01, '帶狀面積含界線凸起'); assert.equal(live(d).length, 7, '沒有留下細縫宗地'); noConf(d);
+  }
+
+  // D. 新建未登記地的子號從 9001-1 開始（暫存塊不可吃掉正式子號）
+  {
+    const d = mkBand();
+    const r = Core.carveBand(d, [{ y: Y + 30, x: X - 10 }, { y: Y + 20, x: X + 310 }], [{ y: Y + 60, x: X - 10 }, { y: Y + 50, x: X + 310 }], { to: 'new' });
+    assert.equal(r.into, '9001-1', '第一次新建就是 9001-1'); assert.ok(live(d).find(p => p.label === '9001-1').key.endsWith('|9001|1'));
+  }
+
+  // E. 帶狀內有一宗未登記地與被切宗地重疊（不是 holeKeys）→ 錯誤訊息要說出重疊
+  {
+    const d = mkBand([[21, 35, 30], [22, 35, 70], [23, 55, 70], [24, 55, 30]]);
+    d.parcels.push({ key: '1|9020|0', label: '9020', oldLabel: '9020', ids: [21, 22, 23, 24], mid: [false, false, false, false], areaReg: 0 }); Core.finalize(d);
+    const st = Core.datasetState(d);
+    assert.throws(() => Core.carveBand(d, [{ y: Y + 30, x: X - 10 }, { y: Y + 20, x: X + 310 }], [{ y: Y + 60, x: X - 10 }, { y: Y + 50, x: X + 310 }], { to: 'new' }), /與.*重疊，請先處理/, '重疊要講出原因');
+    assert.deepEqual(Core.datasetState(d), st, '重疊失敗後狀態不變');
+  }
+}
 console.log('SYNTHETIC OK');
