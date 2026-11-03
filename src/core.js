@@ -365,7 +365,8 @@ const Core = (() => {
   }
   function applyDelta(ds, d, dir) {
     const undo = dir === 'undo';
-    for (const [i, t] of d.parcels) { const p = ds.parcels[i]; p.ids = (undo ? t.ids0 : t.ids1).slice(); const m = undo ? t.mid0 : t.mid1; if (m) p.mid = m.slice(); }
+    if (d.state0 && d.state1) { applyDatasetState(ds, undo ? d.state0 : d.state1, { force: true }); return; }   // 跨宗切出：整張圖的快照，一次復原／重做
+    for (const [i, t] of d.parcels) { const p = ds.parcels[i]; if (!p) continue; p.ids = (undo ? t.ids0 : t.ids1).slice(); const m = undo ? t.mid0 : t.mid1; if (m) p.mid = m.slice(); }
     for (const p of d.added) undo ? ds.points.delete(p.id) : ds.points.set(p.id, p);
     for (const p of d.removed) undo ? ds.points.set(p.id, p) : ds.points.delete(p.id);
     for (const l of d.holes || []) linkHole(ds, l.p, l.h, undo ? !l.on : l.on);
@@ -3119,6 +3120,262 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     for (const q of op.pts) { const r = insertPoint(ds, a, op.b, q.y, q.x, { project: false }); mergeDelta(d, r.delta); a = r.id; op.ids.push(a); }
     op.ids.push(op.b); return closeDelta(ds, d);
   }
+  // ── 跨宗切出（v0.35.0）：沿帶狀地兩側各畫一條線，兩線之間從所有壓到的宗地一次切出。重用 splitByPath／insertPoint／mergeParcels ──
+  const BAND_EPS = 1e-7;
+  function bandPip(poly, y, x) {
+    let inside = false; const n = poly.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) { const p = poly[i], q = poly[j]; if ((p.y > y) !== (q.y > y) && x < ((q.x - p.x) * (y - p.y)) / (q.y - p.y) + p.x) inside = !inside; }
+    return inside;
+  }
+  function bandPolyArea(poly) { let s = 0; const n = poly.length, o = poly[0]; for (let i = 0; i < n; i++) { const p = poly[i], q = poly[(i + 1) % n]; s += (p.x - o.x) * (q.y - o.y) - (q.x - o.x) * (p.y - o.y); } return s / 2; }
+  function bandNearId(ds, y, x, tol) { let best = null, bd = tol; for (const q of ds.points.values()) { const d = Math.hypot(q.x - x, q.y - y); if (d <= bd) { bd = d; best = q.id; } } return best; }
+  function bandOnEdge(ds, y, x, tol) {   // 最近的界址線（含圓弧標記）；不在 tol 內回 null
+    let best = null, bd = tol;
+    for (const e of ds.edges.values()) { const A = ds.points.get(e.a), B = ds.points.get(e.b); if (!A || !B) continue;
+      const dx = B.x - A.x, dy = B.y - A.y, l2 = dx * dx + dy * dy; if (!l2) continue;
+      const t = Math.max(0, Math.min(1, ((x - A.x) * dx + (y - A.y) * dy) / l2)), px = A.x + t * dx, py = A.y + t * dy, d = Math.hypot(x - px, y - py);
+      if (d <= bd) { bd = d; best = { edge: [e.a, e.b], y: py, x: px, d, arc: !!e.arcPart }; } }
+    return best;
+  }
+  function bandSnap(ds, n) {   // 線的錨點：既有點直接沿用；界址線上的點插進線（鄰宗同步）；自由點若剛好落在線上（1e-5 m 內）也接上去
+    if (n.id != null) return n;
+    const id = bandNearId(ds, n.y, n.x, 1e-6); if (id != null) return { y: n.y, x: n.x, id };
+    const at = bandOnEdge(ds, n.y, n.x, 1e-5);
+    if (at) { if (at.arc) throw new Error('範圍壓到圓弧，暫不支援跨宗切出'); const r = insertPoint(ds, at.edge[0], at.edge[1], at.y, at.x); return { y: at.y, x: at.x, id: r.id, delta: r.delta }; }
+    return n;
+  }
+  function bandResolve(ds, line, name) {
+    if (!Array.isArray(line) || line.length < 2) throw new Error(`${name}至少要有 2 個點`);
+    return line.map(pt => {
+      if (!pt) throw new Error(`${name}的點格式不對`);
+      if (pt.id != null) { const q = ds.points.get(pt.id); if (!q) throw new Error(`找不到界址點 ${pt.id}`); return { y: q.y, x: q.x, id: pt.id }; }
+      if (pt.edge) { const [u, v] = pt.edge, e = ds.edges.get(segKey(u, v)); if (!e) throw new Error(`找不到界址線 ${u}–${v}`); if (e.arcPart) throw new Error('範圍壓到圓弧，暫不支援跨宗切出'); return { y: +pt.y, x: +pt.x, edge: [u, v] }; }
+      if (!isFinite(pt.y) || !isFinite(pt.x)) throw new Error(`${name}的點格式不對`);
+      return { y: +pt.y, x: +pt.x };
+    });
+  }
+  function bandDedupe(nodes) {
+    const d2 = (a, b) => (a.id != null && b.id != null ? a.id === b.id : Math.hypot(a.y - b.y, a.x - b.x) <= 1e-7);
+    const out = [];
+    for (const n of nodes) if (!out.length || !d2(out[out.length - 1], n)) out.push(n);
+    while (out.length > 1 && d2(out[0], out[out.length - 1])) out.pop();
+    return out;
+  }
+  function bandOrder(ds, lineA, lineB) {
+    const A = bandResolve(ds, lineA, '第一條線'), B = bandResolve(ds, lineB, '第二條線'), len = (u, v) => Math.hypot(u.y - v.y, u.x - v.x);
+    const a0 = A[0], a1 = A[A.length - 1], b0 = B[0], b1 = B[B.length - 1], same = len(a0, b0) + len(a1, b1), cross = len(a0, b1) + len(a1, b0);
+    return same <= cross ? [...A, ...B.slice().reverse()] : [...A, ...B];   // 兩線不交叉的接法
+  }
+  function bandSelfCross(poly) {
+    const n = poly.length, cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const A = poly[i], B = poly[(i + 1) % n], C = poly[j], D = poly[(j + 1) % n], d1 = cr(A, B, C), d2 = cr(A, B, D), d3 = cr(C, D, A), d4 = cr(C, D, B);
+      if (((d1 > BAND_EPS && d2 < -BAND_EPS) || (d1 < -BAND_EPS && d2 > BAND_EPS)) && ((d3 > BAND_EPS && d4 < -BAND_EPS) || (d3 < -BAND_EPS && d4 > BAND_EPS))) return true;
+    }
+    return false;
+  }
+  function bandRingPath(P, ring, ia, ib) { const n = ring.length, out = []; for (let k = ia; ; k = (k + 1) % n) { out.push(P.get(ring[k])); if (k === ib) break; } return out; }
+  function bandAlong(ds, u, v) {   // 兩點都在同一宗地的界線上、沿較短界線路徑的中間界址點都在直線 0.5 m 內 → 回傳界線路徑
+    if (u.id == null || v.id == null) return null;
+    const cand = (ds.pointParcels.get(u.id) || []).filter(i => (ds.pointParcels.get(v.id) || []).includes(i)); let best = null;
+    for (const pi of cand) {
+      const p = ds.parcels[pi]; if (!p || p.deleted) continue;
+      const ring = p.ids, ia = ring.indexOf(u.id), ib = ring.indexOf(v.id); if (ia < 0 || ib < 0) continue;
+      const len = arr => { let s = 0; for (let k = 1; k < arr.length; k++) s += Math.hypot(arr[k].x - arr[k - 1].x, arr[k].y - arr[k - 1].y); return s; };
+      for (const path of [bandRingPath(ds.points, ring, ia, ib), bandRingPath(ds.points, ring, ib, ia)]) {
+        let ok = path.length >= 2;
+        for (let k = 1; ok && k + 1 < path.length; k++) if (distToSeg(path[k].x, path[k].y, u.x, u.y, v.x, v.y) > 0.5) ok = false;
+        if (!ok) continue; const L = len(path); if (!best || L < best.L) best = { path, L };
+      }
+    }
+    if (!best) return null;
+    const path = best.path[0].id === u.id ? best.path : best.path.slice().reverse();   // 方向要跟多邊形一致，否則頂點順序會亂
+    return path.map(q => ({ y: q.y, x: q.x, id: q.id }));
+  }
+  function bandSegments(ds, nodes) {
+    const segs = [];
+    for (let i = 0; i < nodes.length; i++) {
+      const u = nodes[i], v = nodes[(i + 1) % nodes.length], along = bandAlong(ds, u, v);
+      if (along) for (let k = 0; k + 1 < along.length; k++) segs.push({ a: along[k], b: along[k + 1], along: true });
+      else segs.push({ a: u, b: v, along: false });
+    }
+    return segs;
+  }
+  function bandSegCross(A, B, C, D) {
+    const rx = B.x - A.x, ry = B.y - A.y, sx = D.x - C.x, sy = D.y - C.y, den = rx * sy - ry * sx;
+    if (Math.abs(den) < 1e-12) return null;
+    return { t: ((C.x - A.x) * sy - (C.y - A.y) * sx) / den, u: ((C.x - A.x) * ry - (C.y - A.y) * rx) / den };
+  }
+  function bandSplitSeg(ds, seg) {   // 多邊形邊與既有界線的交點全部插點，回傳斷開後的子段與插點 delta
+    const A = seg.a, B = seg.b, hits = [];
+    for (const e of [...ds.edges.values()]) {
+      const C = ds.points.get(e.a), D = ds.points.get(e.b); if (!C || !D) continue;
+      const x = bandSegCross(A, B, C, D); if (!x) continue;
+      if (!(x.t > 1e-9 && x.t < 1 - 1e-9) || !(x.u > -1e-9 && x.u < 1 + 1e-9)) continue;
+      const py = A.y + (B.y - A.y) * x.t, px = A.x + (B.x - A.x) * x.t;
+      if (Math.hypot(py - A.y, px - A.x) <= 1e-6 || Math.hypot(py - B.y, px - B.x) <= 1e-6) continue;
+      hits.push({ t: x.t, y: py, x: px, arc: !!e.arcPart });
+    }
+    hits.sort((p, q) => p.t - q.t);
+    const out = [], deltas = []; let prev = A;
+    for (const h of hits) {
+      if (Math.hypot(h.y - prev.y, h.x - prev.x) <= 1e-6) continue;
+      let node = { y: h.y, x: h.x };
+      const id = bandNearId(ds, h.y, h.x, 1e-6);
+      if (id != null) node.id = id;
+      else {
+        const at = bandOnEdge(ds, h.y, h.x, 1e-5);
+        if (at && at.arc) throw new Error('範圍壓到圓弧，暫不支援跨宗切出');
+        if (at) { const r = insertPoint(ds, at.edge[0], at.edge[1], at.y, at.x); node = { y: at.y, x: at.x, id: r.id }; deltas.push(r.delta); }
+        else if (h.arc) throw new Error('範圍壓到圓弧，暫不支援跨宗切出');
+      }
+      out.push({ a: prev, b: node, along: false }); prev = node;
+    }
+    if (Math.hypot(B.y - prev.y, B.x - prev.x) > 1e-6) out.push({ a: prev, b: B, along: false });
+    return { sub: out, deltas };
+  }
+  function bandRename(p, label, areaReg) {
+    const m = /^(\d+)(?:-(\d+))?$/.exec(label);
+    p.key = `${p.section != null ? p.section : 0}|${+m[1]}|${m[2] ? +m[2] : 0}`;
+    p.label = label; p.oldLabel = label;
+    p.areaReg = areaReg != null && areaReg !== '' ? +areaReg : p.areaReg;
+  }
+  // 多邊形外的塊：帶狀地完整橫穿時，一宗會留下兩塊以上。面積較大（有登記面積則最接近登記面積）的保留原地號，
+  // 其餘編原母號的新子號（與 nextSub／createParcel 同一套規則）、登記面積 0（PM 退回第 2 點：不可兩宗同地號）。
+  function bandLabelOutside(ds, originOf, originsCut, outside, polyPts) {
+    const groups = new Map(), extraOf = new Map();
+    const add = (oi, i) => { let g = groups.get(oi); if (!g) groups.set(oi, g = []); if (!g.includes(i)) g.push(i); };
+    for (const i of outside) { const oi = originOf.get(i); if (oi != null) add(oi, i); }
+    for (const oi of originsCut) {   // 原宗地本身也可能是外側的一塊（splitByPath 留下的那一塊）
+      const p = ds.parcels[oi]; if (!p || p.deleted) continue;
+      const q = interiorPoint(p.ids, ds.points); if (!bandPip(polyPts, q.y, q.x)) add(oi, oi);
+    }
+    for (const [oi, list] of groups) {
+      const origin = ds.parcels[oi]; if (!origin || origin.deleted) continue;
+      const label0 = origin.label, old0 = origin.oldLabel != null ? origin.oldLabel : label0, reg0 = origin.areaReg || 0, mother = mainNo(origin);
+      const pieces = list.map(i => ds.parcels[i]).filter(t => t && !t.deleted); if (!pieces.length) continue;
+      let keep = pieces[0];
+      for (const t of pieces) { const better = reg0 > 0 ? Math.abs(t.area - reg0) < Math.abs(keep.area - reg0) : t.area > keep.area; if (better) keep = t; }
+      const extra = [];
+      for (const t of pieces) {
+        if (t === keep) { bandRename(t, label0, reg0); t.oldLabel = old0; }
+        else { const lab = `${mother}-${nextSub(ds, mother)}`; bandRename(t, lab, 0); extra.push(lab); }
+      }
+      if (extra.length) extraOf.set(oi, extra);
+    }
+    return { groups, extraOf };
+  }
+  function bandTargets(ds, block, exclude) {
+    const m = new Map(), n = block.ids.length;
+    for (let i = 0; i < n; i++) {
+      const a = block.ids[i], b = block.ids[(i + 1) % n], e = ds.edges.get(segKey(a, b)); if (!e) continue;
+      const A = ds.points.get(a), B = ds.points.get(b), L = Math.hypot(B.x - A.x, B.y - A.y);
+      for (const j of e.parcels) { if (j === block.idx || exclude.has(j)) continue; const t = ds.parcels[j]; if (!t || t.deleted) continue; m.set(j, (m.get(j) || 0) + L); }
+    }
+    const out = [...m].map(([j, shared]) => { const t = ds.parcels[j]; return { kind: isUnreg(t) ? 'unreg' : 'reg', label: t.label, idx: j, shared }; });
+    out.sort((u, v) => (u.kind === v.kind ? 0 : u.kind === 'unreg' ? -1 : 1) || v.shared - u.shared || String(u.label).localeCompare(String(v.label), 'zh-Hant'));
+    return out;
+  }
+  function bandSplitRun(ds, p, run) {   // 切線中間碰到同一宗地的既有界址點就從那裡斷開（避免把既有點當新點重複建立）
+    const out = []; let cur = [run.edges[0]];
+    for (let k = 1; k < run.edges.length; k++) {
+      const node = run.edges[k].a;
+      if (node.id != null && (ds.pointParcels.get(node.id) || []).includes(p.idx)) { out.push(cur); cur = [run.edges[k]]; } else cur.push(run.edges[k]);
+    }
+    out.push(cur); return out;
+  }
+  function bandDropTemps(ds, temps) {   // 收掉切出後被併掉的暫存宗地（不留空殼）；還活著的（切出的新宗地、外側另一塊）保留
+    const rm = temps.filter(i => { const p = ds.parcels[i]; return !p || p.deleted || !p.ids.length; }).sort((a, b) => b - a);
+    for (const i of rm) ds.parcels.splice(i, 1);
+    if (rm.length) buildTopology(ds);
+  }
+  // 跨宗切出：lineA／lineB 各為 {id}、{edge:[u,v],y,x} 或 {y,x} 的點陣列（≥2 點）；o.to＝'new'|'unreg'|地號
+  function carveBand(ds, lineA, lineB, o = {}) {
+    const st0 = datasetState(ds), to = o.to == null ? 'new' : String(o.to);
+    const tempSet = new Set(), originOf = new Map(), originsCut = new Set(), area00 = new Map(), reg00 = new Map(), lab00 = new Map();
+    for (const p of ds.parcels) if (!p.deleted) { area00.set(p.idx, p.area); reg00.set(p.idx, p.areaReg || 0); lab00.set(p.idx, p.label); }
+    try {
+      const raw = bandOrder(ds, lineA, lineB), nodes = [];
+      for (const n of raw) nodes.push(bandSnap(ds, n));
+      const poly = bandDedupe(nodes);
+      if (poly.length < 3) throw new Error('兩條線沒有圍成範圍');
+      if (bandSelfCross(poly)) throw new Error('兩條線交錯');   // 先判交錯：交叉的蝴蝶結正負面積相抵，會誤判成「沒有圍成範圍」
+      if (Math.abs(bandPolyArea(poly)) < 1e-9) throw new Error('兩條線沒有圍成範圍');
+      const subs = [];
+      for (const s of bandSegments(ds, poly)) { if (s.along) { subs.push(s); continue; } const r = bandSplitSeg(ds, s); subs.push(...r.sub); }
+      const polyPts = []; for (const s of subs) { const q = s.a; if (!polyPts.length || Math.hypot(q.y - polyPts[polyPts.length - 1].y, q.x - polyPts[polyPts.length - 1].x) > 1e-9) polyPts.push({ y: q.y, x: q.x }); }
+      const cls = subs.map(s => { if (s.along) return -1; const my = (s.a.y + s.b.y) / 2, mx = (s.a.x + s.b.x) / 2; if (bandOnEdge(ds, my, mx, 1e-6)) return -1; const p = afParcelAt(ds, my, mx); return p ? p.idx : -1; });
+      const start = cls.findIndex(c => c < 0); if (start < 0) throw new Error('範圍沒有壓到任何宗地');
+      const runs = []; let cur = null;
+      for (let k = 1; k <= cls.length; k++) { const i = (start + k) % cls.length, c = cls[i]; if (c >= 0) { if (!cur || cur.parcel !== c) { cur = { parcel: c, edges: [] }; runs.push(cur); } cur.edges.push(subs[i]); } else cur = null; }
+      const mother = o.mother != null ? o.mother : UNREG_MIN + 1;
+      for (const run of runs) {
+        const p0 = ds.parcels[run.parcel]; if (!p0 || p0.deleted) continue;
+        for (const chunk of bandSplitRun(ds, p0, run)) {
+          const A = chunk[0].a, B = chunk[chunk.length - 1].b;
+          if (A.id == null || B.id == null) throw new Error(`切出的範圍沒有接到 ${p0.label} 的界線`);
+          const e = chunk[Math.floor(chunk.length / 2)], mx = (e.a.x + e.b.x) / 2, my = (e.a.y + e.b.y) / 2, dx = e.b.x - e.a.x, dy = e.b.y - e.a.y, L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L, ep = 1e-3;
+          let ip = { y: my + ny * ep, x: mx + nx * ep }; if (!bandPip(polyPts, ip.y, ip.x)) ip = { y: my - ny * ep, x: mx - nx * ep };
+          const curP = afParcelAt(ds, ip.y, ip.x); if (!curP) throw new Error('切出的範圍沒有壓到任何宗地');
+          const chain = [chunk[0].a, ...chunk.map(x => x.b)], pts = [];
+          for (let k = 1; k + 1 < chain.length; k++) pts.push({ y: chain[k].y, x: chain[k].x });
+          const r = splitByPath(ds, curP.idx, { id: A.id }, { id: B.id }, pts, { mother, keepOutside: polyPts });
+          const oi = originOf.has(curP.idx) ? originOf.get(curP.idx) : curP.idx;
+          originOf.set(r.idx, oi); tempSet.add(r.idx); originsCut.add(oi);
+        }
+      }
+      if (!tempSet.size) throw new Error('範圍沒有壓到任何宗地');
+      const blocks = [], outside = [], temps = [...tempSet];
+      for (const i of temps) { const p = ds.parcels[i]; if (!p || p.deleted) continue; const q = interiorPoint(p.ids, ds.points); (bandPip(polyPts, q.y, q.x) ? blocks : outside).push(i); }
+      const outsideInfo = bandLabelOutside(ds, originOf, originsCut, outside, polyPts);
+      if (!blocks.length) throw new Error('切出的範圍沒有留下切出的塊，請分段切出');
+      const whole = [];
+      for (const p of ds.parcels) {   // 整宗都在範圍內的宗地：未登記地併入，登記地拒絕
+        if (p.deleted || tempSet.has(p.idx) || originsCut.has(p.idx) || p.ids.length < 3) continue;
+        const q = interiorPoint(p.ids, ds.points); if (!bandPip(polyPts, q.y, q.x)) continue;
+        if ((p.mid && p.mid.some(Boolean)) || (p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含圓弧或地中地，暫不支援跨宗切出`);
+        if (!isUnreg(p)) throw new Error(`${p.label} 整宗在範圍內，請改用合併面`);
+        whole.push(p.idx);
+      }
+      const keepBlock = blocks.reduce((m, i) => (m == null || i < m ? i : m), null), all = [...blocks, ...whole];
+      if (all.length >= 2) { try { mergeParcels(ds, all, keepBlock); } catch (e) { throw new Error('切出的塊不連成一片'); } }
+      const block = ds.parcels[keepBlock], regionArea = block.area;
+      if (regionArea < 0.01) throw new Error('切出的範圍太小（不到 0.01 m²）');
+      const exclude = new Set([...originsCut, ...tempSet, ...whole]), targets = bandTargets(ds, block, exclude);
+      const u = targets.filter(t => t.kind === 'unreg')[0], defaultTarget = u ? u.label : 'new';
+      let into;
+      if (to === 'new') into = block.label;
+      else if (to === 'unreg') {
+        if (!u) throw new Error('切出的範圍沒有接到未登記地');
+        mergeParcels(ds, [block.idx, u.idx], u.idx); into = ds.parcels[u.idx].label;
+      } else {
+        const ex = ds.parcels.find(t => !t.deleted && (t.label === to || t.oldLabel === to));
+        if (ex) {
+          if (!targets.some(t => t.idx === ex.idx)) throw new Error(`切出的範圍沒有和 ${ex.label} 相鄰`);
+          mergeParcels(ds, [block.idx, ex.idx], ex.idx); into = ex.label;
+        } else {
+          if (!/^(\d+)(?:-(\d+))?$/.test(to)) throw new Error('地號格式不對（要像 1234 或 1234-5）');
+          bandRename(block, to, o.areaReg); into = to;
+        }
+      }
+      const parcels = [...originsCut].sort((a, b) => a - b).map(i => {
+        const area0 = area00.get(i) || 0, areaReg = reg00.get(i) || 0;
+        let area1 = 0; const g = outsideInfo.groups.get(i);
+        if (g) for (const j of g) { const t = ds.parcels[j]; if (t && !t.deleted) area1 += t.area; }
+        return { idx: i, label: lab00.get(i) || '', area0, area1, cutArea: area0 - area1, areaReg, tol: areaReg > 0 ? areaTol(areaReg) : null, diffBefore: areaReg > 0 ? area0 - areaReg : null, diffAfter: areaReg > 0 ? area1 - areaReg : null, extra: outsideInfo.extraOf.get(i) || [] };
+      });
+      bandDropTemps(ds, [...tempSet]);
+      const st1 = datasetState(ds);
+      return { delta: { state0: st0, state1: st1 }, into, area: regionArea, parcels, polygon: polyPts.map(q => ({ y: q.y, x: q.x })), targets, defaultTarget };
+    } catch (e) { applyDatasetState(ds, st0, { force: true }); throw e; }   // 失敗：整張還原（地號鍵可能已被改過，跳過原始圖資比對）
+  }
+  // 跨宗切出預覽：只算不改圖（內部實際跑一次 to:'new'，finally 還原）
+  function planCarveBand(ds, lineA, lineB, opt = {}) {
+    const st = datasetState(ds);
+    try { const r = carveBand(ds, lineA, lineB, { to: 'new', mother: opt.mother }); return { polygon: r.polygon, area: r.area, parcels: r.parcels, targets: r.targets, defaultTarget: r.defaultTarget }; }
+    finally { applyDatasetState(ds, st, { force: true }); }
+  }
   // 沿折線切開：A、B＝{id} 或 {edge:[u,v], y, x}（線上加點，鄰宗同步），pts＝中間新點。opt.mother 新宗地母號（省略＝同母號）、opt.keepNear 保留面積最接近此值的一塊（省略＝較大者）
   function splitByPath(ds, pi, A, B, pts, opt = {}) {
     const p = ds.parcels[pi]; if (!p || p.deleted) throw new Error('宗地不存在'); if (ringHasArc(p)) throw new Error(`${p.label} 含圓弧，暫不支援`);
@@ -3133,7 +3390,13 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     for (let u = 0; u + 1 < line.length; u++) for (let v = u + 2; v + 1 < line.length; v++) { const U = line[u], V = line[u + 1], X = line[v], Y = line[v + 1]; if (cr(U, V, X) * cr(U, V, Y) < 0 && cr(X, Y, U) * cr(X, Y, V) < 0) fail('切線自我交錯'); }
     touchParcel(d, p); const mid = pts.map(q => { const id = nextPointId(ds), np = { id, y: q.y, x: q.x, y0: q.y, x0: q.x, row: null, added: true }; ds.points.set(id, np); d.added.push(np); return id; });
     const walk = (s, e) => { const out = [ring[s]]; for (let k = s; k !== e;) { k = (k + 1) % n; out.push(ring[k]); } return out; }, c1 = walk(i, j).concat(mid.slice().reverse()), c2 = walk(j, i).concat(mid);
-    const a1 = Math.abs(signedArea(c1, ds.points)), a2 = Math.abs(signedArea(c2, ds.points)), near = opt.keepNear, first = opt.keepFirst != null ? !!opt.keepFirst : near > 0 ? Math.abs(a1 - near) <= Math.abs(a2 - near) : a1 >= a2, [big, small] = first ? [c1, c2] : [c2, c1];
+    const a1 = Math.abs(signedArea(c1, ds.points)), a2 = Math.abs(signedArea(c2, ds.points)), near = opt.keepNear;
+    let first;
+    if (opt.keepOutside && opt.keepOutside.length >= 3) {   // 跨宗切出：保留多邊形外的那一塊（兩塊同在內或同在外才用既有規則）
+      const i1 = interiorPoint(c1, ds.points), i2 = interiorPoint(c2, ds.points), in1 = bandPip(opt.keepOutside, i1.y, i1.x), in2 = bandPip(opt.keepOutside, i2.y, i2.x);
+      first = in1 !== in2 ? !in1 : near > 0 ? Math.abs(a1 - near) <= Math.abs(a2 - near) : a1 >= a2;
+    } else first = opt.keepFirst != null ? !!opt.keepFirst : near > 0 ? Math.abs(a1 - near) <= Math.abs(a2 - near) : a1 >= a2;
+    const [big, small] = first ? [c1, c2] : [c2, c1];
     p.ids = big; p.mid = big.map(() => false); p.unregEdit = true; const q = createParcel(ds, d, opt.mother || mainNo(p), small, p);
     return { delta: closeDelta(ds, d), keep: p.label, created: q.label, idx: q.idx, areaKeep: Math.max(first ? a1 : a2, 0), areaCut: first ? a2 : a1, points: mid, ids: [a, ...mid, b], first };
   }
@@ -3418,10 +3681,10 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     return { n0, keys: ds.parcels.slice(0, n0).map(p => p.key), points: [...ds.points.values()].map(q => ({ ...q })),
       parcels: ds.parcels.map(p => { const o = {}; for (const [k, v] of Object.entries(p)) if (k !== 'idx' && k !== 'area' && typeof v !== 'function') o[k] = Array.isArray(v) ? v.slice() : v; return o; }) };   // 陣列要複製：之後的編修（splice）不可改到存下的狀態（里程碑）
   }
-  function applyDatasetState(ds, st) {
+  function applyDatasetState(ds, st, opt = {}) {
     if (!st || !Array.isArray(st.parcels) || !Array.isArray(st.points)) throw new Error('專案檔沒有作業圖狀態');
     const n0 = ds.orig ? ds.orig.rings.length : ds.parcels.length;
-    if (st.n0 !== n0 || (st.keys && st.keys.some((k, i) => ds.parcels[i].key !== k))) throw new Error(`專案檔記錄的原始圖資（${st.n0} 宗）與讀入的檔案（${n0} 宗）不同，不能套用`);
+    if (!opt.force && (st.n0 !== n0 || (st.keys && st.keys.some((k, i) => ds.parcels[i].key !== k)))) throw new Error(`專案檔記錄的原始圖資（${st.n0} 宗）與讀入的檔案（${n0} 宗）不同，不能套用`);
     ds.points = new Map(st.points.map(q => [q.id, { ...q }]));
     const cp = o => { const c = {}; for (const [k, v] of Object.entries(o)) c[k] = Array.isArray(v) ? v.slice() : v; return c; };
     st.parcels.forEach((o, i) => { if (i < n0) { const t = ds.parcels[i], a0 = t.areaOrig; for (const k of Object.keys(t)) if (!(k in o) && k !== 'idx') delete t[k]; Object.assign(t, cp(o), { areaOrig: a0 }); } else ds.parcels[i] = cp(o); });   // 存檔時沒有的欄位（例如之後才標的 deleted）要清掉
@@ -3453,7 +3716,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall, trimExcess, planTrimExcess,
     baselineFit, checkSegments, SHAPE_DEFAULT, shapeCheck, INK_DEFAULT, inkMask, distanceField, inkPlan, inkBlock, inkResult, inkCheck, oldMapReport,
-    AUTOFIX_DEFAULT, autoFixRun, autoFixApply, splitByPath, planCarve, carveTo,
+    AUTOFIX_DEFAULT, autoFixRun, autoFixApply, splitByPath, planCarve, carveTo, carveBand, planCarveBand,
     parseMdb, ownerTables, ownerClass, OWNER_CLASS, shareSum, ownerAnalysis, findOwner, sheetLines, nearSheetLines, datasetState, applyDatasetState, healAround, localConflicts, nearDupPoints, nearEdgePoints, seamPointPairs, diffState, parseReportNotes };
 })();
 if (typeof module !== 'undefined') module.exports = Core;

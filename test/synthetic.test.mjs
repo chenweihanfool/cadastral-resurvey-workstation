@@ -1189,4 +1189,99 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
     assert.deepEqual(IDs(e, '10'), ['9020'], '併入後地中地還在'); near(par(e, '9020').area, 400, 1e-9); noConf(e);
   }
 }
+// ── 跨宗切出（v0.35.0）：兩條線之間的帶狀地從所有壓到的宗地一次切出；單一快照 delta 可一次復原 ──
+{
+  const Y = 2700000, X = 220000;
+  // 三宗相鄰矩形（各 100×100 m，橫排 10、11、12）；帶狀多邊形斜穿 10、11
+  const mkBand = (labC = '12', regC = 10000, extraPts = []) => {
+    const d = Core.newDataset('band', 't');
+    for (const [id, y, x] of [[1, 0, 0], [2, 0, 100], [3, 0, 200], [4, 0, 300], [5, 100, 0], [6, 100, 100], [7, 100, 200], [8, 100, 300], ...extraPts]) d.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x });
+    const add = (l, ids, reg) => d.parcels.push({ key: `1|${l}|0`, label: String(l), oldLabel: String(l), ids, mid: ids.map(() => false), areaReg: reg || 0 });
+    add('10', [1, 2, 6, 5], 10000); add('11', [2, 3, 7, 6], 10000); add(labC, [3, 4, 8, 7], regC);
+    return Core.finalize(d);
+  };
+  const L1 = [{ y: Y + 30, x: X }, { y: Y + 20, x: X + 200 }], L2 = [{ y: Y + 60, x: X }, { y: Y + 50, x: X + 200 }];   // 兩線相距 30 m，斜穿 10、11
+  const live = d => d.parcels.filter(p => !p.deleted), area = (d, l) => live(d).find(p => p.label === l).area;
+  const noConf = d => { const c = Core.ringConflicts(d); assert.equal(c.cross.length + c.overlap.length, 0, '不可交錯或重疊'); };
+
+  // a. 預覽只算不改圖：總面積 6000，10、11 各被切 3000，12 不動
+  const d0 = mkBand(), st0 = Core.datasetState(d0), pl = Core.planCarveBand(d0, L1, L2);
+  assert.deepEqual(Core.datasetState(d0), st0, 'planCarveBand 前後 datasetState 相同');
+  near(pl.area, 6000, 0.01, '切出總面積'); assert.equal(pl.parcels.length, 2, '只列被切的 10、11');
+  near(pl.parcels[0].cutArea, 3000, 0.01, '10 被切面積'); near(pl.parcels[1].cutArea, 3000, 0.01, '11 被切面積');
+  assert.equal(pl.defaultTarget, 'new', '沒有相鄰未登記地 → 預設新建');
+  let d = mkBand(), r = Core.carveBand(d, L1, L2, { to: 'new' });
+  near(r.area, 6000, 0.01, '新宗地面積'); assert.ok(/^9001-\d+$/.test(r.into), '新建未登記地（9001 續編）：' + r.into);
+  near(area(d, r.into), 6000, 0.01, '新宗地面積＝兩宗切出和');
+  near(area(d, '10') + area(d, '10-1'), 7000, 0.01, '10 減少帶狀在該宗內的面積'); near(area(d, '11') + area(d, '11-1'), 7000, 0.01, '11 減少帶狀在該宗內的面積');
+  near(area(d, '12'), 10000, 0.01, '12 不變'); noConf(d);
+
+  // 完整橫穿一宗：外側兩塊不可同地號；較大（最接近登記面積）的保留原地號，另一塊編新子號、登記面積 0
+  const labels = live(d).map(p => p.label); assert.equal(new Set(labels).size, labels.length, '地號不可重複：' + labels.join('、'));
+  assert.deepEqual(pl.parcels[0].extra, ['10-1'], '預覽回報另一塊的新子號'); assert.equal(live(d).find(p => p.label === '10-1').areaReg, 0, '新子號沒有登記面積');
+  const dEx = mkBand(); dEx.parcels[0].label = '1092-3'; dEx.parcels[0].key = '1|1092|3';
+  const far = [[91, 500, 0], [92, 500, 50], [93, 600, 50], [94, 600, 0]];
+  for (const [id, y, x] of far) dEx.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x });
+  dEx.parcels.push({ key: '1|1092|4', label: '1092-4', oldLabel: '1092-4', ids: [91, 92, 93, 94], mid: [false, false, false, false], areaReg: 0 }); Core.finalize(dEx);
+  const ex = Core.planCarveBand(dEx, L1, L2).parcels.find(q => q.label === '1092-3');
+  assert.deepEqual(ex.extra, ['1092-5'], '1092-3 被切成兩塊，另一塊編 1092-5');
+
+  // b. 第二條線沿既有界線：中間有界址點（9、10）未點到，但在 0.5 m 內 → 跟著界線走，不切、不加點
+  const dB = Core.newDataset('bandB', 't');
+  for (const [id, y, x] of [[1, 0, 0], [2, 0, 100], [3, 0, 200], [4, 0, 300], [5, 100, 0], [9, 100, 50], [6, 100, 100], [10, 100, 150], [7, 100, 200], [8, 100, 300]]) dB.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x });
+  const addB = (l, ids) => dB.parcels.push({ key: `1|${l}|0`, label: String(l), oldLabel: String(l), ids, mid: ids.map(() => false), areaReg: l === '12' ? 10000 : 10000 });
+  addB('10', [1, 2, 6, 9, 5]); addB('11', [2, 3, 7, 10, 6]); addB('12', [3, 4, 8, 7]); Core.finalize(dB);
+  const b1 = [{ y: Y + 70, x: X }, { y: Y + 70, x: X + 200 }], b2 = [{ id: 5 }, { id: 6 }, { id: 7 }];   // 9、10 沒點到
+  const rb = Core.carveBand(dB, b1, b2, { to: 'new' });
+  near(rb.area, 6000, 0.01, '沿界線的帶狀面積'); assert.ok(live(dB).every(p => p.area >= 0.01), '不產生面積 < 0.01 m² 的宗地');
+  const added = [...dB.points.values()].filter(p => p.added);
+  assert.equal(added.length, 3, '新增界址點只在第一條線與穿越點（3 個）'); assert.ok(added.every(p => Math.abs(p.y - (Y + 70)) < 0.01), '新增點都在第一條線上');
+  near(area(dB, '10'), 7000, 0.01); near(area(dB, '11'), 7000, 0.01); near(area(dB, '12'), 10000, 0.01); noConf(dB);
+
+  // c. 三種歸屬：新建、併入相鄰未登記地、指定地號（已有相鄰／已有不相鄰／沒有→新建）
+  d = mkBand('9002-1', 0); r = Core.carveBand(d, L1, L2, { to: 'unreg' });
+  assert.equal(r.into, '9002-1'); near(area(d, '9002-1'), 16000, 0.01, '併入相鄰未登記地'); noConf(d);
+  near(area(d, '10') + area(d, '10-1'), 7000, 0.01); near(area(d, '11') + area(d, '11-1'), 7000, 0.01);
+  d = mkBand('12', 10000); r = Core.carveBand(d, L1, L2, { to: '12' });
+  assert.equal(r.into, '12'); near(area(d, '12'), 16000, 0.01, '併入指定的相鄰登記地'); noConf(d);
+  d = mkBand(); r = Core.carveBand(d, L1, L2, { to: '7777-2', areaReg: 5000 });
+  assert.equal(r.into, '7777-2'); near(area(d, '7777-2'), 6000, 0.01, '以指定地號新建'); near(live(d).find(p => p.label === '7777-2').areaReg, 5000, 1e-9, '寫入登記面積');
+  const dFar = mkBand(); dFar.points.set(91, { id: 91, y: Y + 500, x: X, y0: Y + 500, x0: X }); dFar.points.set(92, { id: 92, y: Y + 500, x: X + 100, y0: Y + 500, x0: X + 100 });
+  dFar.points.set(93, { id: 93, y: Y + 600, x: X + 100, y0: Y + 600, x0: X + 100 }); dFar.points.set(94, { id: 94, y: Y + 600, x: X, y0: Y + 600, x0: X });
+  dFar.parcels.push({ key: '1|20|0', label: '20', oldLabel: '20', ids: [91, 92, 93, 94], mid: [false, false, false, false], areaReg: 0 }); Core.finalize(dFar);
+  const stFar = Core.datasetState(dFar);
+  assert.throws(() => Core.carveBand(dFar, L1, L2, { to: '20' }), /沒有和 20 相鄰/, '已有地號不相鄰要拒絕');
+  assert.deepEqual(Core.datasetState(dFar), stFar, '不相鄰失敗後狀態不變');
+  assert.throws(() => Core.carveBand(mkBand(), L1, L2, { to: 'abc' }), /地號格式不對/, '地號格式不對要拒絕');
+
+  // d. undo／redo：整張快照，一次回到執行前、再一次回到執行後
+  d = mkBand(); const before = Core.datasetState(d), r2 = Core.carveBand(d, L1, L2, { to: 'new' }), after = Core.datasetState(d);
+  assert.ok(live(d).every(p => !(p.created && p.deleted)), '成功後不留已刪除的暫存宗地');
+  Core.applyDelta(d, r2.delta, 'undo');
+  assert.deepEqual(Core.datasetState(d), before, 'undo 後與執行前完全相同（宗地數、面積、界址串）'); assert.equal(d.parcels.length, 3);
+  Core.applyDelta(d, r2.delta, 'redo');
+  assert.deepEqual(Core.datasetState(d), after, 'redo 回到執行後'); near(area(d, r2.into), 6000, 0.01); noConf(d);
+
+  // e. planCarveBand 前後 datasetState 相同（已在 a 檢查；再對有地中地的圖確認）
+  const dH = mkBand(); dH.points.set(21, { id: 21, y: Y + 40, x: X + 40, y0: Y + 40, x0: X + 40 }); dH.points.set(22, { id: 22, y: Y + 60, x: X + 40, y0: Y + 60, x0: X + 40 });
+  dH.points.set(23, { id: 23, y: Y + 60, x: X + 60, y0: Y + 60, x0: X + 60 }); dH.points.set(24, { id: 24, y: Y + 40, x: X + 60, y0: Y + 40, x0: X + 60 });
+  dH.parcels.push({ key: '1|9020|0', label: '9020', oldLabel: '9020', ids: [21, 22, 23, 24], mid: [false, false, false, false], areaReg: 0 });
+  dH.parcels[0].holeKeys = ['1|9020|0']; Core.finalize(dH);
+  const stH = Core.datasetState(dH);
+  assert.throws(() => Core.planCarveBand(dH, L1, L2), /地中地/, '預覽失敗也要還原');
+  assert.deepEqual(Core.datasetState(dH), stH, 'planCarveBand 失敗後狀態不變');
+
+  // f. 各種不合法：兩線交錯、壓到含地中地的宗地、沒壓到宗地、登記地整宗在範圍內 → 中文錯誤且圖不變
+  d = mkBand(); let st = Core.datasetState(d);
+  assert.throws(() => Core.carveBand(d, [{ y: Y + 30, x: X }, { y: Y + 70, x: X + 200 }], [{ y: Y + 70, x: X }, { y: Y + 30, x: X + 200 }]), /兩條線交錯/, '兩線交錯');
+  assert.deepEqual(Core.datasetState(d), st, '兩線交錯後狀態不變');
+  assert.throws(() => Core.carveBand(dH, L1, L2), /地中地/, '壓到含地中地的宗地');
+  assert.deepEqual(Core.datasetState(dH), stH, '含地中地失敗後狀態不變');
+  d = mkBand(); st = Core.datasetState(d);
+  assert.throws(() => Core.carveBand(d, [{ y: Y + 500, x: X }, { y: Y + 520, x: X + 200 }], [{ y: Y + 600, x: X }, { y: Y + 580, x: X + 200 }]), /沒有壓到任何宗地/, '沒壓到宗地');
+  assert.deepEqual(Core.datasetState(d), st, '沒壓到宗地後狀態不變');
+  d = mkBand(); st = Core.datasetState(d);
+  assert.throws(() => Core.carveBand(d, [{ y: Y - 10, x: X + 190 }, { y: Y - 10, x: X + 310 }], [{ y: Y + 110, x: X + 190 }, { y: Y + 110, x: X + 310 }]), /整宗在範圍內，請改用合併面/, '登記地整宗在範圍內');
+  assert.deepEqual(Core.datasetState(d), st, '整宗登記地失敗後狀態不變');
+}
 console.log('SYNTHETIC OK');
