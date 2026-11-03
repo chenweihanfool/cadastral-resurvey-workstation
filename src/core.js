@@ -1634,12 +1634,19 @@ const Core = (() => {
     if (!(t > 1e-6 && t < 1 - 1e-6)) throw new Error('垂足不在線段上（點在線段兩端之外），請改用點併點');
     const from = { y: P.y, x: P.x }, to = { y: A.y + t * dy, x: A.x + t * dx }, d = newDelta();
     for (const pi of ds.pointParcels.get(id) || []) touchParcel(d, ds.parcels[pi]);   // 點移動，原本用到它的宗地面積也要重算
+    // 尖刺（v0.33.1）：宗地的環是 u→v→id（或 id→u→v），id 離 u–v 很近＝v（或 u）處夾著一根細尖刺。貼上去後 id 落在 u–v 上，收掉尖角那一點即可（不再當自我接觸擋下）。
+    // 夾角夠窄才收（sin ≤ 0.2，約 11.5°）：寬的凹口收掉會吃掉一大塊面積，仍然擋下
+    const sinAt = (o, q) => { const O = ds.points.get(o), Q = ds.points.get(q), L = Math.hypot(Q.x - O.x, Q.y - O.y); return L > 1e-9 ? Math.hypot(to.x - from.x, to.y - from.y) / L : 1; };
     const hits = []; for (const p of ds.parcels) { if (p.deleted) continue; const k = p.ids.length;   // 先找齊再改，任何一宗不行就整個不動
-      for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) { if (p.ids.includes(id)) throw new Error(`${p.label} 已經用到點 ${id}，貼上去會自我接觸`); hits.push([p, i]); break; } } }
+      for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) {
+        if (p.ids.includes(id)) { const tip = p.ids[(i + 2) % k] === id ? (i + 1) % k : p.ids[(i - 1 + k) % k] === id ? i : -1;
+          if (tip < 0 || k <= 3 || sinAt(p.ids[tip], id) > 0.2) throw new Error(`${p.label} 已經用到點 ${id}，貼上去會自我接觸`);
+          hits.push([p, i, tip]); } else hits.push([p, i, -1]); break; } } }
     P.y = to.y; P.x = to.x;
-    for (const [p, i] of hits) { touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); }
+    const spikes = [];
+    for (const [p, i, tip] of hits) { touchParcel(d, p); if (tip >= 0) { spikes.push({ label: p.label, id: p.ids[tip] }); p.ids.splice(tip, 1); if (p.mid) p.mid.splice(tip, 1); } else { p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); } }
     buildTopology(ds); const healed = healAround(ds, d, [id, a, b]);
-    return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y), healed };
+    return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y), healed, spikes };
   }
   // 新增線：在宗地 pi 內連接兩個既有界址點，切成兩宗（切下的一側編新子號，同母號接續；較大的一側保留原地號）
   function splitByChord(ds, pi, a, b) {

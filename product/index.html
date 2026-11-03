@@ -2116,12 +2116,19 @@ const Core = (() => {
     if (!(t > 1e-6 && t < 1 - 1e-6)) throw new Error('垂足不在線段上（點在線段兩端之外），請改用點併點');
     const from = { y: P.y, x: P.x }, to = { y: A.y + t * dy, x: A.x + t * dx }, d = newDelta();
     for (const pi of ds.pointParcels.get(id) || []) touchParcel(d, ds.parcels[pi]);   // 點移動，原本用到它的宗地面積也要重算
+    // 尖刺（v0.33.1）：宗地的環是 u→v→id（或 id→u→v），id 離 u–v 很近＝v（或 u）處夾著一根細尖刺。貼上去後 id 落在 u–v 上，收掉尖角那一點即可（不再當自我接觸擋下）。
+    // 夾角夠窄才收（sin ≤ 0.2，約 11.5°）：寬的凹口收掉會吃掉一大塊面積，仍然擋下
+    const sinAt = (o, q) => { const O = ds.points.get(o), Q = ds.points.get(q), L = Math.hypot(Q.x - O.x, Q.y - O.y); return L > 1e-9 ? Math.hypot(to.x - from.x, to.y - from.y) / L : 1; };
     const hits = []; for (const p of ds.parcels) { if (p.deleted) continue; const k = p.ids.length;   // 先找齊再改，任何一宗不行就整個不動
-      for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) { if (p.ids.includes(id)) throw new Error(`${p.label} 已經用到點 ${id}，貼上去會自我接觸`); hits.push([p, i]); break; } } }
+      for (let i = 0; i < k; i++) { const u = p.ids[i], v = p.ids[(i + 1) % k]; if ((u === a && v === b) || (u === b && v === a)) {
+        if (p.ids.includes(id)) { const tip = p.ids[(i + 2) % k] === id ? (i + 1) % k : p.ids[(i - 1 + k) % k] === id ? i : -1;
+          if (tip < 0 || k <= 3 || sinAt(p.ids[tip], id) > 0.2) throw new Error(`${p.label} 已經用到點 ${id}，貼上去會自我接觸`);
+          hits.push([p, i, tip]); } else hits.push([p, i, -1]); break; } } }
     P.y = to.y; P.x = to.x;
-    for (const [p, i] of hits) { touchParcel(d, p); p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); }
+    const spikes = [];
+    for (const [p, i, tip] of hits) { touchParcel(d, p); if (tip >= 0) { spikes.push({ label: p.label, id: p.ids[tip] }); p.ids.splice(tip, 1); if (p.mid) p.mid.splice(tip, 1); } else { p.ids.splice(i + 1, 0, id); if (p.mid) p.mid.splice(i + 1, 0, false); } }
     buildTopology(ds); const healed = healAround(ds, d, [id, a, b]);
-    return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y), healed };
+    return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y), healed, spikes };
   }
   // 新增線：在宗地 pi 內連接兩個既有界址點，切成兩宗（切下的一側編新子號，同母號接續；較大的一側保留原地號）
   function splitByChord(ds, pi, a, b) {
@@ -3853,6 +3860,14 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.33.1', date: '2026-11-03', type: 'patch',
+    title: '修正點貼到線：點已在宗地上、宗地夾一根細尖刺時被擋下，畫面看起來像沒反應',
+    changes: [
+      '點貼到線：宗地的界址串本來就經過這一點、而且這一點緊鄰被貼那條線的端點（例如 KC0336 1081 的 6016→6355→10090，在 6355 夾一根寬約 0.6 m 的尖刺），現在會收掉尖角那一點，不再當成「自我接觸」擋下；夾角大於約 11° 的凹口仍然擋下，避免吃掉一大塊面積',
+      '工具箱的工具執行失敗時，原因也寫在工具箱提示框和圖上提示列（以前只在狀態列顯示 9 秒，又被工具箱擋住，看起來像沒反應）',
+    ],
+  },
   {
     version: 'v0.33.0', date: '2026-11-02', type: 'minor',
     title: '依舊圖自動修正：切出的未登記地自動併入相鄰的既有未登記地',
@@ -6720,7 +6735,7 @@ S.topo = null;   // { tool, picks:[{t:'pt'|'edge'|'par'|'xy', …}] }
 function topoPanel() {
   const by = {}; for (const [k, t] of Object.entries(TOPO)) (by[t.g] = by[t.g] || []).push([k, t]);
   $('topoTools').innerHTML = Object.entries(by).map(([g, list]) => `<div class="tgrp"><b>${g}</b><div class="row small">${list.map(([k, t]) => `<button class="btn${S.topo && S.topo.tool === k ? ' primary' : ''}" data-topo="${k}" title="${esc(t.hint)}">${t.name}</button>`).join('')}</div></div>`).join('');
-  $('topoHint').textContent = S.topo ? `${TOPO[S.topo.tool].name}：${TOPO[S.topo.tool].hint}` + (S.topo.picks.length ? `（已點 ${S.topo.picks.length}）` : '') : '選一個工具，然後在圖上點選。Esc 取消、Enter 完成、Backspace 退一步；每次都可 Ctrl+Z 復原。';
+  $('topoHint').textContent = S.topo ? `${TOPO[S.topo.tool].name}：${TOPO[S.topo.tool].hint}` + (S.topo.picks.length ? `（已點 ${S.topo.picks.length}）` : '') + (S.topo.err ? `　⚠ 沒有執行：${S.topo.err}` : '') : '選一個工具，然後在圖上點選。Esc 取消、Enter 完成、Backspace 退一步；每次都可 Ctrl+Z 復原。';
   tqPanel();
 }
 function topoStart(tool) {
@@ -6732,7 +6747,7 @@ function cancelModes() { if (S.pocket) cancelPocket(); if (S.redraw) cancelRedra
 function topoCancel() { S.topo = null; setHint(''); topoPanel(); draw(); }
 function parcelAt(wx, wy) { let best = null; for (const p of S.ds.parcels) { if (p.deleted || p.ids.length < 3) continue; if (Core.pointInRing(p.ids, S.ds.points, wy, wx) && (!best || p.area < best.area)) best = p; } return best; }
 function topoPick(mx, my) {
-  const T = S.topo, def = TOPO[T.tool], wx = toWx(mx), wy = toWy(my), need = def.picks[Math.min(T.picks.length, def.picks.length - 1)];
+  const T = S.topo, def = TOPO[T.tool], wx = toWx(mx), wy = toWy(my), need = def.picks[Math.min(T.picks.length, def.picks.length - 1)]; T.err = '';
   const pt = () => nearestPoint(S.ds.points, wx, wy, 12 / S.view.s), edge = () => hitEdgeAt(wx, wy, 8 / S.view.s);
   if (need === 'pt' || need === 'pts') { const q = pt(); if (!q) return msg('請點在界址點上');
     if (need === 'pts' && T.picks.length >= 3 && q.id === T.picks[0].id) return topoRun();
@@ -6745,7 +6760,7 @@ function topoPick(mx, my) {
   setHint(`${def.name}：${def.hint}　已點 ${T.picks.length}` + (multi ? '，Enter 完成' : '') + '　Esc 取消'); topoPanel(); draw();
 }
 function topoRun() {
-  const T = S.topo, P = T.picks, ds = S.ds; T.picks = [];
+  const T = S.topo, P = T.picks, ds = S.ds; T.picks = []; T.err = '';
   try {
     switch (T.tool) {
       case 'addOnLine': { const r = addPoint({ edge: [P[0].a, P[0].b], y: P[0].y, x: P[0].x }); msg(`已在 ${P[0].a}–${P[0].b} 加點 ${r.id}（${r.parcels.join('、')} 同步插入）`); break; }
@@ -6753,7 +6768,7 @@ function topoRun() {
       case 'delPt': { const r = deletePoints([P[0].id]); msg(r.deleted.length ? `已刪除點 ${P[0].id}（${r.parcels.join('、')}）` : `無法刪除：${r.skipped.map(q => q.reason).join('、')}`); break; }
       case 'snapLine': { const id = P[0].id, r = Core.snapPointToEdge(ds, id, P[1].a, P[1].b), from = r.from, to = r.to, d = r.delta, setXY = q => { const p = ds.points.get(id); p.y = q.y; p.x = q.x; };
         pushUndo({ undoFn: () => { setXY(from); Core.applyDelta(ds, d, 'undo'); }, redoFn: () => { setXY(to); Core.applyDelta(ds, d, 'redo'); }, label: `點 ${id} 貼到線 ${P[1].a}–${P[1].b}` });
-        selectOnlyPoint(id); msg(`點 ${id} 移 ${r.dist.toFixed(3)} m 到 ${P[1].a}–${P[1].b} 線上，並接進 ${parLabels(d).join('、')}`); break; }
+        selectOnlyPoint(id); msg(`點 ${id} 移 ${r.dist.toFixed(3)} m 到 ${P[1].a}–${P[1].b} 線上，並接進 ${parLabels(d).join('、')}` + r.spikes.map(k => `；${k.label} 的尖刺收掉（不再經過 ${k.id}）`).join('')); break; }
       case 'mergePt': { const r = Core.mergePoints(ds, P[0].id, P[1].id); pushStruct(r.delta, `點 ${P[0].id} 併入 ${P[1].id}`); pruneSel(); selectOnlyPoint(P[1].id); msg(`點 ${P[0].id} 已併入 ${P[1].id}（${parLabels(r.delta).join('、')}）`); break; }
       case 'addLine': { const a = P[0].id, b = P[1].id, common = (ds.pointParcels.get(a) || []).filter(i => (ds.pointParcels.get(b) || []).includes(i) && !ds.parcels[i].deleted);
         if (!common.length) throw new Error(`點 ${a}、${b} 不在同一宗地上`); let r = null, err = null; for (const pi of common) { try { r = Core.splitByChord(ds, pi, a, b); break; } catch (e) { err = e; } } if (!r) throw err;
@@ -6766,8 +6781,8 @@ function topoRun() {
       case 'mergeFace': if (P.length < 2) throw new Error('至少點兩宗'); mergeParcelsUI(P.map(p => p.idx)); break;
       case 'redraw': clearSel(); S.sel.par.add(P[0].idx); S.topo = null; startRedraw(); topoPanel(); return;
     }
-  } catch (err) { msg(`${TOPO[T.tool].name}：${err.message}`); }
-  setHint(`${TOPO[T.tool].name}：${TOPO[T.tool].hint}　（繼續下一筆，Esc 結束）`); topoPanel(); refresh();
+  } catch (err) { T.err = err.message; msg(`${TOPO[T.tool].name}：${err.message}`); }   // 失敗原因也寫進工具箱與圖上提示：狀態列 9 秒就清掉，提示又馬上換成「繼續下一筆」，看起來像沒反應（v0.33.1）
+  setHint(T.err ? `${TOPO[T.tool].name}沒有執行：${T.err}　（重新點選，Esc 結束）` : `${TOPO[T.tool].name}：${TOPO[T.tool].hint}　（繼續下一筆，Esc 結束）`); topoPanel(); refresh();
 }
 function drawTopo() {
   const T = S.topo; if (!T || !T.picks.length) return; ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = ctx.fillStyle = '#f08c00';
