@@ -3206,7 +3206,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     if (!adj) { afUndoCut(ds, r); throw new Error(`切下的部分沒有和 ${tgt.label} 相鄰`); }
     let m; try { m = mergeParcels(ds, [r.idx, tgt.idx], tgt.idx); } catch (e) { afUndoCut(ds, r); throw e; }
     const d = newDelta(); mergeDelta(d, r.delta); mergeDelta(d, m.delta);
-    d.created = (r.delta.created || []).filter(i => i !== r.idx); d.deleted = (m.delta.deleted || []).filter(i => i !== r.idx); d.parcels.delete(r.idx);
+    d.created = (r.delta.created || []).filter(i => i !== r.idx); d.deleted = (m.delta.deleted || []).filter(i => i !== r.idx); d.holes = (m.delta.holes || []).filter(l => l.p !== r.idx && l.h !== r.idx); d.parcels.delete(r.idx);
     if (ds.parcels[ds.parcels.length - 1].idx === r.idx) ds.parcels.pop();   // 暫存的切出宗地已併入，不留空殼（undo 才能回到原狀、redo 不會多一宗）
     closeDelta(ds, d);
     return { delta: d, keep: p.label, into: tgt.label, areaKeep: r.areaKeep, areaCut: r.areaCut };
