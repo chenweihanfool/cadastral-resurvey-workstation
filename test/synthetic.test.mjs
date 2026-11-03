@@ -919,6 +919,14 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   // 自我接觸：一宗已經用到這一點又以這條線為界 → 擋下，不改任何東西
   const ds3 = Core.datasetFromD(files([[1, 0, 0], [2, 0, 10], [3, 10, 10], [4, 10, 0], [5, 5, 5.3]], [ring(1, 1, 0, [1, 2, 5, 3, 4])]));
   const before = JSON.stringify(ds3.parcels[0].ids); assert.throws(() => Core.snapPointToEdge(ds3, 5, 1, 2), /自我接觸/); assert.equal(JSON.stringify(ds3.parcels[0].ids), before); near(ds3.points.get(5).x, X + 5.3, 1e-9);
+  // v0.33.1 細尖刺：1 的環 …41→42→43…，43 離 41–42 只有 0.3 m（42 處夾一根尖刺，KC0336 1081 的 6016→6355→10090）；鄰宗 2 以 41–42 為界。
+  // 貼 43 到 41–42 → 1 收掉 42（不再自我接觸擋下）、2 接進 43（面積不變），沒有重疊交錯；復原回原樣
+  { const ds4 = Core.datasetFromD(files([[41, 0, 0], [42, 10, 0], [43, 2, 0.3], [44, 0, 10], [51, 10, -10], [52, 0, -10]], [ring(1, 1, 0, [41, 42, 43, 44]), ring(1, 2, 0, [41, 52, 51, 42])]));
+    const ids0 = JSON.stringify(ds4.parcels[0].ids);
+    const r = Core.snapPointToEdge(ds4, 43, 41, 42); near(r.dist, 0.3, 1e-6); assert.deepEqual(r.spikes, [{ label: '1', id: 42 }]);
+    assert.deepEqual(ds4.parcels[0].ids, [41, 43, 44]); assert.ok(ds4.parcels[1].ids.includes(43)); near(ds4.parcels[1].area, 100, 1e-6);
+    const cf = Core.ringConflicts(ds4); assert.equal(cf.overlap.length + cf.cross.length, 0, '收尖刺後沒有重疊或交錯');
+    Core.applyDelta(ds4, r.delta, 'undo'); assert.equal(JSON.stringify(ds4.parcels[0].ids), ids0); }
   // 專案狀態：編修後存成 JSON，重新讀原檔再套用 → 點、環、刪除、新建都回來，面積基準不變
   Core.mergeParcels(ds, [0, 1]); Core.addFreePoint(ds, Y + 50, X + 50);
   const st = JSON.parse(JSON.stringify(Core.datasetState(ds))), back = Core.applyDatasetState(Core.datasetFromD(F), st);

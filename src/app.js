@@ -2303,7 +2303,7 @@ S.topo = null;   // { tool, picks:[{t:'pt'|'edge'|'par'|'xy', …}] }
 function topoPanel() {
   const by = {}; for (const [k, t] of Object.entries(TOPO)) (by[t.g] = by[t.g] || []).push([k, t]);
   $('topoTools').innerHTML = Object.entries(by).map(([g, list]) => `<div class="tgrp"><b>${g}</b><div class="row small">${list.map(([k, t]) => `<button class="btn${S.topo && S.topo.tool === k ? ' primary' : ''}" data-topo="${k}" title="${esc(t.hint)}">${t.name}</button>`).join('')}</div></div>`).join('');
-  $('topoHint').textContent = S.topo ? `${TOPO[S.topo.tool].name}：${TOPO[S.topo.tool].hint}` + (S.topo.picks.length ? `（已點 ${S.topo.picks.length}）` : '') : '選一個工具，然後在圖上點選。Esc 取消、Enter 完成、Backspace 退一步；每次都可 Ctrl+Z 復原。';
+  $('topoHint').textContent = S.topo ? `${TOPO[S.topo.tool].name}：${TOPO[S.topo.tool].hint}` + (S.topo.picks.length ? `（已點 ${S.topo.picks.length}）` : '') + (S.topo.err ? `　⚠ 沒有執行：${S.topo.err}` : '') : '選一個工具，然後在圖上點選。Esc 取消、Enter 完成、Backspace 退一步；每次都可 Ctrl+Z 復原。';
   tqPanel();
 }
 function topoStart(tool) {
@@ -2315,7 +2315,7 @@ function cancelModes() { if (S.pocket) cancelPocket(); if (S.redraw) cancelRedra
 function topoCancel() { S.topo = null; setHint(''); topoPanel(); draw(); }
 function parcelAt(wx, wy) { let best = null; for (const p of S.ds.parcels) { if (p.deleted || p.ids.length < 3) continue; if (Core.pointInRing(p.ids, S.ds.points, wy, wx) && (!best || p.area < best.area)) best = p; } return best; }
 function topoPick(mx, my) {
-  const T = S.topo, def = TOPO[T.tool], wx = toWx(mx), wy = toWy(my), need = def.picks[Math.min(T.picks.length, def.picks.length - 1)];
+  const T = S.topo, def = TOPO[T.tool], wx = toWx(mx), wy = toWy(my), need = def.picks[Math.min(T.picks.length, def.picks.length - 1)]; T.err = '';
   const pt = () => nearestPoint(S.ds.points, wx, wy, 12 / S.view.s), edge = () => hitEdgeAt(wx, wy, 8 / S.view.s);
   if (need === 'pt' || need === 'pts') { const q = pt(); if (!q) return msg('請點在界址點上');
     if (need === 'pts' && T.picks.length >= 3 && q.id === T.picks[0].id) return topoRun();
@@ -2328,7 +2328,7 @@ function topoPick(mx, my) {
   setHint(`${def.name}：${def.hint}　已點 ${T.picks.length}` + (multi ? '，Enter 完成' : '') + '　Esc 取消'); topoPanel(); draw();
 }
 function topoRun() {
-  const T = S.topo, P = T.picks, ds = S.ds; T.picks = [];
+  const T = S.topo, P = T.picks, ds = S.ds; T.picks = []; T.err = '';
   try {
     switch (T.tool) {
       case 'addOnLine': { const r = addPoint({ edge: [P[0].a, P[0].b], y: P[0].y, x: P[0].x }); msg(`已在 ${P[0].a}–${P[0].b} 加點 ${r.id}（${r.parcels.join('、')} 同步插入）`); break; }
@@ -2336,7 +2336,7 @@ function topoRun() {
       case 'delPt': { const r = deletePoints([P[0].id]); msg(r.deleted.length ? `已刪除點 ${P[0].id}（${r.parcels.join('、')}）` : `無法刪除：${r.skipped.map(q => q.reason).join('、')}`); break; }
       case 'snapLine': { const id = P[0].id, r = Core.snapPointToEdge(ds, id, P[1].a, P[1].b), from = r.from, to = r.to, d = r.delta, setXY = q => { const p = ds.points.get(id); p.y = q.y; p.x = q.x; };
         pushUndo({ undoFn: () => { setXY(from); Core.applyDelta(ds, d, 'undo'); }, redoFn: () => { setXY(to); Core.applyDelta(ds, d, 'redo'); }, label: `點 ${id} 貼到線 ${P[1].a}–${P[1].b}` });
-        selectOnlyPoint(id); msg(`點 ${id} 移 ${r.dist.toFixed(3)} m 到 ${P[1].a}–${P[1].b} 線上，並接進 ${parLabels(d).join('、')}`); break; }
+        selectOnlyPoint(id); msg(`點 ${id} 移 ${r.dist.toFixed(3)} m 到 ${P[1].a}–${P[1].b} 線上，並接進 ${parLabels(d).join('、')}` + r.spikes.map(k => `；${k.label} 的尖刺收掉（不再經過 ${k.id}）`).join('')); break; }
       case 'mergePt': { const r = Core.mergePoints(ds, P[0].id, P[1].id); pushStruct(r.delta, `點 ${P[0].id} 併入 ${P[1].id}`); pruneSel(); selectOnlyPoint(P[1].id); msg(`點 ${P[0].id} 已併入 ${P[1].id}（${parLabels(r.delta).join('、')}）`); break; }
       case 'addLine': { const a = P[0].id, b = P[1].id, common = (ds.pointParcels.get(a) || []).filter(i => (ds.pointParcels.get(b) || []).includes(i) && !ds.parcels[i].deleted);
         if (!common.length) throw new Error(`點 ${a}、${b} 不在同一宗地上`); let r = null, err = null; for (const pi of common) { try { r = Core.splitByChord(ds, pi, a, b); break; } catch (e) { err = e; } } if (!r) throw err;
@@ -2349,8 +2349,8 @@ function topoRun() {
       case 'mergeFace': if (P.length < 2) throw new Error('至少點兩宗'); mergeParcelsUI(P.map(p => p.idx)); break;
       case 'redraw': clearSel(); S.sel.par.add(P[0].idx); S.topo = null; startRedraw(); topoPanel(); return;
     }
-  } catch (err) { msg(`${TOPO[T.tool].name}：${err.message}`); }
-  setHint(`${TOPO[T.tool].name}：${TOPO[T.tool].hint}　（繼續下一筆，Esc 結束）`); topoPanel(); refresh();
+  } catch (err) { T.err = err.message; msg(`${TOPO[T.tool].name}：${err.message}`); }   // 失敗原因也寫進工具箱與圖上提示：狀態列 9 秒就清掉，提示又馬上換成「繼續下一筆」，看起來像沒反應（v0.33.1）
+  setHint(T.err ? `${TOPO[T.tool].name}沒有執行：${T.err}　（重新點選，Esc 結束）` : `${TOPO[T.tool].name}：${TOPO[T.tool].hint}　（繼續下一筆，Esc 結束）`); topoPanel(); refresh();
 }
 function drawTopo() {
   const T = S.topo; if (!T || !T.picks.length) return; ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = ctx.fillStyle = '#f08c00';
