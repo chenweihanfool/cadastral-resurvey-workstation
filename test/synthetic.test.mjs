@@ -1122,4 +1122,71 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   w.parcels.push({ key: '1|5|0', label: '5', oldLabel: '5', ids: [1, 2, 3, 4], mid: [false, false, false, false], areaReg: 0 }); Core.finalize(w);
   assert.throws(() => Core.carveTo(w, 0, A, B, [], { to: 'unreg' }), /沒有接到未登記地/);
 }
+// ── 合併支援地中地（v0.34.0）：外圈含地中地可合併、地中地併回外圈、同一外圈的地中地互併；其餘拒絕且不改圖 ──
+{
+  const Y = 2700000, X = 220000;
+  // 外圈 10（0～100 方形）＋東鄰 11（x 100～160）＋南鄰 12（y −50～0）；地中地 9020（30～60 方形）、9021 接在 9020 北側（共用 y＝60 那條邊）
+  const mk = (nh = 1) => {
+    const d = Core.newDataset('mergeHoles', 't'), P = [[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0], [5, 0, 160], [6, 100, 160],
+      [7, 30, 30], [8, 30, 60], [9, 60, 60], [10, 60, 30], [11, 30, 90], [12, 60, 90], [13, -50, 100], [14, -50, 0]];
+    for (const [id, y, x] of P) d.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x });
+    const add = (label, ids) => d.parcels.push({ key: `1|${label}|0`, label: String(label), oldLabel: String(label), ids, mid: ids.map(() => false), areaReg: 0 });
+    add('10', [1, 2, 3, 4]); add('11', [2, 5, 6, 3]); add('12', [1, 2, 13, 14]);
+    const links = [];
+    if (nh >= 1) { add('9020', [7, 8, 9, 10]); links.push('1|9020|0'); }
+    if (nh >= 2) { add('9021', [8, 11, 12, 9]); links.push('1|9021|0'); }
+    d.parcels[0].holeKeys = links; return Core.finalize(d);
+  };
+  const par = (d, l) => d.parcels.find(p => p.label === l), IDs = (d, l) => par(d, l).holes.map(i => d.parcels[i].label);
+  const noConf = d => { const c = Core.ringConflicts(d); assert.equal(c.cross.length + c.overlap.length, 0, '不可交錯或重疊'); };
+  near(par(mk(), '10').area, 9100, 1e-9, '外圈面積＝外環 − 地中地');
+
+  // A：外圈 P 含地中地 H，P 與東鄰 Q 合併（保留 P）→ H 仍掛在 P，面積扣掉 H
+  let d = mk(1), r = Core.mergeParcels(d, [0, 1], 0);
+  assert.equal(r.keep, '10'); near(par(d, '10').area, 15100, 1e-9); near(par(d, '11').area, 0, 1e-9);
+  assert.deepEqual(IDs(d, '10'), ['9020']); assert.deepEqual(d.parcels[3].containers, [0], 'H 仍以外圈 P 為外圈'); noConf(d);
+  Core.applyDelta(d, r.delta, 'undo');
+  near(par(d, '10').area, 9100, 1e-9); assert.ok(!d.parcels[1].deleted, 'undo：東鄰回來'); assert.deepEqual(IDs(d, '10'), ['9020']); assert.deepEqual(d.parcels[3].containers, [0]);
+  Core.applyDelta(d, r.delta, 'redo'); near(par(d, '10').area, 15100, 1e-9); noConf(d);
+
+  // A：同上但保留東鄰 Q → H 轉給 Q
+  d = mk(1); r = Core.mergeParcels(d, [0, 1], 1);
+  assert.equal(r.keep, '11'); near(par(d, '11').area, 15100, 1e-9); assert.deepEqual(IDs(d, '11'), ['9020']); assert.deepEqual(d.parcels[3].containers, [1], 'H 轉給 Q');
+  assert.ok(par(d, '10').deleted); noConf(d);
+
+  // B1：地中地 H 與外圈 P 合併 → H 刪除、P 面積＝外環面積、P 不再有地中地
+  d = mk(1); r = Core.mergeParcels(d, [0, 3], 0);
+  assert.ok(par(d, '9020').deleted); assert.deepEqual(par(d, '10').holes, []); near(par(d, '10').area, 10000, 1e-9); assert.deepEqual(d.parcels[3].containers, []); noConf(d);
+  Core.applyDelta(d, r.delta, 'undo');
+  assert.ok(!par(d, '9020').deleted); near(par(d, '10').area, 9100, 1e-9); assert.deepEqual(par(d, '10').holes, [3]); assert.deepEqual(d.parcels[3].containers, [0]);
+  Core.applyDelta(d, r.delta, 'redo'); assert.ok(par(d, '9020').deleted); near(par(d, '10').area, 10000, 1e-9); noConf(d);
+
+  // B2：同一外圈內兩個相鄰地中地互併（外圈不在成員裡）→ 保留者仍是外圈的地中地，外圈面積不變
+  d = mk(2); near(par(d, '10').area, 8200, 1e-9); r = Core.mergeParcels(d, [3, 4], 3);
+  assert.equal(r.keep, '9020'); assert.ok(par(d, '9021').deleted); assert.deepEqual(par(d, '10').holes, [3], '外圈只剩一個地中地');
+  assert.deepEqual(d.parcels[3].containers, [0]); near(par(d, '9020').area, 1800, 1e-9); near(par(d, '10').area, 8200, 1e-9); noConf(d);
+  Core.applyDelta(d, r.delta, 'undo');
+  assert.ok(!par(d, '9021').deleted); assert.deepEqual(par(d, '10').holes.slice().sort(), [3, 4]); near(par(d, '9020').area, 900, 1e-9); near(par(d, '10').area, 8200, 1e-9); assert.deepEqual(d.parcels[4].containers, [0]);
+  Core.applyDelta(d, r.delta, 'redo'); assert.ok(par(d, '9021').deleted); near(par(d, '9020').area, 1800, 1e-9); near(par(d, '10').area, 8200, 1e-9); noConf(d);
+
+  // 地中地與外圈以外的宗地合併 → 拒絕，狀態不變
+  d = mk(1); const st1 = Core.datasetState(d);
+  assert.throws(() => Core.mergeParcels(d, [1, 3], 1), /9020 是 10 的地中地，不能與外圈以外的宗地合併/);
+  assert.deepEqual(Core.datasetState(d), st1, '失敗後狀態不變（含 linkHole 還原）');
+
+  // carveTo：切下的西側 3000 m² 併入含地中地的 10 → 成功、地中地保留
+  {
+    const e = Core.newDataset('carveHole', 't'), P = [[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0], [5, 0, 200], [6, 100, 200],
+      [7, 40, 40], [8, 40, 60], [9, 60, 60], [10, 60, 40]];
+    for (const [id, y, x] of P) e.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x });
+    const add = (label, ids, reg) => e.parcels.push({ key: `1|${label}|0`, label: String(label), oldLabel: String(label), ids, mid: ids.map(() => false), areaReg: reg || 0 });
+    add('10', [1, 2, 3, 4], 10000); add('20', [2, 5, 6, 3], 7000); add('9020', [7, 8, 9, 10], 0);
+    e.parcels[0].holeKeys = ['1|9020|0']; Core.finalize(e);
+    near(par(e, '10').area, 9600, 1e-9);
+    const A = { edge: [2, 5], y: Y, x: X + 130 }, B = { edge: [6, 3], y: Y + 100, x: X + 130 };
+    const rc = Core.carveTo(e, 1, A, B, [], { to: '10' });
+    assert.equal(rc.into, '10'); near(par(e, '10').area, 12600, 1e-9); near(par(e, '20').area, 7000, 1e-9);
+    assert.deepEqual(IDs(e, '10'), ['9020'], '併入後地中地還在'); near(par(e, '9020').area, 400, 1e-9); noConf(e);
+  }
+}
 console.log('SYNTHETIC OK');

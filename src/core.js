@@ -1565,22 +1565,43 @@ const Core = (() => {
   function mergeParcels(ds, idxs, keep) {
     idxs = [...new Set(idxs)]; if (idxs.length < 2) throw new Error('至少選兩筆');
     for (const i of idxs) { const p = ds.parcels[i]; if (!p || p.deleted) throw new Error('宗地不存在');
-      if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，尚未支援合併`);
-      if (p.mid && p.mid.some(Boolean)) throw new Error(`${p.label} 含圓弧，尚未支援合併`); }
-    const d = newDelta(); d.deleted = []; healJunctions(ds, d, idxs);
-    const loops = outlineLoops(ds, idxs).filter(l => Math.abs(l.area) > 1e-6);
-    if (loops.length !== 1 || loops[0].area <= 0) {
-      if (d.parcels.size) applyDelta(ds, closeDelta(ds, d), 'undo');
-      throw new Error(loops.some(l => l.area < 0) ? '合併後中間會有空洞，請連空洞一起處理' : `選取的宗地沒有全部相連（外圍 ${loops.filter(l => l.area > 0).length} 個環；可能有縫隙或重疊）`);
+      if (p.mid && p.mid.some(Boolean)) throw new Error(`${p.label} 含圓弧，尚未支援合併`);
+      if ((p.holes || []).length && (p.containers || []).length) throw new Error(`${p.label} 同時含地中地又是地中地，尚未支援合併`); }
+    const inGroup = new Set(idxs);
+    // 地中地（v0.34.0）：成員本身是地中地時只有兩種情形可合併——
+    // B1 外圈也在這次合併的成員裡（地中地併回外圈，面積併入外圈）；B2 全部都是同一個外圈的地中地、外圈不在成員裡（留在外圈內互併）。
+    // 其餘（地中地與外圈以外的宗地合併、分屬不同外圈）拒絕，訊息要指出是哪一宗的地中地。
+    const holeMem = idxs.filter(i => (ds.parcels[i].containers || []).length);
+    let dissolve = new Set();
+    if (holeMem.length) {
+      const conts = new Set(); for (const i of holeMem) for (const c of ds.parcels[i].containers) conts.add(c);
+      if (!(holeMem.length === idxs.length && conts.size === 1 && !inGroup.has([...conts][0]))) {   // 不是 B2 就必須是 B1
+        for (const i of holeMem) for (const c of ds.parcels[i].containers) if (!inGroup.has(c)) throw new Error(`${ds.parcels[i].label} 是 ${ds.parcels[c].label} 的地中地，不能與外圈以外的宗地合併`);
+        dissolve = new Set(holeMem);
+      }
     }
-    const order = idxs.map(i => ds.parcels[i]).sort((a, b) => (a.created - b.created) || (mainNo(a) - mainNo(b)) || (subNo(a) - subNo(b)));
-    const k = keep != null ? ds.parcels[keep] : order[0];
-    const inGroup = new Set(idxs), onLoop = new Set(loops[0].ids), drop = new Set();
-    for (const i of idxs) { const p = ds.parcels[i]; touchParcel(d, p); for (const id of p.ids) if (!onLoop.has(id) && (ds.pointParcels.get(id) || []).every(x => inGroup.has(x))) drop.add(id); }
-    for (const i of idxs) { const p = ds.parcels[i]; if (p === k) continue; p.ids = []; p.mid = []; p.deleted = true; d.deleted.push(i); }
-    k.ids = loops[0].ids.slice(); k.mid = k.ids.map(() => false); k.unregEdit = true;
-    for (const id of drop) { const q = ds.points.get(id); if (q) { ds.points.delete(id); d.removed.push(q); } }
-    return { delta: closeDelta(ds, d), keep: k.label, merged: idxs.filter(i => i !== k.idx).map(i => ds.parcels[i].label), removedPoints: [...drop] };
+    const geo = idxs.filter(i => !dissolve.has(i));   // 外圍用這些宗地的環算（地中地與外圈沒有共用邊，不能放進來）
+    if (keep != null) { if (!inGroup.has(keep)) throw new Error('保留的宗地不在選取範圍'); if (dissolve.has(keep)) throw new Error(`${ds.parcels[keep].label} 是地中地，合併後併入外圈，不能保留這個地號`); }
+    const d = newDelta(); d.deleted = []; d.holes = [];
+    try {
+      healJunctions(ds, d, geo);
+      const loops = outlineLoops(ds, geo).filter(l => Math.abs(l.area) > 1e-6);
+      if (loops.length !== 1 || loops[0].area <= 0) throw new Error(loops.some(l => l.area < 0) ? '合併後中間會有空洞，請連空洞一起處理' : `選取的宗地沒有全部相連（外圍 ${loops.filter(l => l.area > 0).length} 個環；可能有縫隙或重疊）`);
+      const order = geo.map(i => ds.parcels[i]).sort((a, b) => (a.created - b.created) || (mainNo(a) - mainNo(b)) || (subNo(a) - subNo(b)));
+      const k = keep != null ? ds.parcels[keep] : order[0];
+      const onLoop = new Set(loops[0].ids), drop = new Set();
+      for (const i of idxs) { const p = ds.parcels[i]; touchParcel(d, p); for (const id of p.ids) if (!onLoop.has(id) && (ds.pointParcels.get(id) || []).every(x => inGroup.has(x))) drop.add(id); }
+      for (const hi of dissolve) { touchParcel(d, ds.parcels[hi]); for (const c of (ds.parcels[hi].containers || []).slice()) { touchParcel(d, ds.parcels[c]); linkHole(ds, c, hi, false); d.holes.push({ p: c, h: hi, on: false }); } }   // 地中地併回外圈
+      for (const i of geo) { const p = ds.parcels[i]; if (p === k) continue; for (const hi of (p.holes || []).slice()) {   // A：其餘成員的地中地都轉給保留宗地
+        if (dissolve.has(hi)) continue; const had = (k.holes || []).includes(hi); linkHole(ds, i, hi, false); d.holes.push({ p: i, h: hi, on: false });
+        if (!had) { linkHole(ds, k.idx, hi, true); d.holes.push({ p: k.idx, h: hi, on: true }); } } }
+      for (const i of idxs) { const p = ds.parcels[i]; if (p === k) continue;
+        if (!dissolve.has(i)) for (const c of (p.containers || []).slice()) { touchParcel(d, ds.parcels[c]); linkHole(ds, c, i, false); d.holes.push({ p: c, h: i, on: false }); }   // B2：被刪掉的地中地要解除與外圈的關係
+        p.ids = []; p.mid = []; p.deleted = true; d.deleted.push(i); }
+      k.ids = loops[0].ids.slice(); k.mid = k.ids.map(() => false); k.unregEdit = true;
+      for (const id of drop) { const q = ds.points.get(id); if (q) { ds.points.delete(id); d.removed.push(q); } }
+      return { delta: closeDelta(ds, d), keep: k.label, merged: idxs.filter(i => i !== k.idx).map(i => ds.parcels[i].label), removedPoints: [...drop] };
+    } catch (e) { applyDelta(ds, closeDelta(ds, d), 'undo'); throw e; }   // 整筆還原（含已改過的 linkHole）
   }
   // 碎塊歸併（v0.24.0）：面積 < minArea 的未登記地併入「共用界線最長」的相鄰未登記地（保留鄰宗地號）。地中地、圓弧略過；
   // 只與登記地相鄰的碎塊不動（併進登記地會改變登記地面積），列在 left。idxs：只處理這些宗地（省略＝全部未登記地）。回傳 {deltas, merged:[{from, into}], left:[地號]}
