@@ -307,6 +307,7 @@ kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;paddi
   <div class="row small" id="afBtns" style="margin-top:4px;display:none"><button class="btn primary" id="afAccept" title="保留目前結果（含你的微調），整批算一次復原">接受</button><button class="btn" id="afCancel" title="回到框選前的狀態（你的微調也一起放棄）">放棄</button><button class="btn" id="afAlign" title="預覽時影像暫時對齊作業圖，結束會還原；按這裡讓影像留在對齊的位置">保留影像對齊</button></div></section>
 <section><h2>工具</h2><div id="topoTools"></div>
   <div id="topoHint" class="small" style="margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px"></div>
+  <div id="carvePanel" class="small" style="margin-top:6px;display:none"></div>
   <div class="small muted" style="margin-top:6px">工具選好後在圖上依序點選（橘色＝已點選），湊齊就執行並留在同一工具，可連續修下一筆。Esc 結束、Enter 完成（新增面、合併面）、Backspace 退一步；每個動作都可 Ctrl+Z 復原。點線面之間的位相（共用點、共用線、鄰宗）會一起維護：點貼到線會接進線兩側的宗地，刪線＝兩宗合併，新增線＝切成兩宗。</div></section>
 <section><h2>即時檢查</h2><div class="row small"><label class="chk"><input type="checkbox" id="liveChk" checked>每次修改後檢查</label><button class="btn" id="liveNext">看下一處 ▶</button></div><div id="liveInfo" class="small" style="margin-top:4px"></div></section>
 <section><h2>批次處理（同類一次做完）</h2><div class="row small"><select id="batchKind"></select><span id="batchTolWrap">≤ <input id="batchTol" type="number" value="0.05" step="0.01" min="0.001" style="width:5em"> m</span><button class="btn" id="batchPrev">預覽</button><button class="btn primary" id="batchApply" disabled>全部套用</button></div><div id="batchInfo" class="small" style="margin-top:4px"></div></section>
