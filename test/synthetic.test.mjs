@@ -1051,4 +1051,75 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   assert.equal(Core.ringConflicts(s).cross.length, 0); near(s.parcels.filter(p => !p.deleted && p.label !== '11').reduce((t, p) => t + p.area, 0), mk().parcels[0].area, 1e-6, '切開後面積總和不變');
   { const t = mk(); assert.throws(() => Core.splitByPath(t, 0, { id: 1 }, { id: 3 }, [{ y: Y + 50, x: X + 130 }]), /切線/, '切線跑出宗地要拒絕'); assert.equal(t.parcels.filter(p => !p.deleted).length, 2); }
 }
+// ── 切出併入（v0.34.0）：沿折線切開，切下的部分併入相鄰未登記地／登記地、新建或留子號；單一 delta 可一次復原 ──
+{
+  const Y = 2700000, X = 220000;
+  // 宗地 10（0～100 方形，登記 7000）＋東側未登記地 9001-1（x 100～160）＋南側登記地 11（y −50～0）＋可選的遠方 20
+  const mk = far => {
+    const d = Core.newDataset('carve', 't');
+    const P = [[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0], [5, 0, 160], [6, 100, 160], [7, -50, 100], [8, -50, 0]];
+    if (far) P.push([9, 200, 0], [10, 200, 100], [11, 300, 100], [12, 300, 0]);
+    for (const [id, y, x] of P) d.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x });
+    const add = (label, ids, reg) => d.parcels.push({ key: `1|${label}|0`, label: String(label), oldLabel: String(label), ids, mid: ids.map(() => false), areaReg: reg || 0 });
+    add('10', [1, 2, 3, 4], 7000); add('9001-1', [2, 5, 6, 3], 0); add('11', [1, 2, 7, 8], 1500);
+    if (far) add('20', [9, 10, 11, 12], 0);
+    return Core.finalize(d);
+  };
+  const A = { edge: [1, 2], y: Y, x: X + 70 }, B = { edge: [3, 4], y: Y + 100, x: X + 70 };   // x=70 由南界切到北界
+  const live = d => d.parcels.filter(p => !p.deleted).map(p => [p.label, +p.area.toFixed(3)]);
+  const area = (d, l) => d.parcels.find(p => p.label === l && !p.deleted).area;
+  const noConf = d => { const c = Core.ringConflicts(d); assert.equal(c.cross.length + c.overlap.length, 0, '不可交錯或重疊'); assert.equal(Core.freeRegions(d).length, 0, '不可留縫'); };
+
+  // planCarve：只算不改圖；預設保留最接近登記面積（7000）的西側 7000 m²，切下東側 3000 m²
+  const d0 = mk(), st0 = Core.datasetState(d0), pl = Core.planCarve(d0, 0, A, B, []);
+  assert.deepEqual(Core.datasetState(d0), st0, 'planCarve 前後 datasetState 相同（試切已完全還原）');
+  near(pl.pieces[pl.keep].area, 7000, 1e-9); near(pl.pieces[1 - pl.keep].area, 3000, 1e-9);
+  assert.equal(pl.parcel, '10'); assert.equal(pl.areaReg, 7000); near(pl.tol, Core.areaTol(7000), 1e-9);
+  near(pl.diffBefore, 3000, 1e-9); near(pl.diffAfter, 0, 1e-9);
+  assert.equal(pl.defaultTarget, '9001-1', '相鄰未登記地中取共用邊最長者');
+  const tu = pl.targets.find(t => t.kind === 'unreg'), tr = pl.targets.find(t => t.kind === 'reg');
+  assert.equal(tu.label, '9001-1'); near(tu.shared, 100, 1e-9); assert.equal(tu.diffAfter, null, '未登記地沒有登記面積');
+  assert.equal(tr.label, '11'); near(tr.shared, 30, 1e-9); near(tr.diffAfter, 6500, 1e-9);
+  assert.deepEqual(pl.targets.map(t => t.kind), ['unreg', 'reg', 'new', 'child']);
+  // 對調：保留東側 3000，切下西側 7000；沒有相鄰未登記地 → 預設新建
+  const ps = Core.planCarve(d0, 0, A, B, [], { swap: true });
+  near(ps.pieces[ps.keep].area, 3000, 1e-9); near(ps.diffAfter, -4000, 1e-9); assert.equal(ps.defaultTarget, 'new');
+  assert.deepEqual(Core.datasetState(d0), st0, 'swap 試算也不改圖');
+
+  // 併入相鄰未登記地
+  let d = mk(), r = Core.carveTo(d, 0, A, B, [], { to: 'unreg' });
+  assert.equal(r.keep, '10'); assert.equal(r.into, '9001-1'); near(r.areaKeep, 7000, 1e-9); near(r.areaCut, 3000, 1e-9);
+  near(area(d, '10'), 7000, 1e-9); near(area(d, '9001-1'), 9000, 1e-9); noConf(d);
+  assert.deepEqual(live(d).map(x => x[0]).sort(), ['10', '11', '9001-1'], '切出的宗地已併入，不留空殼');
+  const after = live(d).sort();
+  Core.applyDelta(d, r.delta, 'undo');
+  near(area(d, '10'), 10000, 1e-9); near(area(d, '9001-1'), 6000, 1e-9);
+  assert.equal(d.points.size, 8, 'undo 一次回到原狀態（新增的切線點也收掉）'); assert.equal(d.parcels.length, 3);
+  Core.applyDelta(d, r.delta, 'redo'); assert.deepEqual(live(d).sort(), after, 'redo 一次到位（面積相同）'); noConf(d);
+
+  // 併入指定的相鄰登記地
+  d = mk(); r = Core.carveTo(d, 0, A, B, [], { to: '11' });
+  assert.equal(r.into, '11'); near(area(d, '11'), 8000, 1e-9); near(area(d, '10'), 7000, 1e-9); noConf(d);
+
+  // 新建未登記地（母號由呼叫端給）與留為子號
+  d = mk(); r = Core.carveTo(d, 0, A, B, [], { to: 'new', mother: 9001 });
+  assert.equal(r.into, '9001-2'); near(area(d, '9001-2'), 3000, 1e-9); near(area(d, '10'), 7000, 1e-9); noConf(d);
+  d = mk(); r = Core.carveTo(d, 0, A, B, [], { to: 'child' });
+  assert.equal(r.into, '10-1'); near(area(d, '10-1'), 3000, 1e-9); near(area(d, '10'), 7000, 1e-9); noConf(d);
+
+  // 對調保留側：本宗保留東側 3000，切下的西側 7000 建為新未登記地
+  d = mk(); r = Core.carveTo(d, 0, A, B, [], { to: 'new', swap: true, mother: 9001 });
+  assert.equal(r.into, '9001-2'); near(area(d, '10'), 3000, 1e-9); near(area(d, '9001-2'), 7000, 1e-9); noConf(d);
+
+  // 指定不相鄰的地號要拋錯，且一點都不改
+  d = mk(true); const st1 = Core.datasetState(d);
+  assert.throws(() => Core.carveTo(d, 0, A, B, [], { to: '20' }), /沒有和 20 相鄰/);
+  assert.deepEqual(Core.datasetState(d), st1, '失敗後狀態不變');
+  assert.throws(() => Core.carveTo(d, 0, A, B, [{ y: Y + 50, x: X + 160 }], { to: 'new' }), /切線/);
+  assert.deepEqual(Core.datasetState(d), st1, '切線不合法時狀態不變');
+  // 沒有相鄰未登記地時 to:'unreg' 要拋錯
+  const w = Core.newDataset('w', 't'); for (const [id, y, x] of [[1, 0, 0], [2, 0, 100], [3, 100, 100], [4, 100, 0]]) w.points.set(id, { id, y: Y + y, x: X + x, y0: Y + y, x0: X + x });
+  w.parcels.push({ key: '1|5|0', label: '5', oldLabel: '5', ids: [1, 2, 3, 4], mid: [false, false, false, false], areaReg: 0 }); Core.finalize(w);
+  assert.throws(() => Core.carveTo(w, 0, A, B, [], { to: 'unreg' }), /沒有接到未登記地/);
+}
 console.log('SYNTHETIC OK');
