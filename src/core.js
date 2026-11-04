@@ -1670,17 +1670,35 @@ const Core = (() => {
     buildTopology(ds); const healed = healAround(ds, d, [id, a, b]);
     return { delta: closeDelta(ds, d), from, to, dist: Math.hypot(to.x - from.x, to.y - from.y), healed, spikes };
   }
+  // 切開含地中地的宗地（v0.36.0）：切線（折線 line＝[{y,x}…]）不可穿過、碰到或走進任何地中地
+  function splitHoleGuard(ds, p, line) {
+    const P = ds.points, E = 1e-6, cr = (o, u, v) => (u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x);
+    const onSeg = (q, U, V) => Math.abs(cr(U, V, q)) <= E * Math.max(1, Math.hypot(V.x - U.x, V.y - U.y)) && q.x >= Math.min(U.x, V.x) - E && q.x <= Math.max(U.x, V.x) + E && q.y >= Math.min(U.y, V.y) - E && q.y <= Math.max(U.y, V.y) + E;
+    for (const hi of p.holes || []) { const h = ds.parcels[hi]; if (!h || h.deleted || h.ids.length < 3) continue; const HP = h.ids.map(id => P.get(id)), n = HP.length;
+      for (let k = 0; k + 1 < line.length; k++) { const U = line[k], V = line[k + 1];
+        if (pointInRing(h.ids, P, (U.y + V.y) / 2, (U.x + V.x) / 2)) throw new Error(`切線穿過地中地 ${h.label}`);
+        for (let m = 0; m < n; m++) { const C = HP[m], D = HP[(m + 1) % n], d1 = cr(U, V, C), d2 = cr(U, V, D), d3 = cr(C, D, U), d4 = cr(C, D, V);
+          if ((d1 * d2 < 0 && d3 * d4 < 0) || onSeg(C, U, V) || onSeg(U, C, D) || onSeg(V, C, D)) throw new Error(`切線碰到地中地 ${h.label}，請避開`); } } }
+  }
+  // 切開後整理地中地關係：原宗地的地中地依位置分給保留的 p 或切出的 q；p 本身是地中地時，q 也設為同一外圈的地中地
+  function splitHoleRelink(ds, d, p, q) {
+    const P = ds.points; d.holes = d.holes || [];
+    for (const hi of (p.holes || []).slice()) { const h = ds.parcels[hi]; if (!h || h.deleted || h.ids.length < 3) continue; const ip = interiorPoint(h.ids, P); if (!pointInRing(q.ids, P, ip.y, ip.x)) continue;
+      touchParcel(d, h); linkHole(ds, p.idx, hi, false); d.holes.push({ p: p.idx, h: hi, on: false }); linkHole(ds, q.idx, hi, true); d.holes.push({ p: q.idx, h: hi, on: true }); }
+    for (const ci of (p.containers || []).slice()) { touchParcel(d, ds.parcels[ci]); linkHole(ds, ci, q.idx, true); d.holes.push({ p: ci, h: q.idx, on: true }); }
+  }
   // 新增線：在宗地 pi 內連接兩個既有界址點，切成兩宗（切下的一側編新子號，同母號接續；較大的一側保留原地號）
   function splitByChord(ds, pi, a, b) {
     const p = ds.parcels[pi]; if (!p || p.deleted) throw new Error('宗地不存在'); if (ringHasArc(p)) throw new Error(`${p.label} 含圓弧，暫不支援`);
-    if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，暫不支援切開`);
+    if ((p.holes || []).length && (p.containers || []).length) throw new Error(`${p.label} 同時含地中地又是地中地，暫不支援切開`);
+    if ((p.holes || []).length) splitHoleGuard(ds, p, [ds.points.get(a), ds.points.get(b)].filter(Boolean));
     const ring = ccwIds(p.ids, ds.points), i = ring.indexOf(a), j = ring.indexOf(b); if (i < 0 || j < 0) throw new Error(`兩點都要是 ${p.label} 的界址點`);
     if (Math.abs(i - j) === 1 || Math.abs(i - j) === ring.length - 1) throw new Error('兩點已經相鄰（本來就有這條線）');
     if (!chordInside(ring, i, j, ds.points)) throw new Error('這條線不完全在宗地內，或碰到其他界址點');
     const [s, e] = i < j ? [i, j] : [j, i], c1 = ring.slice(s, e + 1), c2 = ring.slice(e).concat(ring.slice(0, s + 1));
     const [small, big] = Math.abs(signedArea(c1, ds.points)) <= Math.abs(signedArea(c2, ds.points)) ? [c1, c2] : [c2, c1];
     const d = newDelta(); touchParcel(d, p); p.ids = big; p.mid = big.map(() => false); p.unregEdit = true;
-    const q = createParcel(ds, d, mainNo(p), small, p); return { delta: closeDelta(ds, d), keep: p.label, created: q.label };
+    const q = createParcel(ds, d, mainNo(p), small, p); splitHoleRelink(ds, d, p, q); return { delta: closeDelta(ds, d), keep: p.label, created: q.label };
   }
   // 刪除線：刪掉兩宗之間的界址線＝兩宗合併（保留 keep，預設已登記且地號小者）。段界線（只屬一宗）不能刪
   function deleteEdge(ds, a, b, keep) {
@@ -3408,15 +3426,17 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
   // 沿折線切開：A、B＝{id} 或 {edge:[u,v], y, x}（線上加點，鄰宗同步），pts＝中間新點。opt.mother 新宗地母號（省略＝同母號）、opt.keepNear 保留面積最接近此值的一塊（省略＝較大者）
   function splitByPath(ds, pi, A, B, pts, opt = {}) {
     const p = ds.parcels[pi]; if (!p || p.deleted) throw new Error('宗地不存在'); if (ringHasArc(p)) throw new Error(`${p.label} 含圓弧，暫不支援`);
-    if ((p.holes || []).length || (p.containers || []).length) throw new Error(`${p.label} 含地中地或本身是地中地，暫不支援切開`);
+    if ((p.holes || []).length && (p.containers || []).length) throw new Error(`${p.label} 同時含地中地又是地中地，暫不支援切開`);
     const d = newDelta(), fail = msg => { applyDelta(ds, closeDelta(ds, d), 'undo'); throw new Error(msg); }, end = E => { if (E.id != null) return E.id; let [u, v] = E.edge; if (!ds.edges.get(segKey(u, v))) { const t = afAttach(ds, p, E, 0, 0.5); if (!t || !t.edge) fail('切線端點已不在界線上'); [u, v] = t.edge; } const r = insertPoint(ds, u, v, E.y, E.x); mergeDelta(d, r.delta); return r.id; };   // 兩端落在同一條線時，先插的點會把線拆開，後一端要重找
     const a = end(A), b = end(B); if (a === b) fail('切線兩端是同一點');
-    const ring = ccwIds(p.ids, ds.points), i = ring.indexOf(a), j = ring.indexOf(b); if (i < 0 || j < 0) fail(`切線兩端都要在 ${p.label} 的界線上`);
+    const ring = ccwIds(p.ids, ds.points), i = ring.indexOf(a), j = ring.indexOf(b);
+    if (i < 0 || j < 0) { const h = (p.holes || []).map(hi => ds.parcels[hi]).find(h => h && !h.deleted && (h.ids.includes(a) || h.ids.includes(b))); fail(h ? `切線碰到地中地 ${h.label}，請避開` : `切線兩端都要在 ${p.label} 的界線上`); }
     const line = [ds.points.get(a), ...pts, ds.points.get(b)], n = ring.length, RP = ring.map(id => ds.points.get(id)), cr = (o, u, v) => (u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x);
     for (let k = 0; k + 1 < line.length; k++) { const U = line[k], V = line[k + 1];
       for (let m = 0; m < n; m++) { const m2 = (m + 1) % n; if (ring[m] === a || ring[m2] === a || ring[m] === b || ring[m2] === b) { if ((k === 0 || k === line.length - 2)) continue; } const C = RP[m], D = RP[m2], d1 = cr(U, V, C), d2 = cr(U, V, D), d3 = cr(C, D, U), d4 = cr(C, D, V); if (d1 * d2 < 0 && d3 * d4 < 0) fail('切線穿出宗地'); }
       if (!pointInRing(ring, ds.points, (U.y + V.y) / 2, (U.x + V.x) / 2)) fail('切線不在宗地內'); }
     for (let u = 0; u + 1 < line.length; u++) for (let v = u + 2; v + 1 < line.length; v++) { const U = line[u], V = line[u + 1], X = line[v], Y = line[v + 1]; if (cr(U, V, X) * cr(U, V, Y) < 0 && cr(X, Y, U) * cr(X, Y, V) < 0) fail('切線自我交錯'); }
+    if ((p.holes || []).length) try { splitHoleGuard(ds, p, line); } catch (e) { fail(e.message); }
     touchParcel(d, p); const mid = pts.map(q => { const id = nextPointId(ds), np = { id, y: q.y, x: q.x, y0: q.y, x0: q.x, row: null, added: true }; ds.points.set(id, np); d.added.push(np); return id; });
     const walk = (s, e) => { const out = [ring[s]]; for (let k = s; k !== e;) { k = (k + 1) % n; out.push(ring[k]); } return out; }, c1 = walk(i, j).concat(mid.slice().reverse()), c2 = walk(j, i).concat(mid);
     const a1 = Math.abs(signedArea(c1, ds.points)), a2 = Math.abs(signedArea(c2, ds.points)), near = opt.keepNear;
@@ -3426,7 +3446,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
       first = in1 !== in2 ? !in1 : near > 0 ? Math.abs(a1 - near) <= Math.abs(a2 - near) : a1 >= a2;
     } else first = opt.keepFirst != null ? !!opt.keepFirst : near > 0 ? Math.abs(a1 - near) <= Math.abs(a2 - near) : a1 >= a2;
     const [big, small] = first ? [c1, c2] : [c2, c1];
-    p.ids = big; p.mid = big.map(() => false); p.unregEdit = true; const q = createParcel(ds, d, opt.mother || mainNo(p), small, p);
+    p.ids = big; p.mid = big.map(() => false); p.unregEdit = true; const q = createParcel(ds, d, opt.mother || mainNo(p), small, p); splitHoleRelink(ds, d, p, q);
     return { delta: closeDelta(ds, d), keep: p.label, created: q.label, idx: q.idx, areaKeep: Math.max(first ? a1 : a2, 0), areaCut: first ? a2 : a1, points: mid, ids: [a, ...mid, b], first };
   }
   // 點 Q 接到宗地環：離既有點 ≤ snapV 用既有點，否則投影到最近的邊（max m 內）
