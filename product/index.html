@@ -3923,7 +3923,8 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
     if ((p.holes || []).length) try { splitHoleGuard(ds, p, line); } catch (e) { fail(e.message); }
     touchParcel(d, p); const mid = pts.map(q => { const id = nextPointId(ds), np = { id, y: q.y, x: q.x, y0: q.y, x0: q.x, row: null, added: true }; ds.points.set(id, np); d.added.push(np); return id; });
     const walk = (s, e) => { const out = [ring[s]]; for (let k = s; k !== e;) { k = (k + 1) % n; out.push(ring[k]); } return out; }, c1 = walk(i, j).concat(mid.slice().reverse()), c2 = walk(j, i).concat(mid);
-    const a1 = Math.abs(signedArea(c1, ds.points)), a2 = Math.abs(signedArea(c2, ds.points)), near = opt.keepNear;
+    const holeIn = c => (p.holes || []).reduce((t, hi) => { const h = ds.parcels[hi]; if (!h || h.deleted || h.ids.length < 3) return t; const ip = interiorPoint(h.ids, ds.points); return pointInRing(c, ds.points, ip.y, ip.x) ? t + ringAreaArc(h.ids, h.mid, ds.points) : t; }, 0);   // 各塊扣掉落在其中的地中地（預覽、keepNear 都用淨面積）
+    const a1 = Math.abs(signedArea(c1, ds.points)) - holeIn(c1), a2 = Math.abs(signedArea(c2, ds.points)) - holeIn(c2), near = opt.keepNear;
     let first;
     if (opt.keepOutside && opt.keepOutside.length >= 3) {   // 跨宗切出：保留多邊形外的那一塊（兩塊同在內或同在外才用既有規則）
       const i1 = interiorPoint(c1, ds.points), i2 = interiorPoint(c2, ds.points), in1 = bandPip(opt.keepOutside, i1.y, i1.x), in2 = bandPip(opt.keepOutside, i2.y, i2.x);
@@ -4267,7 +4268,7 @@ const CHANGELOG = [
       '原本宗地裡有地中地（例如 1092-2 內的 1092-5）就不能切開；現在可以切，地中地依位置自動歸給切後的那一塊，面積照樣扣除',
       '地中地本身也能切開，切出的那塊同樣設為外圈的地中地，外圈面積不變',
       '切線穿過、貼著或碰到地中地的邊會擋下並說明是哪一宗地中地，圖完全不變；同時含地中地又是地中地的宗地仍不支援',
-      '復原／重做會一併還原地中地關係；跨宗切出碰到地中地時改顯示「切線碰到地中地 …」',
+      '切出併入的預覽面積與較差也扣掉地中地；復原／重做會一併還原地中地關係；跨宗切出碰到地中地時改顯示「切線碰到地中地 …」',
     ],
   },
   {

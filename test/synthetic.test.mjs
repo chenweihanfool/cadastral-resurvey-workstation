@@ -1389,10 +1389,10 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   const par = (d, l) => d.parcels.find(p => p.label === l && !p.deleted);
   // 1. 地中地留在保留的那塊
   { const d = mk(), r = Core.splitByPath(d, 0, { edge: [4, 1], y: Y + 80, x: X }, { edge: [2, 3], y: Y + 80, x: X + 100 }, []);
-    near(par(d, '10').area, 8000 - 900, 1e-6, '保留塊扣地中地'); near(d.parcels[r.idx].area, 2000, 1e-6); assert.deepEqual(par(d, '10').holes, [1]); assert.equal(Core.ringConflicts(d).cross.length, 0); }
+    near(par(d, '10').area, 8000 - 900, 1e-6, '保留塊扣地中地'); near(d.parcels[r.idx].area, 2000, 1e-6); near(r.areaKeep, 7100, 1e-6, '回傳面積也扣地中地'); near(r.areaCut, 2000, 1e-6); assert.deepEqual(par(d, '10').holes, [1]); assert.equal(Core.ringConflicts(d).cross.length, 0); }
   // 2. 地中地落在切出的那塊 → 關係轉給新宗地；復原後回到原狀
   { const d = mk(), st = Core.datasetState(d), r = Core.splitByPath(d, 0, { edge: [4, 1], y: Y + 70, x: X }, { edge: [2, 3], y: Y + 70, x: X + 100 }, [], { keepNear: 3000 }), q = d.parcels[r.idx];
-    near(par(d, '10').area, 3000, 1e-6); near(q.area, 7000 - 900, 1e-6, '新宗地扣地中地'); assert.deepEqual(par(d, '10').holes, []); assert.deepEqual(q.holes, [1]); assert.deepEqual(d.parcels[1].containers, [r.idx]);
+    near(par(d, '10').area, 3000, 1e-6); near(q.area, 7000 - 900, 1e-6, '新宗地扣地中地'); near(r.areaCut, 6100, 1e-6, '回傳切出面積扣地中地'); assert.deepEqual(par(d, '10').holes, []); assert.deepEqual(q.holes, [1]); assert.deepEqual(d.parcels[1].containers, [r.idx]);
     Core.applyDelta(d, r.delta, 'undo'); near(par(d, '10').area, 9100, 1e-6, '復原'); assert.deepEqual(par(d, '10').holes, [1]); assert.deepEqual(d.parcels[1].containers, [0]);
     Core.applyDelta(d, r.delta, 'redo'); assert.deepEqual(q.holes, [1]); near(q.area, 6100, 1e-6, '重做'); void st; }
   // 3. 切線穿過地中地、貼著地中地的邊 → 拒絕，狀態不變
