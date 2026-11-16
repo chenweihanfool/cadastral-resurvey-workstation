@@ -788,6 +788,24 @@ function finishRedraw() {
   if ($('dlgRing').open) ringPanel(); refresh();
 }
 // 刪除宗地（核心 Core.deleteParcel）：地中地面積併入外圈；一般宗地直接刪除，範圍變成空地／段外。輸出時 D13／D11／D21 一併更新，D12 照 NECEXE 保留
+// 點號重整（v0.37.0）：比照 NECEXE，界址串用到的點依原點號由小到大重編為 1..N；改的是作業狀態（存進專案檔），輸出時 D14／D13／D21／D29 一起換號
+function renumberPoints({ preview = false } = {}) {
+  if (!S.ds) throw new Error('尚未載入圖資');
+  const r = Core.renumberPoints(S.ds); const info = { changed: r.changed, points: r.points, unused: r.unused, max_before: r.maxBefore, max_after: r.maxAfter };
+  if (!r.changed) return info;
+  if (preview) { Core.applyDelta(S.ds, r.delta, 'undo'); return { preview: true, ...info }; }
+  pushStruct(r.delta, '點號重整'); clearSel(); projDirty(); refresh(); return info;
+}
+function renumberUI() {
+  if (!S.ds) return msg('請先載入圖資');
+  const p = renumberPoints({ preview: true });
+  if (!p.changed) return msg(`點號已經連續（1～${p.max_after}），不需要重整`);
+  if (!confirm(`點號重整：${p.points} 個點重新編號為 1～${p.max_after}（目前最大點號 ${p.max_before}），${p.changed} 個點的點號會改變。` + (p.unused ? `
+其中 ${p.unused} 個點沒有被界址串用到，排在最後。` : '') + `
+
+比照 NECEXE：依原點號由小到大重編、順序不變。改完請「儲存專案檔」並「輸出完整案件資料夾」（D14／D13／D21／D29 會一起換號），兩者一起提交。可以復原。`)) return;
+  const r = renumberPoints(); msg(`已重整點號：${r.changed} 個點換號，最大點號 ${r.max_before} → ${r.max_after}。請儲存專案檔並輸出完整案件資料夾。`);
+}
 function deleteParcelUI(pis) {
   const ds = S.ds; if (!ds) return msg('請先載入圖資'); pis = (pis || [...S.sel.par]).filter(i => !ds.parcels[i].deleted); if (!pis.length) return msg('請先選取要刪除的宗地');
   const hs = pis.map(i => ds.parcels[i]), nest = hs.filter(h => (h.holes || []).some(x => !pis.includes(x)));
@@ -1115,7 +1133,7 @@ function openPanel(id) {
 function toggleSidebar() { document.querySelector('main').classList.toggle('nosb'); try { localStorage.setItem('cw.sidebar', document.querySelector('main').classList.contains('nosb') ? '0' : '1'); } catch (e) { /* ignore */ } }
 const ACTS = {
   open: () => $('fileIn').click(), folder: () => $('dirIn').click(), data: () => openPanel('dlgData'), imp: () => $('btnImp').click(), out: () => openPanel('dlgOut'), outcase: exportCaseFolder, err: () => $('btnErr').click(), print: () => $('btnPrint').click(),
-  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
+  undo, redo, reset: () => confirm('確定還原所有移動與界址點增刪？') && resetAll(), pts: () => openPanel('dlgPts'), ptline: () => openPanel('dlgPts'), addpt: () => setTool('addpt'), delpt: () => deleteSelectedPoints(), clean: () => openPanel('dlgClean'), ring: () => openPanel('dlgRing'), unreg: () => openPanel('dlgUnreg'), delhole: () => deleteParcelUI(), renumber: () => renumberUI(), merge: () => mergeParcelsUI(), move: () => openPanel('dlgMove'),
   fit: () => fit(), style: () => openPanel('dlgStyle'), base: () => openPanel('dlgBase'), img: () => openPanel('dlgImg'), sidebar: toggleSidebar, seam: () => openPanel('dlgSeam'), ref: () => openPanel('dlgRef'), bl: () => openPanel('dlgBl'), own: () => openPanel('dlgOwn'), chk: () => openPanel('dlgChk'), topo: () => openPanel('dlgTopo'), flow: () => toggleFlow(), project: () => $('projDir').click(), projsave: () => saveProject(), log: () => openPanel('dlgLog'), ms: () => openPanel('dlgMs'), notesimp: () => $('notesIn').click(), projsaveas: () => saveProject(true), projopen: () => pickProject(), ai: () => openPanel('dlgAi'),
   help: () => $('help').showModal(),
 };
@@ -1268,7 +1286,7 @@ async function loadFiles(files) {
     if (x === 'mdb') { mdbs.push(f); continue; }
     if (x === 'mac') { macs.push(f); continue; }
     if (/^(ctl|ct2|cen|l02)$/.test(x)) { ctlFiles.push(f); continue; }
-    if (!/^(d11|d12|d13|d14|d20|d21|d2b|d2c|d2d|coa|bnp|par)$/.test(x)) continue; if (by[x]) dup.push(f.name); else by[x] = f;
+    if (!/^(d11|d12|d13|d14|d20|d21|d29|d2b|d2c|d2d|coa|bnp|par)$/.test(x)) continue; if (by[x]) dup.push(f.name); else by[x] = f;
   }
   // 控制點／補點：CTL、CT2、CEN、L02、D20 —— 可在圖資之前或之後匯入
   let ctlMsg = '';
@@ -1282,15 +1300,15 @@ async function loadFiles(files) {
   const DL = async (cp, cl, extra = {}) => Core.datasetFromLines({ pts: Core.parseDbf(await readBuf(cp)), lin: Core.parseDbf(await readBuf(cl)), ...extra });
   if (has('d14', 'd13')) {
     const par = by.d11 ? Core.parseDbf(await readBuf(by.d11)) : null, d12 = by.d12 ? Core.parseDbf(await readBuf(by.d12)) : null;
-    ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.d12 = d12; S.dbf.par = par; S.dbf.lin = by.d21 ? Core.parseDbf(await readBuf(by.d21)) : null; if (by.d21) names.d21 = by.d21.name; S.dbf.pts = Core.parseDbf(await readBuf(by.d14)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d13));
+    ds = await DS(by.d14, by.d13, { par, d12, name: by.d14.name, source: 'D14/D13 新成果' }); S.dbf.d12 = d12; S.dbf.par = par; S.dbf.lin = by.d21 ? Core.parseDbf(await readBuf(by.d21)) : null; if (by.d21) names.d21 = by.d21.name; S.dbf.d29 = by.d29 ? Core.parseDbf(await readBuf(by.d29)) : null; if (by.d29) names.d29 = by.d29.name; S.dbf.pts = Core.parseDbf(await readBuf(by.d14)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d13));
     names.d14 = by.d14.name; names.d13 = by.d13.name; if (by.d11) names.d11 = by.d11.name; if (by.d12) names.d12 = by.d12.name;
     if (has('d2c', 'd2d')) { ref = await DL(by.d2c, by.d2d, { name: 'old', source: 'D2C/D2D 舊圖線' }); names.d2c = by.d2c.name; names.d2d = by.d2d.name; }
     else if (has('d2c', 'd2b')) { ref = await DS(by.d2c, by.d2b, { name: 'old', source: 'D2C/D2B 舊圖' }); names.d2c = by.d2c.name; names.d2b = by.d2b.name; }
   } else if (has('coa', 'bnp')) {
-    ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null; S.dbf.bnd = null; S.dbf.d12 = null; S.dbf.par = null; S.dbf.lin = null;
+    ds = Core.datasetFromKC({ coa: await readText(by.coa), bnp: await readText(by.bnp), par: by.par ? await readText(by.par) : null }); S.dbf.pts = null; S.dbf.bnd = null; S.dbf.d12 = null; S.dbf.par = null; S.dbf.lin = null; S.dbf.d29 = null;
     names.coa = by.coa.name; names.bnp = by.bnp.name; if (by.par) names.par = by.par.name;
   } else if (has('d2c', 'd2b')) {
-    ds = await DS(by.d2c, by.d2b, { name: by.d2c.name, source: 'D2C/D2B 舊圖' }); S.dbf.d12 = null; S.dbf.par = null; S.dbf.lin = null; S.dbf.pts = Core.parseDbf(await readBuf(by.d2c)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d2b));
+    ds = await DS(by.d2c, by.d2b, { name: by.d2c.name, source: 'D2C/D2B 舊圖' }); S.dbf.d12 = null; S.dbf.par = null; S.dbf.lin = null; S.dbf.d29 = null; S.dbf.pts = Core.parseDbf(await readBuf(by.d2c)); S.dbf.bnd = Core.parseDbf(await readBuf(by.d2b));
     names.d14 = by.d2c.name; names.d13 = by.d2b.name; names.d2c = by.d2c.name; names.d2b = by.d2b.name;
   }
   if (imgs.length) await loadImages(imgs);
@@ -3147,6 +3165,7 @@ const api = {
   // ── 界址點編修：addPoint（edge=[a,b] 加在該線並同步插入所有鄰接宗地；省略 edge＝孤立點）、deletePoints、cleanupPoints（preview 只算不改）──
   addPoint: ({ edge = null, y, x, project = true } = {}) => { const r = addPoint({ edge, y, x, project }); refresh(); return r; },
   deletePoints: ({ ids = [] } = {}) => { const r = deletePoints(ids); refresh(); return r; },
+  renumberPoints: ({ preview = false } = {}) => renumberPoints({ preview }),   // 點號重整：preview 只算不改
   cleanupPoints: ({ preview = false, unused = true, collinear = true, ratio_permille = 30, max_abs_m = 0.5, seam = true } = {}) => {
     if (!S.ds) throw new Error('尚未載入圖資'); const o = { unused, collinear, ratio: ratio_permille / 1000, maxAbs: max_abs_m };
     if (seam && S.nb.length) { const g = Core.seamGuard(S.ds, nbArgs(), seamOpts()); o.protect = g.protect; o.adds = g.adds; o.tol = g.tol; }

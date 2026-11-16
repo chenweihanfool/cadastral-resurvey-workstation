@@ -1407,4 +1407,34 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
     near(q.area, 450, 1e-6); near(par(d, '9020').area, 450, 1e-6); near(par(d, '10').area, 9100, 1e-6, '外圈面積不變'); assert.deepEqual(par(d, '10').holes.slice().sort(), [1, r.idx].sort()); assert.deepEqual(q.containers, [0]);
     Core.applyDelta(d, r.delta, 'undo'); assert.deepEqual(par(d, '10').holes, [1]); }
 }
+// ── 點號重整（v0.37.0，仿 NECEXE）：界址串用到的點依原點號重編 1..N；D14／D13／D21／D29 一起換號；已刪除的點清成空列；REF≠0 接在 N 之後 ──
+{
+  const F_D21 = ['LIN_TOP', 'LIN_MID', 'LIN_BOT'].map(name => ({ name, type: 'N', len: 5 })).concat(['L_SECTION', 'L_PARCEL', 'L_PARCEL_E', 'R_SECTION', 'R_PARCEL', 'R_PARCEL_E'].map(name => ({ name, type: 'N', len: 4 })), [{ name: 'LIN_MODE', type: 'N', len: 1 }, { name: 'R_EXAM', type: 'C', len: 20 }]);
+  const F_D29 = [{ name: 'LIN_TOP', type: 'C', len: 10 }, { name: 'LIN_MID', type: 'C', len: 10 }, { name: 'LIN_BOT', type: 'C', len: 10 }, { name: 'LIN_MODE', type: 'N', len: 1 }];
+  const Y = 2700000, X = 200000, P = [[10, 0, 0], [30, 0, 100], [50, 100, 100], [70, 100, 0], [90, 0, 200], [95, 100, 200], [99, 50, 300]];
+  const rows = P.map(([n, y, x]) => pt(n, Y + y, X + x)).concat([pt(500, Y + 5, X + 5, 19), pt(501, Y + 6, X + 6, 19), pt(0, 0, 0)]);
+  const pts = rd(F_D14, rows), bnd = rd(F_D13, [ring(1, 1, 0, [10, 30, 50, 70]), ring(1, 2, 0, [30, 90, 95, 50])]);
+  const L = (t, b, l, r) => ({ LIN_TOP: t, LIN_MID: 0, LIN_BOT: b, L_SECTION: l ? 1 : 0, L_PARCEL: l, L_PARCEL_E: 0, R_SECTION: r ? 1 : 0, R_PARCEL: r, R_PARCEL_E: 0, LIN_MODE: 0, R_EXAM: r === 2 ? 'X' : '' });
+  const lin = rd(F_D21, [L(10, 30, 1, 0), L(30, 50, 1, 2), L(50, 70, 1, 0), L(70, 10, 1, 0), L(30, 90, 2, 0), L(90, 95, 2, 0), L(95, 50, 2, 0)]);
+  const d29 = rd(F_D29, [{ LIN_TOP: '500.19', LIN_MID: '', LIN_BOT: '501.19', LIN_MODE: 6 }]);
+  const mk = () => Core.datasetFromD({ pts, bnd }), dbf = { pts, bnd, lin, d29 };
+  const ds = mk(); Core.removePoints(ds, [99]);   // 孤立點 99 先刪掉（沒被界址串用到）
+  const a0 = ds.parcels.map(p => p.area), r = Core.renumberPoints(ds);
+  assert.equal(r.changed, 6); assert.equal(r.maxBefore, 95); assert.equal(r.maxAfter, 6);
+  assert.deepEqual(ds.parcels[0].ids, [1, 2, 3, 4]); assert.deepEqual(ds.parcels[1].ids, [2, 5, 6, 3]); ds.parcels.forEach((p, i) => near(p.area, a0[i], 1e-9));
+  const st = Core.structSummary(ds); assert.deepEqual([st.added, st.removed, st.renumbered], [0, 1, 6], '點的身分以原檔記錄辨認');
+  const ch = Core.changedDFiles(ds, dbf), p14 = Core.parseDbf(ch.files.d14.bytes), live = p14.rows.filter(q => q.COT_NUMBER);
+  assert.deepEqual(live.map(q => [q.COT_NUMBER, q.COT_REF]), [[1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 19], [8, 19]], 'D14：REF=0 在前、遞增；REF 19 接在後面；已刪除的 99 不在');
+  assert.equal(p14.rows.length, rows.length); assert.ok(p14.rows.slice(live.length).every(q => !q.COT_NUMBER), '空列在檔尾');
+  const p29 = Core.parseDbf(ch.files.d29.bytes); assert.deepEqual([p29.rows[0].LIN_TOP, p29.rows[0].LIN_BOT], ['7.19', '8.19']);
+  const p21 = Core.parseDbf(ch.files.d21.bytes); assert.deepEqual(p21.rows.map(q => [q.LIN_TOP, q.LIN_BOT]), [[1, 2], [2, 3], [3, 4], [4, 1], [2, 5], [5, 6], [6, 3]]); assert.equal(p21.rows[1].R_EXAM, 'X', 'D21 其他欄位不動');
+  const back = Core.datasetFromD({ pts: p14, bnd: Core.parseDbf(ch.files.d13.bytes) }); back.parcels.forEach((p, i) => near(p.area, a0[i], 1e-9));
+  assert.deepEqual(back.parcels.map(p => p.ids), [[1, 2, 3, 4], [2, 5, 6, 3]], '輸出讀回與作業狀態相同');
+  { const e = Core.exportD21(Core.parseDbf(ch.files.d21.bytes), back); assert.deepEqual([e.patched, e.cleared, e.added], [0, 0, 0], '讀回後 D21 與界址串一致'); }
+  { const d2 = mk(); Core.applyDatasetState(d2, Core.datasetState(ds)); assert.deepEqual(d2.parcels[1].ids, [2, 5, 6, 3]); const c2 = Core.changedDFiles(d2, dbf); assert.deepEqual(c2.files.d14.bytes, ch.files.d14.bytes, '專案檔往返後輸出相同'); }
+  Core.applyDelta(ds, r.delta, 'undo'); assert.deepEqual(ds.parcels[0].ids, [10, 30, 50, 70]); assert.equal(Core.structSummary(ds).renumbered, 0);
+  Core.applyDelta(ds, r.delta, 'redo'); assert.equal(Core.renumberPoints(ds).changed, 0, '重整兩次不再變動');
+  Core.resetAll(ds); assert.deepEqual(ds.parcels[0].ids, [10, 30, 50, 70], '全部還原回到原點號');
+  const d3 = mk(); assert.equal(Core.changedDFiles(d3, dbf).files.d14, undefined, '沒重整、沒修改就不輸出 D14');
+}
 console.log('SYNTHETIC OK');
