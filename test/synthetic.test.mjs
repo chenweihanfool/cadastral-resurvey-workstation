@@ -1436,5 +1436,20 @@ const rd = (f, rows) => Core.parseDbf(makeDbf(f, rows));
   Core.applyDelta(ds, r.delta, 'redo'); assert.equal(Core.renumberPoints(ds).changed, 0, '重整兩次不再變動');
   Core.resetAll(ds); assert.deepEqual(ds.parcels[0].ids, [10, 30, 50, 70], '全部還原回到原點號');
   const d3 = mk(); assert.equal(Core.changedDFiles(d3, dbf).files.d14, undefined, '沒重整、沒修改就不輸出 D14');
+  // v0.37.1：沒重整點號、但有刪除的點 → 比照 NECEXE「刪除未使用界址點」：清成空列移到檔尾、其餘順序不變、REF≠0 不動；新增點的其他數值欄填 0
+  {
+    const F2 = F_D14.concat(['COT_MATTER', 'COT_SOURCE'].map(name => ({ name, type: 'N', len: 1 })));
+    const rows2 = rows.map(r => r.COT_NUMBER ? { ...r, COT_MATTER: 0, COT_SOURCE: 3 } : r).concat([pt(0, 0, 0)]);
+    const pts2 = rd(F2, rows2), d4 = Core.datasetFromD({ pts: pts2, bnd });
+    Core.removePoints(d4, [99]); Core.mergePoints(d4, 95, 50); const nw = Core.insertPoint(d4, 10, 30, Y, X + 50).id;
+    const o = Core.exportD14(pts2, d4), q = Core.parseDbf(o.bytes), live = q.rows.filter(r => r.COT_NUMBER);
+    assert.deepEqual([o.blanked, o.orphans, o.renumbered, o.added], [2, 0, 0, 1]);
+    assert.deepEqual(live.map(r => [r.COT_NUMBER, r.COT_REF]), [[10, 0], [30, 0], [50, 0], [70, 0], [90, 0], [500, 19], [501, 19], [nw, 0]], '原順序、刪掉 95／99、REF 19 不動、新增點在有效記錄之後');
+    assert.ok(q.rows.slice(live.length).every(r => !r.COT_NUMBER), '空列都在檔尾');
+    assert.deepEqual([live[7].COT_MATTER, live[7].COT_SOURCE], [0, 0], '新增點其他數值欄填 0');
+    assert.deepEqual([live[0].COT_SOURCE, live[5].COT_SOURCE], [3, 3], '其他記錄位元組不動');
+    const back = Core.datasetFromD({ pts: q, bnd: Core.parseDbf(Core.exportD13(bnd, d4).bytes) }); assert.deepEqual(back.parcels.map(p => p.ids), d4.parcels.map(p => p.ids), '讀回與作業狀態相同');
+    assert.equal(Core.exportD14(pts2, Core.datasetFromD({ pts: pts2, bnd })).blanked, 0, '沒刪點就不清空列');
+  }
 }
 console.log('SYNTHETIC OK');

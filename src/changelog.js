@@ -3,6 +3,15 @@
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
   {
+    version: 'v0.37.1', date: '2026-11-16', type: 'patch',
+    title: '輸出 D14 時清除沒有宗地使用的點，不必再到 NECEXE「刪除未使用界址點」',
+    changes: [
+      '點併點、刪點後輸出的 D14，原本把已刪除的點留在檔內，NECEXE 開啟後還要手動刪除未使用界址點；現在輸出時就清成空列移到檔尾，其餘記錄順序不變，與 NECEXE 刪點後寫出的 D14 相同',
+      '新增點的 COT_MATTER／COT_SOURCE／COT_SURVEY／COT_MSE 填 0，與 NECEXE 一致；COT_REF≠0 的記錄不動',
+      '以 KC0336 驗證：近點修正後的專案檔輸出的 D14，與 NECEXE 刪除 23 個未使用點後存出的 D14 逐列相同（7429 筆有效記錄，順序一致）；面積仍需在 NECEXE 重算',
+    ],
+  },
+  {
     version: 'v0.37.0', date: '2026-11-16', type: 'minor',
     title: '新增「點號重整」：比照 NECEXE 把界址點重編為 1～N，專案檔與輸出的 D 檔一起換號',
     changes: [
