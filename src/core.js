@@ -337,7 +337,7 @@ const Core = (() => {
   function setPoint(ds, id, y, x) { const p = ds.points.get(id); return movePoints(ds, [id], y - p.y, x - p.x); }
   function resetAll(ds) {
     const o = ds.orig, st = o && structSummary(ds);
-    if (o && (st.added || st.removed || st.rings || st.holes || st.deleted)) {
+    if (o && (st.added || st.removed || st.rings || st.holes || st.deleted || st.renumbered)) {
       ds.points = new Map(o.points.map(q => [q.id, { ...q }]));
       ds.parcels.forEach((p, i) => { if (!o.rings[i]) { p.ids = []; p.mid = []; p.deleted = true; return; } p.ids = o.rings[i].ids.slice(); if (o.rings[i].mid) p.mid = o.rings[i].mid.slice(); });
       for (const p of ds.parcels) { p.deleted = !!p.created; for (const hi of (p.holes || []).slice()) linkHole(ds, p.idx, hi, false); }
@@ -552,15 +552,58 @@ const Core = (() => {
     closeDelta(ds, d); res.delta = d; return res;
   }
   // 結構是否有異動（新增／刪除點、環改變）
+  // 點的身分（v0.37.0）：點號重整後點號會變，所以「原本就有的點」改用原檔記錄（D14 列）辨認；沒有記錄的（COA 等）用原檔點號 fileId。
+  // fileId＝原檔裡的點號，點號重整時才寫入（之前存的專案檔沒有這欄＝點號沒變過）。
+  const fileIdOf = p => (p.fileId != null ? p.fileId : p.id);
+  const pointKey = p => (p.row != null ? 'r' + p.row : 'i' + fileIdOf(p));
+  function removedOrigPoints(ds) {
+    const o = ds.orig; if (!o) return []; const now = new Set(); for (const p of ds.points.values()) if (!p.added) now.add(pointKey(p));
+    return o.points.filter(p => !now.has(pointKey(p)));
+  }
   function structSummary(ds) {
-    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0, holes: 0, deleted: 0, created: 0 };
-    const was = new Set(o.points.map(p => p.id)); let added = 0, removed = 0, rings = 0;
-    for (const id of ds.points.keys()) if (!was.has(id)) added++;
-    for (const id of was) if (!ds.points.has(id)) removed++;
+    const o = ds.orig; if (!o) return { added: 0, removed: 0, rings: 0, holes: 0, deleted: 0, created: 0, renumbered: 0 };
+    const was = new Set(o.points.map(pointKey)); let added = 0, rings = 0, renumbered = 0;
+    for (const p of ds.points.values()) { if (p.added || !was.has(pointKey(p))) added++; else if (p.id !== fileIdOf(p)) renumbered++; }
+    const removed = removedOrigPoints(ds).length;
     ds.parcels.forEach((p, i) => { const r = o.rings[i]; if (p.created && p.deleted) return; if (!r || r.ids.length !== p.ids.length || r.ids.some((v, k) => v !== p.ids[k])) rings++; });
     let holes = 0; ds.parcels.forEach((p, i) => { const a = (o.rings[i] && o.rings[i].holes) || [], b = p.holes || []; if (a.length !== b.length || a.some(v => !b.includes(v))) holes++; });
     const deleted = ds.parcels.filter(p => p.deleted && !p.created).length, created = ds.parcels.filter(p => p.created && !p.deleted).length;
-    return { added, removed, rings, holes, deleted, created };
+    return { added, removed, rings, holes, deleted, created, renumbered };
+  }
+  // ── 點號重整（v0.37.0）：比照 NECEXE「點號重整」——界址串用到的點依原點號由小到大重編為 1..N（順序不變），
+  // 沒有被界址串用到的點接在後面。改的是作業狀態（存進專案檔），輸出時 D14／D13／D21／D29 一起換號，專案檔與 D 檔才不會分家。
+  // KC0336 對照（2026-11-04 在 NECEXE 重整前後的 D 檔）：最大點號 12925 → 7425，重整後點號連續、原順序保留；COT_REF≠0 的記錄接在 N 之後依原點號編號（D29 的「點號.REF」跟著改）。
+  // 回傳 delta 為整張圖的快照（state0／state1），一次復原。
+  function renumberPoints(ds, opt = {}) {
+    const start = opt.start || 1, used = new Set();
+    for (const p of ds.parcels) if (!p.deleted) for (const id of p.ids) used.add(id);
+    const ids = [...ds.points.keys()].sort((a, b) => a - b), order = ids.filter(i => used.has(i)).concat(ids.filter(i => !used.has(i)));
+    const map = new Map(order.map((id, k) => [id, start + k])), changed = order.filter(id => map.get(id) !== id).length;
+    const out = { changed, points: order.length, used: used.size, unused: order.length - used.size, maxBefore: ids.length ? ids[ids.length - 1] : 0, maxAfter: order.length ? start + order.length - 1 : 0, map, delta: null };
+    if (!changed) return out;
+    const state0 = datasetState(ds), pts = new Map();
+    for (const id of order) { const p = ds.points.get(id); if (p.fileId == null && !p.added) p.fileId = p.id; p.id = map.get(id); pts.set(p.id, p); }
+    ds.points = pts;
+    for (const p of ds.parcels) if (p.ids) p.ids = p.ids.map(id => (map.has(id) ? map.get(id) : id));
+    buildTopology(ds); buildArcs(ds); recalc(ds, new Set(ds.parcels.map((_, i) => i)));
+    out.delta = { state0, state1: datasetState(ds), parcels: new Map(), added: [], removed: [] };
+    return out;
+  }
+  // 原檔點號 → 目前點號（沒有點號重整過就回傳 null）
+  function fileNumberMap(ds) {
+    const m = new Map(); let diff = false;
+    for (const p of ds.points.values()) { if (p.added) continue; const f = fileIdOf(p); m.set(f, p.id); if (f !== p.id) diff = true; }
+    return diff ? m : null;
+  }
+  // D14 中 COT_REF≠0 的記錄（例如 REF 19）：點號與某個目前的點相同的跟著該點，其餘依原點號接在目前最大點號之後（NECEXE 重整後的排法）
+  function refRenumber(ds, pts) {
+    const byFile = new Map(); let max = 0;
+    for (const p of ds.points.values()) { if (!p.added) byFile.set(fileIdOf(p), p.id); if (p.id > max) max = p.id; }
+    const rows = []; pts.rows.forEach((r, i) => { if (!r._deleted && r.COT_NUMBER && r.COT_REF) rows.push(i); });
+    rows.sort((a, b) => pts.rows[a].COT_NUMBER - pts.rows[b].COT_NUMBER || a - b);
+    const seen = new Map(), rowMap = new Map(); let next = max + 1;
+    for (const i of rows) { const o = pts.rows[i].COT_NUMBER; let v = byFile.get(o); if (v == null) { if (!seen.has(o)) seen.set(o, next++); v = seen.get(o); } rowMap.set(i, v); }
+    return { rowMap, num: (o, ref) => (ref ? (byFile.has(o) ? byFile.get(o) : seen.has(o) ? seen.get(o) : o) : byFile.has(o) ? byFile.get(o) : o) };
   }
 
   // ── 變換（平移＋旋轉）─────────────────────────────────────────────────────
@@ -1907,16 +1950,23 @@ const Core = (() => {
       const c = ds.parcels[ci]; if (c.deleted) continue; const n = h.ids.length;
       for (let i = 0; i < n; i++) for (const k of [h.ids[i] + '>' + h.ids[(i + 1) % n], h.ids[(i + 1) % n] + '>' + h.ids[i]]) { const e = side.get(k); if (!e) continue; if (e.L === h && !e.R) e.R = c; else if (e.R === h && !e.L) e.L = c; }
     }
-    const kp = p => (p ? p.key.split('|').map(Number) : [0, 0, 0]), out = new Uint8Array(lin.u8), has = new Set(), drop = new Set(); let patched = 0, cleared = 0;
+    const kp = p => (p ? p.key.split('|').map(Number) : [0, 0, 0]), out = new Uint8Array(lin.u8), has = new Set(), drop = new Set(); let patched = 0, cleared = 0, renumbered = 0;
     const setSide = (u8, row, S, p) => { const [a, b, c] = kp(p); patchDbfNumber(u8, { ...lin, u8 }, row, S + '_SECTION', a); patchDbfNumber(u8, { ...lin, u8 }, row, S + '_PARCEL', b); patchDbfNumber(u8, { ...lin, u8 }, row, S + '_PARCEL_E', c); };
-    lin.rows.forEach((r, i) => {
+    // 點號重整過：先把端點換成目前點號（原地改寫，其餘欄位不動）；端點已不存在的線整列移除（舊點號可能等於別點的新點號，不能拿來比對）
+    const fm = fileNumberMap(ds), rows = !fm ? lin.rows : lin.rows.map((r, i) => {
+      if (r._deleted || !r.LIN_TOP || !r.LIN_BOT) return r; const c = { ...r };
+      for (const f of ['LIN_TOP', 'LIN_MID', 'LIN_BOT']) { if (!r[f]) continue; if (!fm.has(r[f])) { c._gone = true; continue; } const v = fm.get(r[f]); if (v !== r[f]) { c[f] = v; patchDbfNumber(out, lin, i, f, v); renumbered++; } }
+      return c;
+    });
+    rows.forEach((r, i) => {
+      if (r._gone) { drop.add(i); cleared++; return; }
       if (r._deleted || !r.LIN_TOP || !r.LIN_BOT || r.LIN_MID) return;
       const e = side.get(r.LIN_TOP + '>' + r.LIN_BOT); has.add(segKey(r.LIN_TOP, r.LIN_BOT));
       if (!e) { drop.add(i); cleared++; return; }   // 已不存在的線整列移除（不就地清 0）
       const same = (S, p) => { const [a, b, c] = kp(p); return (r[S + '_PARCEL'] || 0) === b && (r[S + '_PARCEL_E'] || 0) === c && (!b || r[S + '_SECTION'] === a); };
       if (!same('L', e.L) || !same('R', e.R)) { setSide(out, i, 'L', e.L); setSide(out, i, 'R', e.R); patched++; }
     });
-    for (const r of lin.rows) if (!r._deleted && r.LIN_MID) { has.add(segKey(r.LIN_TOP, r.LIN_MID)); has.add(segKey(r.LIN_MID, r.LIN_BOT)); }
+    for (const r of rows) if (!r._deleted && !r._gone && r.LIN_MID) { has.add(segKey(r.LIN_TOP, r.LIN_MID)); has.add(segKey(r.LIN_MID, r.LIN_BOT)); }
     const tmpl = lin.rows.findIndex(r => !r._deleted && r.LIN_TOP && !r.LIN_MID), recs = [];
     for (const e of ds.edges.values()) {
       if (e.arcPart || has.has(e.key)) continue; const sd = side.get(e.a + '>' + e.b); if (!sd) continue;
@@ -1927,7 +1977,7 @@ const Core = (() => {
       recs.push(rec);
     }
     let sorted = true, pk = null; for (const r of lin.rows) { if (JUNK.d21(r)) continue; const k = [r.LIN_TOP, r.LIN_BOT]; if (pk && (k[0] < pk[0] || (k[0] === pk[0] && k[1] < pk[1]))) { sorted = false; break; } pk = k; }   // 原檔依端點排序（NECEXE 寫出的是）就保持排序
-    return { bytes: layoutDbf(lin, out, JUNK.d21, { drop, append: recs, key: sorted ? b => [numAt(lin, b, 'LIN_TOP'), numAt(lin, b, 'LIN_BOT')] : null }), patched, cleared, added: recs.length };
+    return { bytes: layoutDbf(lin, out, JUNK.d21, { drop, append: recs, key: sorted ? b => [numAt(lin, b, 'LIN_TOP'), numAt(lin, b, 'LIN_BOT')] : null }), patched, cleared, added: recs.length, renumbered };
   }
   // D12（地中地）：目前關係中檔案沒有的，附加記錄（沿用第一筆當樣板，只改 O_*／I_* 六欄）；檔案有而目前已解除的，六欄清成 0。
   function exportD12(d12, ds, par) {
@@ -1985,12 +2035,38 @@ const Core = (() => {
       patchDbfNumber(out, pts, p.row, 'COT_Y', p.y); patchDbfNumber(out, pts, p.row, 'COT_X', p.x); n++;
     }
     const add = [...ds.points.values()].filter(p => p.row == null && p.added);
-    if (add.length) {   // 新增點插在檔尾空列之前
-      const t = { ...pts, hl: 0 }, recs = add.map(p => { const r = blankRecord(pts); patchDbfNumber(r, t, 0, 'COT_NUMBER', p.id); patchDbfNumber(r, t, 0, 'COT_REF', 0); patchDbfNumber(r, t, 0, 'COT_Y', p.y); patchDbfNumber(r, t, 0, 'COT_X', p.x); return r; });
-      out = layoutDbf(pts, out, JUNK.d14, { append: recs });
-    }
-    const orphans = structSummary(ds).removed;
-    return { bytes: out, changed: n, added: add.length, orphans };
+    const t = { ...pts, hl: 0 }, recs = add.map(p => { const r = blankRecord(pts); patchDbfNumber(r, t, 0, 'COT_NUMBER', p.id); patchDbfNumber(r, t, 0, 'COT_REF', 0); patchDbfNumber(r, t, 0, 'COT_Y', p.y); patchDbfNumber(r, t, 0, 'COT_X', p.x); return r; });
+    // 點號重整過：每筆記錄改成目前點號；已刪除的點（孤立記錄）清成空列（點號 0、坐標 0），否則會和重編後的點號撞號；
+    // REF≠0 的記錄照 refRenumber 換號；記錄依「REF=0 在前、點號由小到大」排序，空列在檔尾（與 NECEXE 重整後寫出的 D14 相同）。
+    let renumbered = 0, blanked = 0;
+    if (fileNumberMap(ds)) {
+      const live = new Set(), junk = new Set(), rr = refRenumber(ds, pts);
+      for (const p of ds.points.values()) { if (p.row == null || p.added) continue; live.add(p.row); if (pts.rows[p.row].COT_NUMBER !== p.id) { patchDbfNumber(out, pts, p.row, 'COT_NUMBER', p.id); renumbered++; } }
+      pts.rows.forEach((r, i) => {
+        if (r._deleted || live.has(i) || !r.COT_NUMBER) return;
+        if (rr.rowMap.has(i)) { const v = rr.rowMap.get(i); if (v !== r.COT_NUMBER) { patchDbfNumber(out, pts, i, 'COT_NUMBER', v); renumbered++; } return; }
+        for (const f of ['COT_NUMBER', 'COT_REF', 'COT_Y', 'COT_X']) patchDbfNumber(out, pts, i, f, 0); junk.add(r); blanked++;
+      });
+      out = layoutDbf(pts, out, r => JUNK.d14(r) || junk.has(r), { append: recs, key: b => [numAt(pts, b, 'COT_REF') ? 1 : 0, numAt(pts, b, 'COT_NUMBER')] });
+    } else if (recs.length) out = layoutDbf(pts, out, JUNK.d14, { append: recs });   // 新增點插在檔尾空列之前
+    const orphans = blanked ? 0 : structSummary(ds).removed;
+    return { bytes: out, changed: n, added: add.length, orphans, renumbered, blanked };
+  }
+  // D29（點號以「點號.REF」字串記錄的線，例如 '7426.19'）：點號重整過才需要改寫；字串靠左、欄寬照原檔。
+  function exportD29(d29, ds, pts) {
+    const fm = fileNumberMap(ds); if (!fm || !d29) return null;
+    const rr = pts ? refRenumber(ds, pts) : null, out = new Uint8Array(d29.u8); let changed = 0;
+    d29.rows.forEach((r, i) => {
+      if (r._deleted) return; const base = d29.hl + i * d29.rl;
+      for (const f of d29.fields) {
+        if (f.type !== 'C' || !/^LIN_(TOP|MID|BOT)$/.test(f.name)) continue;
+        const m = /^(\d+)(?:\.(\d+))?$/.exec(String(r[f.name] || '').trim()); if (!m) continue;
+        const o = +m[1], ref = m[2] != null ? +m[2] : 0, v = ref ? (rr ? rr.num(o, ref) : o) : (fm.has(o) ? fm.get(o) : o); if (v === o) continue;
+        const s = (String(v) + (m[2] != null ? '.' + m[2] : '')).padEnd(f.len, ' '); if (s.length > f.len) throw new Error(`D29 ${f.name} 值 ${s.trim()} 超出欄寬`);
+        for (let k = 0; k < f.len; k++) out[base + f.off + k] = s.charCodeAt(k); changed++;
+      }
+    });
+    return { bytes: out, changed };
   }
   // D13（界址串）：環有增減點的宗地，依序改寫其記錄的 COORD_1..8／MIDARC_n；點數變多時在該宗原有記錄後面接著寫（同一宗的記錄保持連續），
   // 縮短時多出的列把 COORD 清成 0、保留地號鍵（與 NECEXE 寫出的相同：1092-2 驗證逐位元組一致；不用刪除旗標，NECEXE 不看旗標）。
@@ -2047,12 +2123,13 @@ const Core = (() => {
   // 有改動的 D 檔：{ 副檔名: {bytes, note} }。dbf＝{pts, bnd, d12}（原檔解析結果）
   function changedDFiles(ds, dbf) {
     const out = {}, st = structSummary(ds);
-    if (dbf.pts && (movedPoints(ds).length || st.added)) { const r = exportD14(dbf.pts, ds); out.d14 = { bytes: r.bytes, note: `改 ${r.changed} 點坐標` + (r.added ? `、附加 ${r.added} 點` : '') }; }
+    if (dbf.pts && (movedPoints(ds).length || st.added || st.renumbered)) { const r = exportD14(dbf.pts, ds); out.d14 = { bytes: r.bytes, note: `改 ${r.changed} 點坐標` + (r.added ? `、附加 ${r.added} 點` : '') + (r.renumbered ? `、點號重整 ${r.renumbered} 筆` : '') + (r.blanked ? `、清除已刪除的點 ${r.blanked} 筆` : '') }; }
+    if (dbf.d29 && st.renumbered) { const r = exportD29(dbf.d29, ds, dbf.pts); if (r && r.changed) out.d29 = { bytes: r.bytes, note: `點號重整 ${r.changed} 處` }; }
     if (dbf.bnd && (st.rings || st.created)) { const r = exportD13(dbf.bnd, ds); out.d13 = { bytes: r.bytes, note: `改寫 ${r.parcels} 宗界址串` }; }
     const rmN = dbf.par ? removedUnregKeys(ds, dbf.par).size : 0;
     if (dbf.d12 && (st.holes || rmN)) { const r = exportD12(dbf.d12, ds, dbf.par); if (r.added || r.cleared) out.d12 = { bytes: r.bytes, note: `地中地 +${r.added}` + (r.cleared ? ` −${r.cleared}` : '') }; }
     if (dbf.par && (st.deleted || st.created || rmN || d11Targets(ds).length)) { const r = exportD11(dbf.par, ds); if (r.cleared || r.removed || r.updated || r.added) out.d11 = { bytes: r.bytes, note: [r.removed ? `移除 ${r.removed} 筆已刪除的未登記地` : '', r.cleared ? `刪除 ${r.cleared} 宗（新面積改 0）` : '', r.added ? `新增 ${r.added} 宗` : '', r.updated ? `更新 ${r.updated} 宗面積` : ''].filter(Boolean).join('、') }; }
-    if (dbf.lin && (st.rings || st.holes || st.deleted || st.created || st.added || st.removed)) { const r = exportD21(dbf.lin, ds); if (r.patched || r.cleared || r.added) out.d21 = { bytes: r.bytes, note: `經界線 改 ${r.patched}、移除 ${r.cleared}、新增 ${r.added}` }; }
+    if (dbf.lin && (st.rings || st.holes || st.deleted || st.created || st.added || st.removed || st.renumbered)) { const r = exportD21(dbf.lin, ds); if (r.patched || r.cleared || r.added || r.renumbered) out.d21 = { bytes: r.bytes, note: `經界線 改 ${r.patched}、移除 ${r.cleared}、新增 ${r.added}` + (r.renumbered ? `、端點換號 ${r.renumbered}` : '') }; }
     return { files: out, needD12: !dbf.d12 && st.holes > 0 };
   }
 
@@ -3748,7 +3825,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
       format: 'cadastral-workbench/session@1',
       description: '地籍圖調整工作階段。y=縱坐標(北), x=橫坐標(東), 單位公尺, TWD97。area 單位 m²。',
       crs: 'EPSG:3826', source: ds.source,
-      structure: (() => { const st = structSummary(ds), was = new Set((ds.orig ? ds.orig.points : []).map(q => q.id)); return { ...st, points_added: [...ds.points.values()].filter(q => q.added).map(q => ({ id: q.id, y: q.y, x: q.x })), points_removed: [...was].filter(id => !ds.points.has(id)) }; })(),
+      structure: (() => { const st = structSummary(ds); return { ...st, points_added: [...ds.points.values()].filter(q => q.added).map(q => ({ id: q.id, y: q.y, x: q.x })), points_removed: removedOrigPoints(ds).map(q => q.id) }; })(),
       points_moved: movedPoints(ds).map(p => ({ id: p.id, from: { y: p.y0, x: p.x0 }, to: { y: p.y, x: p.x }, shift_m: Math.hypot(p.y - p.y0, p.x - p.x0) })),
       parcels_changed: ds.parcels.filter(p => Math.abs(p.area - p.areaOrig) > CHG).map(p => ({
         label: p.label, old_label: p.oldLabel, key: p.key, area_before: p.areaOrig, area_after: p.area,
@@ -3761,7 +3838,7 @@ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\\ufef
 
   return { parseDbf, patchDbfNumber, datasetFromD, datasetFromLines, datasetFromKC, parseCoa, parseBnp, parsePar, ringArea, pointInRing, distToSeg,
     buildTopology, applyDelta, seamGuard, insertPoint, addFreePoint, footsOnLine, removePoints, removeBlocker, unusedPoints, collinearCandidates, collinearCheck, cleanupPoints, structSummary, COLLINEAR_DEFAULT,
-    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, absorbSlivers, mergePoints, snapPointToEdge, splitByChord, deleteEdge, addFace, seamGaps, fillSeamGap, polysOverlap, overlapParcel, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
+    bounds, movePoints, setPoints, parcelArea, ringAreaArc, arcPolyline, newDataset, setPoint, resetAll, movedPoints, isMoved, exportD14, exportD13, exportD12, exportD11, exportD21, exportD29, renumberPoints, fileNumberMap, refRenumber, deleteParcel, deleteHoleParcel, unregSummary, splitParcel, splitSteps, parcelsTouch, healJunctions, mergeClusters, absorbSlivers, mergePoints, snapPointToEdge, splitByChord, deleteEdge, addFace, seamGaps, fillSeamGap, polysOverlap, overlapParcel, shapeRatio, minRect, mergeParcels, fillRegion, pocketRegion, chordInside, nextSub, makeZip, crc32, changedDFiles, ringIssues, ringIssueLine, embeddedRuns, splitHole, setRing, outlineLoops, errReport, ringConflicts, freeRegions, exportSession, finalize,
     xform, transformPoints, centroidOf, twoPointFit, parseAngle, parsePoints, parseObservations, polarReduce, azimuth, parseMac, reduceMac, parseCtl, latLonToTm2, tm2ToLatLon, compareVersions,
     newSurvey, addSurveyPoints, addLine, lineStats, SEAM_DEFAULT, boundarySegments, seamCheck, seamPlan, seamAnalyze, seamJoin, seamExact, seamShift, seamMode, seamReportText, seamReportCsv, movedPointsCsv, parseWorldFile, worldFileText, imageCorners, imageBounds, imageSize,
     AREA_TOL, areaTol, parcelNo, fitAffine, baselineAlign, alignText, intersectArea, compareBaseline, baselineCsv, baselineReportHtml, restoreMissing, restoreShortfall, trimExcess, planTrimExcess,
