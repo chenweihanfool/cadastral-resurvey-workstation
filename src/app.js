@@ -1191,7 +1191,7 @@ function download(name, data, type = 'application/octet-stream') {
 $('btnExpD14').onclick = () => {
   const r = Core.exportD14(S.dbf.pts, S.ds); download(S.names.d14 || 'out.D14', r.bytes);
   const st = S.st || {};
-  msg(`已輸出 ${S.names.d14}：改動 ${r.changed} 個點的坐標` + (r.added ? `、檔尾附加 ${r.added} 個新增點` : '') + (r.orphans ? `；${r.orphans} 個已刪除的點仍留在檔內（不從 D14 移除記錄，避免索引不一致）` : '') + '。' + (st.added || st.removed || st.rings ? '有增刪界址點，請一併輸出 D13。' : '') + '覆蓋原檔前請先備份案件資料夾。');
+  msg(`已輸出 ${S.names.d14}：改動 ${r.changed} 個點的坐標` + (r.added ? `、檔尾附加 ${r.added} 個新增點` : '') + (r.blanked ? `、清除 ${r.blanked} 個沒有宗地使用的點（不必再到 NECEXE 刪除未使用界址點）` : '') + (r.orphans ? `；${r.orphans} 個已刪除的點仍留在檔內` : '') + '。' + (st.added || st.removed || st.rings ? '有增刪界址點，請一併輸出 D13。' : '') + '覆蓋原檔前請先備份案件資料夾。');
 };
 // ── 宗地關係偵錯報表 .ERR（仿 NECEXE；Big5、CRLF）──
 let big5Map = null;

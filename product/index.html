@@ -2511,7 +2511,7 @@ const Core = (() => {
   const numAt = (dbf, rec, name) => { const f = dbf.fields.find(x => x.name === name); return Number(String.fromCharCode(...rec.subarray(f.off, f.off + f.len)).trim()) || 0; };
   const JUNK = { d11: r => !r.PAR_O_M && !r.PAR_N_M, d12: r => !r.O_PARCEL && !r.I_PARCEL, d13: r => !r.O_PARCEL && !r.O_PARCEL_E, d14: r => !r.COT_NUMBER, d21: r => !r.LIN_TOP || !r.LIN_BOT };
   // 回傳新的 D14 位元組：被移動點只改 COT_Y/COT_X（其餘位元組不動）；新增的點附加在檔尾（REF=0）。
-  // 刪除的點不從檔案移除（保留孤立記錄，避免索引不一致），數量見 orphans。
+  // 刪除的點（沒有宗地使用）清成空列移到檔尾，數量見 blanked（與 NECEXE「刪除未使用界址點」相同）；orphans 固定為 0，保留欄位相容。
   function exportD14(pts, ds) {
     let out = new Uint8Array(pts.u8), n = 0;
     for (const p of movedPoints(ds)) {
@@ -2519,7 +2519,7 @@ const Core = (() => {
       patchDbfNumber(out, pts, p.row, 'COT_Y', p.y); patchDbfNumber(out, pts, p.row, 'COT_X', p.x); n++;
     }
     const add = [...ds.points.values()].filter(p => p.row == null && p.added);
-    const t = { ...pts, hl: 0 }, recs = add.map(p => { const r = blankRecord(pts); patchDbfNumber(r, t, 0, 'COT_NUMBER', p.id); patchDbfNumber(r, t, 0, 'COT_REF', 0); patchDbfNumber(r, t, 0, 'COT_Y', p.y); patchDbfNumber(r, t, 0, 'COT_X', p.x); return r; });
+    const t = { ...pts, hl: 0 }, recs = add.map(p => { const r = blankRecord(pts); patchDbfNumber(r, t, 0, 'COT_NUMBER', p.id); patchDbfNumber(r, t, 0, 'COT_REF', 0); patchDbfNumber(r, t, 0, 'COT_Y', p.y); patchDbfNumber(r, t, 0, 'COT_X', p.x); for (const f of ['COT_MATTER', 'COT_SOURCE', 'COT_SURVEY', 'COT_MSE']) if (pts.fields.some(x => x.name === f)) patchDbfNumber(r, t, 0, f, 0); return r; });   // 其餘數值欄填 0（與 NECEXE 寫出的相同）
     // 點號重整過：每筆記錄改成目前點號；已刪除的點（孤立記錄）清成空列（點號 0、坐標 0），否則會和重編後的點號撞號；
     // REF≠0 的記錄照 refRenumber 換號；記錄依「REF=0 在前、點號由小到大」排序，空列在檔尾（與 NECEXE 重整後寫出的 D14 相同）。
     let renumbered = 0, blanked = 0;
@@ -2532,6 +2532,12 @@ const Core = (() => {
         for (const f of ['COT_NUMBER', 'COT_REF', 'COT_Y', 'COT_X']) patchDbfNumber(out, pts, i, f, 0); junk.add(r); blanked++;
       });
       out = layoutDbf(pts, out, r => JUNK.d14(r) || junk.has(r), { append: recs, key: b => [numAt(pts, b, 'COT_REF') ? 1 : 0, numAt(pts, b, 'COT_NUMBER')] });
+    } else if (structSummary(ds).removed) {
+      // 沒重整點號但有刪除的點（v0.37.1）：沒有宗地使用的 REF=0 記錄清成空列移到檔尾，其餘記錄順序不變——與 NECEXE「刪除未使用界址點」後寫出的 D14 相同，
+      // 匯出後不必再到 NECEXE 刪點（KC0336 實測：7429 筆有效記錄逐列相同）。REF≠0 的記錄不動
+      const junk = new Set(), used = new Set([...ds.points.values()].filter(p => p.row != null && !p.added).map(p => p.row));
+      pts.rows.forEach((r, i) => { if (r._deleted || !r.COT_NUMBER || r.COT_REF !== 0 || used.has(i)) return; for (const f of ['COT_NUMBER', 'COT_REF', 'COT_Y', 'COT_X']) patchDbfNumber(out, pts, i, f, 0); junk.add(r); blanked++; });
+      out = layoutDbf(pts, out, r => JUNK.d14(r) || junk.has(r), { append: recs });
     } else if (recs.length) out = layoutDbf(pts, out, JUNK.d14, { append: recs });   // 新增點插在檔尾空列之前
     const orphans = blanked ? 0 : structSummary(ds).removed;
     return { bytes: out, changed: n, added: add.length, orphans, renumbered, blanked };
@@ -4338,6 +4344,15 @@ if (typeof module !== 'undefined') module.exports = Core;
  * 每次發新版：在最上方加一筆、同步 package.json 的 version，並執行 node build.mjs。
  * type：major＝重大、minor＝新功能、patch＝修正／小調整。發行說明（GitHub Release）也由這裡產生。 */
 const CHANGELOG = [
+  {
+    version: 'v0.37.1', date: '2026-11-16', type: 'patch',
+    title: '輸出 D14 時清除沒有宗地使用的點，不必再到 NECEXE「刪除未使用界址點」',
+    changes: [
+      '點併點、刪點後輸出的 D14，原本把已刪除的點留在檔內，NECEXE 開啟後還要手動刪除未使用界址點；現在輸出時就清成空列移到檔尾，其餘記錄順序不變，與 NECEXE 刪點後寫出的 D14 相同',
+      '新增點的 COT_MATTER／COT_SOURCE／COT_SURVEY／COT_MSE 填 0，與 NECEXE 一致；COT_REF≠0 的記錄不動',
+      '以 KC0336 驗證：近點修正後的專案檔輸出的 D14，與 NECEXE 刪除 23 個未使用點後存出的 D14 逐列相同（7429 筆有效記錄，順序一致）；面積仍需在 NECEXE 重算',
+    ],
+  },
   {
     version: 'v0.37.0', date: '2026-11-16', type: 'minor',
     title: '新增「點號重整」：比照 NECEXE 把界址點重編為 1～N，專案檔與輸出的 D 檔一起換號',
@@ -6146,7 +6161,7 @@ function download(name, data, type = 'application/octet-stream') {
 $('btnExpD14').onclick = () => {
   const r = Core.exportD14(S.dbf.pts, S.ds); download(S.names.d14 || 'out.D14', r.bytes);
   const st = S.st || {};
-  msg(`已輸出 ${S.names.d14}：改動 ${r.changed} 個點的坐標` + (r.added ? `、檔尾附加 ${r.added} 個新增點` : '') + (r.orphans ? `；${r.orphans} 個已刪除的點仍留在檔內（不從 D14 移除記錄，避免索引不一致）` : '') + '。' + (st.added || st.removed || st.rings ? '有增刪界址點，請一併輸出 D13。' : '') + '覆蓋原檔前請先備份案件資料夾。');
+  msg(`已輸出 ${S.names.d14}：改動 ${r.changed} 個點的坐標` + (r.added ? `、檔尾附加 ${r.added} 個新增點` : '') + (r.blanked ? `、清除 ${r.blanked} 個沒有宗地使用的點（不必再到 NECEXE 刪除未使用界址點）` : '') + (r.orphans ? `；${r.orphans} 個已刪除的點仍留在檔內` : '') + '。' + (st.added || st.removed || st.rings ? '有增刪界址點，請一併輸出 D13。' : '') + '覆蓋原檔前請先備份案件資料夾。');
 };
 // ── 宗地關係偵錯報表 .ERR（仿 NECEXE；Big5、CRLF）──
 let big5Map = null;
